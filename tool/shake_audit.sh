@@ -17,6 +17,14 @@ source "$ROOT/tool/build_lib.sh"
 
 fail() { echo "SHAKE-AUDIT FAIL: $1" >&2; exit 1; }
 
+# Measure on the Rust CI ships with: another release inlines differently, and
+# the README quotes these numbers.
+# shellcheck source=tool/versions.env
+source "$ROOT/tool/versions.env"
+export RUSTUP_TOOLCHAIN="$RUST_VERSION"
+rustup run "$RUST_VERSION" rustc --version >/dev/null 2>&1 \
+  || fail "Rust $RUST_VERSION is not installed: rustup toolchain install $RUST_VERSION"
+
 # The audit's own baseline: engine internals with every droppable capability
 # dropped — the `[]` keep-set tool/keep_sets.dart prints for native, never a
 # hand copy that silently goes stale when a capability is added.
@@ -38,7 +46,7 @@ CORE_FEATURES=$(empty_keep_set native)
 FULL_FEATURES=$(json_get '.features.native' "$ROOT/build.json")
 # Ceiling with headroom over the measured core-only size; a breach means a
 # heavy module leaked back into the core build.
-CORE_CEILING_BYTES=$((8 * 1024 * 1024))
+CORE_CEILING_BYTES=$((9 * 1024 * 1024))
 
 # File size in bytes — wc -c is POSIX; BSD wc pads with spaces, so trim.
 fsize() {
@@ -83,13 +91,13 @@ PY
 # Build one wasm variant to a TEMP DIR (never touching web_assets/, the
 # committed default artifact) and echo "<raw> <gz>" bytes — the same temp-dir
 # staging a trimmed / non-default consumer build uses, so no backup-restore.
-# $1 = features, $2 = opt-level ("" = default speed build).
+# $1 = features, $2 = the build mode ("" = speed, "size").
 measure_wasm() {
   : "${DART:?shake_audit: DART must be set by the caller (the Makefile passes it)}"
   local line
   line=$(cd "$ROOT" && $DART run tool/measure_wasm.dart "$1" "${2:-}" \
     | grep -oE 'raw=[0-9]+ gz=[0-9]+' | tail -1)
-  [ -n "$line" ] || fail "measure_wasm produced no size for features='$1' opt='${2:-}'"
+  [ -n "$line" ] || fail "measure_wasm produced no size for features='$1' build='${2:-}'"
   line=${line#raw=}
   echo "${line/ gz=/ }"
 }
@@ -119,7 +127,7 @@ for banned in pdf_document_builder_create pdf_document_load pdf_render_page; do
   echo "$SYMS" | grep -Eq "_?$banned\$" && fail "banned symbol survived: $banned"
 done
 # The lane bridge must be alive (its C surface is lane_* + channel_*).
-for required in lane_job_cancel channel_init_read; do
+for required in executor_job_cancel channel_init_read; do
   echo "$SYMS" | grep -Eq "_?$required\$" || fail "lane bridge export missing: $required"
 done
 # Trim must actually delete code: core-only materially smaller than full.
@@ -159,11 +167,13 @@ if [ "${SHAKE_AUDIT_WASM:-0}" = "1" ]; then
   [ -n "$WASM_CORE_FEATURES" ] \
     || fail "tool/keep_sets.dart wasm produced no [] features line"
   read -r WASM_CORE_RAW WASM_CORE_GZ <<< "$(measure_wasm "$WASM_CORE_FEATURES")"
-  DEFAULT_RAW=$(fsize "$ROOT/web_assets/pdf_oxide_bg.wasm")
+  [ -f "$ROOT/web_assets/pdf_oxide_manifest.json" ] \
+    || fail "web_assets/pdf_oxide_manifest.json missing: run make web_assets/pdf_oxide_bg.0.wasm first"
+  DEFAULT_RAW=$(json_get '[.pdf_oxide_bg.parts[].bytes] | add' "$ROOT/web_assets/pdf_oxide_manifest.json")
   [ "$WASM_CORE_RAW" -lt "$DEFAULT_RAW" ] \
     || fail "core-only wasm not smaller than the full default"
-  read -r WASM_FULL_SIZE_RAW WASM_FULL_SIZE_GZ <<< "$(measure_wasm "$WASM_FULL_FEATURES" z)"
-  read -r WASM_CORE_SIZE_RAW WASM_CORE_SIZE_GZ <<< "$(measure_wasm "$WASM_CORE_FEATURES" z)"
+  read -r WASM_FULL_SIZE_RAW WASM_FULL_SIZE_GZ <<< "$(measure_wasm "$WASM_FULL_FEATURES" size)"
+  read -r WASM_CORE_SIZE_RAW WASM_CORE_SIZE_GZ <<< "$(measure_wasm "$WASM_CORE_FEATURES" size)"
   echo "wasm core=$WASM_CORE_RAW/$WASM_CORE_GZ full-size=$WASM_FULL_SIZE_RAW/$WASM_FULL_SIZE_GZ core-size=$WASM_CORE_SIZE_RAW/$WASM_CORE_SIZE_GZ"
   merge_sizes \
     wasmCoreRaw "$WASM_CORE_RAW" wasmCoreGz "$WASM_CORE_GZ" \

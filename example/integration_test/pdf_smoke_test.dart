@@ -16,12 +16,22 @@ import 'package:pdf_manipulator_example_test_support/pdf_manipulator_example_tes
 
 DataSource _src(Uint8List bytes) => MemorySource(bytes);
 
-// Optional: force a specific web I/O mode via --dart-define=PDF_IO_MODE=jspi|atomics|opfs
+/// The text of the pages named, as the engine wrote it: the library writes
+/// text to a sink, so the test takes it from a MemorySink.
+Future<String> _text(
+  PdfDocument doc, {
+  PdfPages pages = const PdfPages.all(),
+  PdfExtractionFormat format = PdfExtractionFormat.auto,
+}) =>
+    doc.text(pages: pages, format: format);
+
+// Optional: force a specific web I/O mode via --dart-define=PDF_IO_MODE=jspi|atomics|opfs|asyncify
 const _modeOverride = String.fromEnvironment('PDF_IO_MODE');
 PdfIoMode? get _forceMode => switch (_modeOverride) {
       'jspi' => PdfIoMode.jspi,
       'atomics' => PdfIoMode.atomics,
       'opfs' => PdfIoMode.opfs,
+      'asyncify' => PdfIoMode.asyncify,
       _ => null,
     };
 
@@ -35,118 +45,145 @@ void main() {
   });
   tearDown(() => pdf.dispose());
 
-  // ── PdfDoc — read-only queries ──────────────────────────────────
+  // ── PdfDocument — read-only queries ──────────────────────────────────
 
   testWidgets('open returns correct page count + metadata', (t) async {
-    final doc = await pdf.open(_src(minimalPdf));
+    final doc = await pdf.open(PdfInput(_src(minimalPdf)));
     expect(doc.pageCount, 1);
     expect(doc.version, isNotEmpty);
-    expect(doc.pages, hasLength(1));
-    expect(doc.pages[0].width, closeTo(595, 1));
-    expect(doc.pages[0].height, closeTo(842, 1));
+    final pages = await doc.pageInfo();
+    expect(pages, hasLength(1));
+    expect(pages[0].width, closeTo(595, 1));
+    expect(pages[0].height, closeTo(842, 1));
     await doc.dispose();
   });
 
   testWidgets('extract text (plain + markdown + html)', (t) async {
-    final doc = await pdf.open(_src(minimalPdf));
+    final doc = await pdf.open(PdfInput(_src(minimalPdf)));
     // The fixture is one BLANK page — the only correct extraction is
     // emptiness. isA<String>() would have accepted mojibake.
-    expect((await doc.extract(pages: const PdfPages.all())).trim(), isEmpty);
+    expect((await _text(doc, pages: const PdfPages.all())).trim(), isEmpty);
+    expect((await _text(doc, pages: const PdfPages.single(0))).trim(), isEmpty);
     expect(
-        (await doc.extract(pages: const PdfPages.single(0))).trim(), isEmpty);
+      (await _text(
+        doc,
+        pages: const PdfPages.all(),
+        format: PdfExtractionFormat.markdown,
+      ))
+          .trim(),
+      isEmpty,
+    );
+    final html = await _text(
+      doc,
+      pages: const PdfPages.single(0),
+      format: PdfExtractionFormat.html,
+    );
     expect(
-        (await doc.extract(
-                pages: const PdfPages.all(),
-                format: PdfExtractionFormat.markdown))
-            .trim(),
-        isEmpty);
-    final html = await doc.extract(
-        pages: const PdfPages.single(0), format: PdfExtractionFormat.html);
-    expect(html.trim(), isEmpty,
-        reason: 'a blank page yields empty output in every format');
+      html.trim(),
+      isEmpty,
+      reason: 'a blank page yields empty output in every format',
+    );
     await doc.dispose();
   });
 
   testWidgets('search returns results list', (t) async {
-    final doc = await pdf.open(_src(minimalPdf));
-    final r = await doc.search(query: 'the', pages: const PdfPages.all());
-    expect(r, isEmpty,
-        reason: 'a blank page cannot contain matches — any hit here '
-            'is an engine hallucination');
+    final doc = await pdf.open(PdfInput(_src(minimalPdf)));
+    final r = await doc.search('the', pages: const PdfPages.all());
+    expect(
+      r,
+      isEmpty,
+      reason: 'a blank page cannot contain matches — any hit here '
+          'is an engine hallucination',
+    );
     await doc.dispose();
   });
 
-  testWidgets('render streams pages', (t) async {
-    final doc = await pdf.open(_src(minimalPdf));
-    var count = 0;
-    await for (final page in doc.render(pages: const PdfPages.single(0))) {
-      expect(page.width, greaterThan(0));
-      expect(page.data, isNotEmpty);
-      count++;
-    }
-    expect(count, 1);
+  testWidgets('render writes pages to sinks', (t) async {
+    final doc = await pdf.open(PdfInput(_src(minimalPdf)));
+    final sink = MemorySink();
+    final pages = await doc.render(
+      (page) => sink,
+      pages: const PdfPages.single(0),
+    );
+    expect(pages, hasLength(1));
+    expect(pages.single.width, greaterThan(0));
+    expect(sink.takeBytes(), isNotEmpty);
     await doc.dispose();
   });
 
   testWidgets('extractImages streams', (t) async {
-    final doc = await pdf.open(_src(minimalPdf));
-    var images = 0;
-    await for (final _ in doc.extractImages(pages: const PdfPages.single(0))) {
-      images++;
-    }
-    expect(images, 0, reason: 'the blank fixture embeds no images');
+    final doc = await pdf.open(PdfInput(_src(minimalPdf)));
+    final images = await doc.extractImages(
+      (image) => MemorySink(),
+      pages: const PdfPages.single(0),
+    );
+    expect(images, isEmpty, reason: 'the blank fixture embeds no images');
     await doc.dispose();
   });
 
   testWidgets('signatures + verify', (t) async {
-    final doc = await pdf.open(_src(minimalPdf));
-    expect(await doc.signatures, isEmpty,
-        reason: 'unsigned fixture — a phantom signature is worse '
-            'than none');
+    final doc = await pdf.open(PdfInput(_src(minimalPdf)));
+    expect(
+      await doc.signatures(),
+      isEmpty,
+      reason: 'unsigned fixture — a phantom signature is worse '
+          'than none',
+    );
     expect(await doc.verifySignatures(), isFalse);
     await doc.dispose();
   });
 
   testWidgets('validatePdfA + validatePdfUa', (t) async {
-    final doc = await pdf.open(_src(minimalPdf));
+    final doc = await pdf.open(PdfInput(_src(minimalPdf)));
     final a = await doc.validatePdfA();
-    expect(a.compliant, isFalse,
-        reason: 'the minimal fixture is NOT PDF/A — a pass means the '
-            'validator is not validating');
-    expect(a.errors, greaterThan(0));
-    expect(await doc.validatePdfUa(), isFalse);
+    expect(
+      a.isCompliant,
+      isFalse,
+      reason: 'the minimal fixture is NOT PDF/A — a pass means the '
+          'validator is not validating',
+    );
+    expect(a.errorCount, greaterThan(0));
+    expect((await doc.validatePdfUa()).isCompliant, isFalse);
     await doc.dispose();
   });
 
-  testWidgets('classifyPage + classifyDocument', (t) async {
-    final doc = await pdf.open(_src(minimalPdf));
-    final page = await doc.classifyPage(0);
-    expect(page.type, isNotEmpty);
-    expect(page.confidence, inInclusiveRange(0.0, 1.0));
+  testWidgets('classifyPages + classifyDocument', (t) async {
+    final doc = await pdf.open(PdfInput(_src(minimalPdf)));
+    final pages = await doc.classifyPages();
+    expect(pages, hasLength(1));
+    expect(pages.single.page, 0);
+    expect(pages.single.kind, isA<PdfPageKind>());
     final whole = await doc.classifyDocument();
-    expect(whole.type, isNotEmpty);
-    expect(whole.confidence, inInclusiveRange(0.0, 1.0));
+    expect(whole, isA<PdfDocumentKind>());
     await doc.dispose();
   });
 
-  testWidgets('planSplitByBookmarks', (t) async {
-    final doc = await pdf.open(_src(minimalPdf));
+  testWidgets('bookmarkRanges', (t) async {
+    final doc = await pdf.open(PdfInput(_src(minimalPdf)));
     await expectLater(
-      doc.planSplitByBookmarks(),
-      throwsA(isA<PdfEngineError>()
-          .having((e) => e.message, 'message', contains('no bookmarks'))),
+      doc.bookmarkRanges(),
+      throwsA(
+        isA<PdfEngineFailed>().having(
+          (e) => e.message,
+          'message',
+          contains('no bookmarks'),
+        ),
+      ),
       reason: 'the engine refuses with an actionable message — '
           'inventing chapter splits would be worse',
     );
     await doc.dispose();
   });
 
-  // ── PdfSugar — one-shot convenience ops ─────────────────────────
+  // ── one-shot doors over several documents ─────────────────────────
 
   testWidgets('merge', (t) async {
     final sink = MemorySink();
-    await pdf.merge([_src(minimalPdf), _src(minimalPdf)], sink);
-    final doc = await pdf.open(_src(sink.takeBytes()));
+    await pdf.merge([
+      PdfInput(_src(minimalPdf)),
+      PdfInput(_src(minimalPdf)),
+    ], sink);
+    final doc = await pdf.open(PdfInput(_src(sink.takeBytes())));
     expect(doc.pageCount, 2);
     await doc.dispose();
   });
@@ -154,95 +191,126 @@ void main() {
   testWidgets('split', (t) async {
     // Make a 2-page PDF first
     final mergeSink = MemorySink();
-    await pdf.merge([_src(minimalPdf), _src(minimalPdf)], mergeSink);
+    await pdf.merge([
+      PdfInput(_src(minimalPdf)),
+      PdfInput(_src(minimalPdf)),
+    ], mergeSink);
     final twoPage = mergeSink.takeBytes();
 
     final sinks = <MemorySink>[];
-    await pdf.split(_src(twoPage), (i) {
+    final parts = await pdf.split(PdfInput(_src(twoPage)), (part) {
       final s = MemorySink();
       sinks.add(s);
       return s;
-    }, every: 1);
+    }, by: const PdfSplitRule.every(1));
     expect(sinks.length, 2);
+    expect(parts.map((p) => p.start), [0, 1]);
     for (final s in sinks) {
-      final doc = await pdf.open(_src(s.takeBytes()));
+      final doc = await pdf.open(PdfInput(_src(s.takeBytes())));
       expect(doc.pageCount, 1);
       await doc.dispose();
     }
   });
 
-  testWidgets('splitBySize', (t) async {
+  testWidgets('split by maxBytes', (t) async {
     final sinks = <MemorySink>[];
-    await pdf.splitBySize(_src(minimalPdf), (i) {
+    await pdf.split(PdfInput(_src(minimalPdf)), (part) {
       final s = MemorySink();
       sinks.add(s);
       return s;
-    }, maxBytes: 500000);
-    expect(sinks, hasLength(1),
-        reason: 'the whole fixture fits the limit — one chunk');
-    final chunk = await pdf.open(_src(sinks.single.takeBytes()));
+    }, by: const PdfSplitRule.maxBytes(500000));
+    expect(
+      sinks,
+      hasLength(1),
+      reason: 'the whole fixture fits the limit — one chunk',
+    );
+    final chunk = await pdf.open(PdfInput(_src(sinks.single.takeBytes())));
     expect(chunk.pageCount, 1);
     await chunk.dispose();
   });
 
-  testWidgets('extractPages', (t) async {
+  testWidgets('keepPages', (t) async {
     final sink = MemorySink();
-    await pdf.extractPages(_src(minimalPdf), sink, pages: [0]);
-    final doc = await pdf.open(_src(sink.takeBytes()));
+    await pdf
+        .editOnce(PdfInput(_src(minimalPdf)), sink)
+        .keepPages(PdfPages.single(0));
+    final doc = await pdf.open(PdfInput(_src(sink.takeBytes())));
     expect(doc.pageCount, 1);
     await doc.dispose();
   });
 
-  testWidgets('deletePages', (t) async {
+  testWidgets('removePages', (t) async {
     final mergeSink = MemorySink();
-    await pdf.merge([_src(minimalPdf), _src(minimalPdf)], mergeSink);
+    await pdf.merge([
+      PdfInput(_src(minimalPdf)),
+      PdfInput(_src(minimalPdf)),
+    ], mergeSink);
     final sink = MemorySink();
-    await pdf.deletePages(_src(mergeSink.takeBytes()), sink, pages: [0]);
-    final doc = await pdf.open(_src(sink.takeBytes()));
+    await pdf
+        .editOnce(PdfInput(_src(mergeSink.takeBytes())), sink)
+        .removePages(const PdfPages.single(0));
+    final doc = await pdf.open(PdfInput(_src(sink.takeBytes())));
     expect(doc.pageCount, 1);
     await doc.dispose();
   });
 
-  testWidgets('reorderPages', (t) async {
+  testWidgets('keepPages in another order', (t) async {
     final mergeSink = MemorySink();
-    await pdf.merge([_src(minimalPdf), _src(minimalPdf)], mergeSink);
+    await pdf.merge([
+      PdfInput(_src(minimalPdf)),
+      PdfInput(_src(minimalPdf)),
+    ], mergeSink);
     final sink = MemorySink();
-    await pdf.reorderPages(_src(mergeSink.takeBytes()), sink, order: [1, 0]);
-    final doc = await pdf.open(_src(sink.takeBytes()));
-    expect(doc.pageCount, 2,
-        reason: 'reorder must keep every page (both pages are '
-            'identical here; order itself is proven in the batteries)');
+    await pdf
+        .editOnce(PdfInput(_src(mergeSink.takeBytes())), sink)
+        .reorderPages(PdfPageOrder([1, 0]));
+    final doc = await pdf.open(PdfInput(_src(sink.takeBytes())));
+    expect(
+      doc.pageCount,
+      2,
+      reason: 'reorder must keep every page (both pages are '
+          'identical here; order itself is proven in the batteries)',
+    );
     await doc.dispose();
   });
 
   testWidgets('movePage', (t) async {
     final mergeSink = MemorySink();
-    await pdf.merge([_src(minimalPdf), _src(minimalPdf)], mergeSink);
+    await pdf.merge([
+      PdfInput(_src(minimalPdf)),
+      PdfInput(_src(minimalPdf)),
+    ], mergeSink);
     final sink = MemorySink();
-    await pdf.movePage(_src(mergeSink.takeBytes()), sink, from: 0, to: 1);
-    final doc = await pdf.open(_src(sink.takeBytes()));
+    await pdf
+        .editOnce(PdfInput(_src(mergeSink.takeBytes())), sink)
+        .movePage(from: 0, to: 1);
+    final doc = await pdf.open(PdfInput(_src(sink.takeBytes())));
     expect(doc.pageCount, 2);
     await doc.dispose();
   });
 
-  testWidgets('rotateAllPages + rotatePages', (t) async {
+  testWidgets('rotatePages: every page, one page', (t) async {
     final s1 = MemorySink();
-    await pdf.rotateAllPages(_src(minimalPdf), s1, degrees: 90);
-    final doc1 = await pdf.open(_src(s1.takeBytes()));
-    expect(doc1.pages[0].rotation, 90);
+    await pdf
+        .editOnce(PdfInput(_src(minimalPdf)), s1)
+        .rotatePages(by: PdfRotation.r90, pages: const PdfPages.all());
+    final doc1 = await pdf.open(PdfInput(_src(s1.takeBytes())));
+    expect((await doc1.pageInfo())[0].rotation, PdfRotation.r90);
     await doc1.dispose();
 
     final s2 = MemorySink();
-    await pdf.rotatePages(_src(minimalPdf), s2, pages: {0: 180});
-    final doc2 = await pdf.open(_src(s2.takeBytes()));
-    expect(doc2.pages[0].rotation, 180);
+    await pdf
+        .editOnce(PdfInput(_src(minimalPdf)), s2)
+        .rotatePages(by: PdfRotation.r180, pages: const PdfPages.single(0));
+    final doc2 = await pdf.open(PdfInput(_src(s2.takeBytes())));
+    expect((await doc2.pageInfo())[0].rotation, PdfRotation.r180);
     await doc2.dispose();
   });
 
   testWidgets('compress', (t) async {
     final sink = MemorySink();
-    await pdf.compress(_src(minimalPdf), sink);
-    final doc = await pdf.open(_src(sink.takeBytes()));
+    await pdf.compress(PdfInput(_src(minimalPdf)), sink);
+    final doc = await pdf.open(PdfInput(_src(sink.takeBytes())));
     expect(doc.pageCount, 1);
     await doc.dispose();
   });
@@ -254,298 +322,378 @@ void main() {
       const PdfWatermarkPosition.tiled(columns: 2, rows: 2),
     ]) {
       final sink = MemorySink();
-      await pdf.watermark(_src(minimalPdf), sink, text: 'TEST', position: pos);
+      await pdf
+          .editOnce(PdfInput(_src(minimalPdf)), sink)
+          .addWatermark('TEST', position: pos);
       final out = sink.takeBytes();
-      expect(String.fromCharCodes(out), contains('TEST'),
-          reason: 'the watermark text must actually land in the output');
-      final doc = await pdf.open(_src(out));
+      expect(
+        String.fromCharCodes(out),
+        contains('TEST'),
+        reason: 'the watermark text must actually land in the output',
+      );
+      final doc = await pdf.open(PdfInput(_src(out)));
       expect(doc.pageCount, 1);
       await doc.dispose();
     }
     final bgSink = MemorySink();
-    await pdf.watermark(_src(minimalPdf), bgSink,
-        text: 'BG', layer: PdfWatermarkLayer.background);
+    await pdf
+        .editOnce(PdfInput(_src(minimalPdf)), bgSink)
+        .addWatermark('BG', layer: PdfWatermarkLayer.background);
     expect(String.fromCharCodes(bgSink.takeBytes()), contains('BG'));
   });
 
-  testWidgets('encrypt locks, correct password opens, decrypt unlocks',
-      (t) async {
+  testWidgets('encrypt locks, correct password opens, decrypt unlocks', (
+    t,
+  ) async {
     final encSink = MemorySink();
-    await pdf.encrypt(_src(minimalPdf), encSink,
-        encryption: const PdfEncryptionConfig(
-            ownerPassword: 'owner-pw', userPassword: 'user-pw'));
+    await pdf.resave(
+      PdfInput(_src(minimalPdf)),
+      encSink,
+      save: const PdfSave.full(
+        encryption: PdfEncryption.password(
+          ownerPassword: 'owner-pw',
+          userPassword: 'user-pw',
+        ),
+      ),
+    );
     final encBytes = encSink.takeBytes();
 
     // The lock is real: no password / wrong password must refuse.
-    await expectLater(pdf.open(_src(encBytes)), throwsA(isA<PdfEngineError>()));
-    await expectLater(pdf.open(_src(encBytes), password: 'wrong'),
-        throwsA(isA<PdfEngineError>()));
+    await expectLater(
+      pdf.open(PdfInput(_src(encBytes))),
+      throwsA(isA<PdfPasswordRequired>()),
+    );
+    await expectLater(
+      pdf.open(PdfInput(_src(encBytes), password: 'wrong')),
+      throwsA(isA<PdfWrongPassword>()),
+    );
 
-    final doc1 = await pdf.open(_src(encBytes), password: 'user-pw');
-    expect(doc1.isEncrypted, isTrue);
+    final doc1 = await pdf.open(PdfInput(_src(encBytes), password: 'user-pw'));
+    expect(doc1.encryption, isNotNull);
     expect(doc1.pageCount, 1);
     await doc1.dispose();
 
     final decSink = MemorySink();
-    await pdf.decrypt(_src(encBytes), decSink, password: 'owner-pw');
-    final doc2 = await pdf.open(_src(decSink.takeBytes()));
-    expect(doc2.isEncrypted, isFalse);
+    await pdf.resave(
+      PdfInput(_src(encBytes), password: 'owner-pw'),
+      decSink,
+      save: const PdfSave.full(encryption: PdfEncryption.remove()),
+    );
+    final doc2 = await pdf.open(PdfInput(_src(decSink.takeBytes())));
+    expect(doc2.encryption, isNull);
     await doc2.dispose();
   });
 
   testWidgets('flattenForms', (t) async {
     final sink = MemorySink();
-    await pdf.flattenForms(_src(minimalPdf), sink);
-    final doc = await pdf.open(_src(sink.takeBytes()));
+    await pdf.editOnce(PdfInput(_src(minimalPdf)), sink).flattenForms();
+    final doc = await pdf.open(PdfInput(_src(sink.takeBytes())));
     expect(doc.pageCount, 1);
     await doc.dispose();
   });
 
   testWidgets('applyRedactions', (t) async {
     final sink = MemorySink();
-    await pdf.applyRedactions(_src(minimalPdf), sink);
-    final doc = await pdf.open(_src(sink.takeBytes()));
+    await pdf.rewrite(PdfInput(_src(minimalPdf)), sink, (e) async {
+      await e.applyRedactions();
+    });
+    final doc = await pdf.open(PdfInput(_src(sink.takeBytes())));
     expect(doc.pageCount, 1);
     await doc.dispose();
   });
 
-  testWidgets('embedFile', (t) async {
+  testWidgets('addAttachment', (t) async {
     final sink = MemorySink();
-    await pdf.embedFile(_src(minimalPdf), sink,
-        name: 'test.txt',
-        fileData: _src(Uint8List.fromList('hello'.codeUnits)));
-    final doc = await pdf.open(_src(sink.takeBytes()));
+    await pdf
+        .editOnce(PdfInput(_src(minimalPdf)), sink)
+        .addAttachment('test.txt', _src(Uint8List.fromList('hello'.codeUnits)));
+    final doc = await pdf.open(PdfInput(_src(sink.takeBytes())));
     expect(doc.pageCount, 1);
     await doc.dispose();
   });
 
-  testWidgets('eraseRegions', (t) async {
+  testWidgets('redact with no overlay', (t) async {
     final sink = MemorySink();
-    await pdf.eraseRegions(_src(minimalPdf), sink,
-        page: 0, regions: [const PdfRect(x: 10, y: 10, width: 50, height: 50)]);
-    final doc = await pdf.open(_src(sink.takeBytes()));
+    await pdf.editOnce(PdfInput(_src(minimalPdf)), sink).redact(
+        0,
+        [
+          const PdfRect(x: 10, y: 10, width: 50, height: 50),
+        ],
+        overlay: const PdfRedactionOverlay.none());
+    final doc = await pdf.open(PdfInput(_src(sink.takeBytes())));
     expect(doc.pageCount, 1);
     await doc.dispose();
   });
 
   testWidgets('addStamp', (t) async {
     final sink = MemorySink();
-    await pdf.addStamp(_src(minimalPdf), sink,
-        page: 0,
-        type: PdfStampType.approved,
-        rect: const PdfRect(x: 50, y: 50, width: 200, height: 60));
-    final doc = await pdf.open(_src(sink.takeBytes()));
+    await pdf.editOnce(PdfInput(_src(minimalPdf)), sink).addStamp(
+          PdfStamp.approved,
+          bounds: const PdfRect(x: 50, y: 50, width: 200, height: 60),
+          pages: const PdfPages.single(0),
+        );
+    final doc = await pdf.open(PdfInput(_src(sink.takeBytes())));
     expect(doc.pageCount, 1);
     await doc.dispose();
   });
 
   testWidgets('convertToPdfA', (t) async {
     final sink = MemorySink();
-    await pdf.convertToPdfA(_src(minimalPdf), sink);
-    final doc = await pdf.open(_src(sink.takeBytes()));
+    await pdf.editOnce(PdfInput(_src(minimalPdf)), sink).convertToPdfA();
+    final doc = await pdf.open(PdfInput(_src(sink.takeBytes())));
     expect(doc.pageCount, 1);
     await doc.dispose();
   });
 
-  // ── PdfStandalone ───────────────────────────────────────────────
+  // ── no handle ───────────────────────────────────────────────
 
   testWidgets('sign (PEM)', (t) async {
     final sink = MemorySink();
-    await pdf.sign(_src(minimalPdf), sink,
-        credentials: const PdfSigningCredentials.pem(testCertPem, testKeyPem));
-    final doc = await pdf.open(_src(sink.takeBytes()));
-    expect(await doc.signatures, isNotEmpty,
-        reason: 'a signed PDF with no retrievable signature is not '
-            'signed');
+    await pdf.sign(
+      PdfInput(_src(minimalPdf)),
+      sink,
+      credentials: const PdfSigningCredentials.pem(testCertPem, testKeyPem),
+    );
+    final doc = await pdf.open(PdfInput(_src(sink.takeBytes())));
+    expect(
+      await doc.signatures(),
+      isNotEmpty,
+      reason: 'a signed PDF with no retrievable signature is not '
+          'signed',
+    );
     await doc.dispose();
   });
 
   testWidgets('convertTo DOCX', (t) async {
     final sink = MemorySink();
-    await pdf.convertTo(_src(minimalPdf), sink, format: PdfDocumentFormat.docx);
+    await pdf.convertToOffice(
+      PdfInput(_src(minimalPdf)),
+      sink,
+      format: PdfOfficeFormat.docx,
+    );
     final docx = sink.takeBytes();
-    expect(docx.sublist(0, 2), [0x50, 0x4B],
-        reason: 'DOCX is a ZIP — wrong magic means the converter '
-            'wrote something else');
+    expect(
+      docx.sublist(0, 2),
+      [0x50, 0x4B],
+      reason: 'DOCX is a ZIP — wrong magic means the converter '
+          'wrote something else',
+    );
   });
 
-  testWidgets('convertToPdf (DOCX round-trip)', (t) async {
+  testWidgets('convertFromOffice (DOCX round-trip)', (t) async {
     final docxSink = MemorySink();
-    await pdf.convertTo(_src(minimalPdf), docxSink,
-        format: PdfDocumentFormat.docx);
+    await pdf.convertToOffice(
+      PdfInput(_src(minimalPdf)),
+      docxSink,
+      format: PdfOfficeFormat.docx,
+    );
     final pdfSink = MemorySink();
-    await pdf.convertToPdf(_src(docxSink.takeBytes()), pdfSink,
-        format: PdfDocumentFormat.docx);
+    await pdf.convertFromOffice(
+      _src(docxSink.takeBytes()),
+      pdfSink,
+      format: PdfOfficeFormat.docx,
+    );
     final out = pdfSink.takeBytes();
     expect(String.fromCharCodes(out.sublist(0, 5)), '%PDF-');
-    final doc = await pdf.open(_src(out));
+    final doc = await pdf.open(PdfInput(_src(out)));
     expect(doc.pageCount, greaterThanOrEqualTo(1));
-    await doc.dispose();
-  });
-
-  testWidgets('extractPages (standalone)', (t) async {
-    final sink = MemorySink();
-    await pdf.extractPages(_src(minimalPdf), sink, pages: [0]);
-    final doc = await pdf.open(_src(sink.takeBytes()));
-    expect(doc.pageCount, 1);
     await doc.dispose();
   });
 
   // ── PdfEditor — batch mutations ─────────────────────────────────
 
   testWidgets('editor metadata get/set + isModified', (t) async {
-    final e = await pdf.edit(_src(minimalPdf));
-    await e.setTitle('T');
-    await e.setAuthor('A');
-    await e.setSubject('S');
-    await e.setKeywords('K');
-    expect(await e.title, 'T');
-    expect(await e.author, 'A');
-    expect(await e.subject, 'S');
-    expect(await e.keywords, 'K');
-    expect(await e.isModified, isTrue);
-    expect(await e.pageCount, 1);
-    expect(await e.version, isNotEmpty);
+    final e = await pdf.edit(PdfInput(_src(minimalPdf)));
+    await e.setMetadata(
+      const PdfMetadata(title: 'T', author: 'A', subject: 'S', keywords: 'K'),
+    );
+    expect((await e.metadata()).title, 'T');
+    expect((await e.metadata()).author, 'A');
+    expect((await e.metadata()).subject, 'S');
+    expect((await e.metadata()).keywords, 'K');
+    expect(await e.isModified(), isTrue);
+    expect(await e.pageCount(), 1);
+    expect(await e.version(), isNotEmpty);
     final sink = MemorySink();
     await e.save(sink);
     await e.dispose();
-    final saved = await pdf.open(_src(sink.takeBytes()));
-    expect(saved.pageCount, 1,
-        reason: 'a save that cannot be re-opened saved nothing');
+    final saved = await pdf.open(PdfInput(_src(sink.takeBytes())));
+    expect(
+      saved.pageCount,
+      1,
+      reason: 'a save that cannot be re-opened saved nothing',
+    );
     await saved.dispose();
   });
 
   testWidgets('editor page ops', (t) async {
     // Make 2-page PDF
     final mergeSink = MemorySink();
-    await pdf.merge([_src(minimalPdf), _src(minimalPdf)], mergeSink);
+    await pdf.merge([
+      PdfInput(_src(minimalPdf)),
+      PdfInput(_src(minimalPdf)),
+    ], mergeSink);
     final twoPage = mergeSink.takeBytes();
 
-    final e = await pdf.edit(_src(twoPage));
-    await e.rotatePage(0, degrees: 90);
-    await e.rotateAllPages(degrees: 180);
-    final mb = await e.pageMediaBox(0);
+    final e = await pdf.edit(PdfInput(_src(twoPage)));
+    await e.rotatePages(by: PdfRotation.r90, pages: PdfPages.single(0));
+    await e.rotatePages(by: PdfRotation.r180, pages: const PdfPages.all());
+    final mb = (await e.pageInfo(pages: PdfPages.single(0))).single.mediaBox;
     expect(mb.width, greaterThan(0));
     await e.movePage(from: 0, to: 1);
-    await e.deletePage(1);
-    expect(await e.pageCount, 1);
+    await e.removePages(PdfPages.single(1));
+    expect(await e.pageCount(), 1);
     final sink = MemorySink();
     await e.save(sink);
     await e.dispose();
-    final doc = await pdf.open(_src(sink.takeBytes()));
-    expect(doc.pages[0].rotation, 180,
-        reason: 'rotateAllPages(180) must survive save');
+    final doc = await pdf.open(PdfInput(_src(sink.takeBytes())));
+    expect(
+      (await doc.pageInfo())[0].rotation,
+      PdfRotation.r180,
+      reason: 'rotatePages(all, r180) must survive save',
+    );
     await doc.dispose();
   });
 
-  testWidgets('editor selectPages', (t) async {
+  testWidgets('editor keepPages', (t) async {
     final mergeSink = MemorySink();
-    await pdf.merge([_src(minimalPdf), _src(minimalPdf)], mergeSink);
-    final e = await pdf.edit(_src(mergeSink.takeBytes()));
-    await e.selectPages([0]);
-    expect(await e.pageCount, 1);
+    await pdf.merge([
+      PdfInput(_src(minimalPdf)),
+      PdfInput(_src(minimalPdf)),
+    ], mergeSink);
+    final e = await pdf.edit(PdfInput(_src(mergeSink.takeBytes())));
+    await e.keepPages(PdfPages.single(0));
+    expect(await e.pageCount(), 1);
     final sink = MemorySink();
     await e.save(sink);
     await e.dispose();
-    final saved = await pdf.open(_src(sink.takeBytes()));
-    expect(saved.pageCount, 1,
-        reason: 'a save that cannot be re-opened saved nothing');
+    final saved = await pdf.open(PdfInput(_src(sink.takeBytes())));
+    expect(
+      saved.pageCount,
+      1,
+      reason: 'a save that cannot be re-opened saved nothing',
+    );
     await saved.dispose();
   });
 
-  testWidgets('editor mergeFrom', (t) async {
-    final e = await pdf.edit(_src(minimalPdf));
-    await e.mergeFrom(_src(minimalPdf));
-    expect(await e.pageCount, 2);
+  testWidgets('editor appendPages', (t) async {
+    final e = await pdf.edit(PdfInput(_src(minimalPdf)));
+    await e.appendPages(PdfInput(_src(minimalPdf)));
+    expect(await e.pageCount(), 2);
     final sink = MemorySink();
     await e.save(sink);
     await e.dispose();
-    final saved = await pdf.open(_src(sink.takeBytes()));
+    final saved = await pdf.open(PdfInput(_src(sink.takeBytes())));
     expect(saved.pageCount, 2);
     await saved.dispose();
   });
 
   testWidgets('editor reduceImages + unembedStandardFonts', (t) async {
-    final e = await pdf.edit(_src(minimalPdf));
+    final e = await pdf.edit(PdfInput(_src(minimalPdf)));
     final report = await e.reduceImages(PdfImagePolicy.screen);
-    expect(report.images, isEmpty,
-        reason: 'no images in the fixture — a report row is invented work');
+    expect(
+      report.images,
+      isEmpty,
+      reason: 'no images in the fixture — a report row is invented work',
+    );
     expect(await e.unembedStandardFonts(), 0);
     final sink = MemorySink();
     await e.save(sink);
     await e.dispose();
-    final saved = await pdf.open(_src(sink.takeBytes()));
-    expect(saved.pageCount, 1,
-        reason: 'a save that cannot be re-opened saved nothing');
+    final saved = await pdf.open(PdfInput(_src(sink.takeBytes())));
+    expect(
+      saved.pageCount,
+      1,
+      reason: 'a save that cannot be re-opened saved nothing',
+    );
     await saved.dispose();
   });
 
   testWidgets('editor watermark survives save', (t) async {
-    final e = await pdf.edit(_src(minimalPdf));
-    await e.addWatermark(0, 'WMTEXT');
+    final e = await pdf.edit(PdfInput(_src(minimalPdf)));
+    await e.addWatermark('WMTEXT', pages: PdfPages.single(0));
     final sink = MemorySink();
     await e.save(sink);
     await e.dispose();
     final out = sink.takeBytes();
-    expect(String.fromCharCodes(out), contains('WMTEXT'),
-        reason: 'the watermark text must land in the saved bytes');
-    final doc = await pdf.open(_src(out));
+    expect(
+      String.fromCharCodes(out),
+      contains('WMTEXT'),
+      reason: 'the watermark text must land in the saved bytes',
+    );
+    final doc = await pdf.open(PdfInput(_src(out)));
     expect(doc.pageCount, 1);
     await doc.dispose();
   });
 
   testWidgets('editor stamp after watermark keeps both', (t) async {
-    final e = await pdf.edit(_src(minimalPdf));
-    await e.addWatermark(0, 'WMTEXT');
-    await e.addStamp(0,
-        type: PdfStampType.draft,
-        rect: const PdfRect(x: 50, y: 50, width: 200, height: 60));
+    final e = await pdf.edit(PdfInput(_src(minimalPdf)));
+    await e.addWatermark('WMTEXT', pages: PdfPages.single(0));
+    await e.addStamp(
+      PdfStamp.draft,
+      bounds: const PdfRect(x: 50, y: 50, width: 200, height: 60),
+      pages: PdfPages.single(0),
+    );
     final sink = MemorySink();
     await e.save(sink);
     await e.dispose();
     final out = sink.takeBytes();
-    expect(String.fromCharCodes(out), contains('WMTEXT'),
-        reason: 'adding a stamp must never erase an earlier edit');
-    final doc = await pdf.open(_src(out));
+    expect(
+      String.fromCharCodes(out),
+      contains('WMTEXT'),
+      reason: 'adding a stamp must never erase an earlier edit',
+    );
+    final doc = await pdf.open(PdfInput(_src(out)));
     expect(doc.pageCount, 1);
     await doc.dispose();
   });
 
-  testWidgets('editor embedFile + eraseRegions + cropMargins', (t) async {
-    final e = await pdf.edit(_src(minimalPdf));
-    await e.embedFile('test.txt', _src(Uint8List.fromList('hi'.codeUnits)));
-    await e
-        .eraseRegions(0, [const PdfRect(x: 10, y: 10, width: 50, height: 50)]);
+  testWidgets('editor addAttachment + eraseRegions + cropMargins', (t) async {
+    final e = await pdf.edit(PdfInput(_src(minimalPdf)));
+    await e.addAttachment('test.txt', _src(Uint8List.fromList('hi'.codeUnits)));
+    await e.redact(
+        0,
+        [
+          const PdfRect(x: 10, y: 10, width: 50, height: 50),
+        ],
+        overlay: const PdfRedactionOverlay.none());
     await e.cropMargins(left: 10, right: 10, top: 10, bottom: 10);
     final sink = MemorySink();
     await e.save(sink);
     await e.dispose();
-    final saved = await pdf.open(_src(sink.takeBytes()));
-    expect(saved.pageCount, 1,
-        reason: 'a save that cannot be re-opened saved nothing');
+    final saved = await pdf.open(PdfInput(_src(sink.takeBytes())));
+    expect(
+      saved.pageCount,
+      1,
+      reason: 'a save that cannot be re-opened saved nothing',
+    );
     await saved.dispose();
   });
 
   testWidgets('editor flatten forms + annotations', (t) async {
-    final e = await pdf.edit(_src(minimalPdf));
+    final e = await pdf.edit(PdfInput(_src(minimalPdf)));
     await e.flattenForms();
     await e.flattenAnnotations();
     final sink = MemorySink();
     await e.save(sink);
     await e.dispose();
-    final saved = await pdf.open(_src(sink.takeBytes()));
-    expect(saved.pageCount, 1,
-        reason: 'a save that cannot be re-opened saved nothing');
+    final saved = await pdf.open(PdfInput(_src(sink.takeBytes())));
+    expect(
+      saved.pageCount,
+      1,
+      reason: 'a save that cannot be re-opened saved nothing',
+    );
     await saved.dispose();
   });
 
   testWidgets('registerFallbackFont bakes an emoji form value', (t) async {
     // Build a form with one text field.
     final b = await pdf.build();
-    final page = await b.addA4Page();
+    final page = await b.addPage();
     await page.textField(
-        'note', const PdfRect(x: 100, y: 680, width: 200, height: 20));
-    await page.done();
+      'note',
+      const PdfRect(x: 100, y: 680, width: 200, height: 20),
+    );
     final formSink = MemorySink();
     await b.save(formSink);
     await b.dispose();
@@ -554,93 +702,127 @@ void main() {
     // side), fill with a value the field font cannot draw, flatten.
     final font = await rootBundle.load('assets/fonts/NotoEmoji-Regular.ttf');
     await pdf.registerFallbackFont(
-        PdfFallbackFontKind.emoji, font.buffer.asUint8List());
+      PdfFallbackFontKind.emoji,
+      _src(font.buffer.asUint8List()),
+    );
 
-    final e = await pdf.edit(_src(formSink.takeBytes()));
-    await e.setFormFieldValue('note', 'Loved it \u{1F600}\u{1F389}');
+    final e = await pdf.edit(PdfInput(_src(formSink.takeBytes())));
+    await e
+        .field('note')
+        .setValue(PdfFormFieldValue.text('Loved it \u{1F600}\u{1F389}'));
     await e.flattenForms();
     final sink = MemorySink();
     await e.save(sink);
     await e.dispose();
 
-    final saved = await pdf.open(_src(sink.takeBytes()));
-    expect(saved.pageCount, 1,
-        reason: 'a save that cannot be re-opened saved nothing');
+    final saved = await pdf.open(PdfInput(_src(sink.takeBytes())));
+    expect(
+      saved.pageCount,
+      1,
+      reason: 'a save that cannot be re-opened saved nothing',
+    );
     await saved.dispose();
   });
 
   testWidgets('editor redaction lifecycle', (t) async {
-    final e = await pdf.edit(_src(minimalPdf));
-    await e.addRedaction(
-        0, const PdfRect(x: 50, y: 50, width: 100, height: 20));
+    final e = await pdf.edit(PdfInput(_src(minimalPdf)));
+    await e.markRedaction(0, const [
+      PdfRect(x: 50, y: 50, width: 100, height: 20),
+    ]);
     expect(await e.redactionCount(0), greaterThan(0));
     await e.applyRedactions();
     final sink = MemorySink();
     await e.save(sink);
     await e.dispose();
-    final saved = await pdf.open(_src(sink.takeBytes()));
-    expect(saved.pageCount, 1,
-        reason: 'a save that cannot be re-opened saved nothing');
+    final saved = await pdf.open(PdfInput(_src(sink.takeBytes())));
+    expect(
+      saved.pageCount,
+      1,
+      reason: 'a save that cannot be re-opened saved nothing',
+    );
     await saved.dispose();
   });
 
-  testWidgets('editor scrubMetadata', (t) async {
-    final e = await pdf.edit(_src(minimalPdf));
-    await e.scrubMetadata();
+  testWidgets('editor sanitize (strip metadata)', (t) async {
+    final e = await pdf.edit(PdfInput(_src(minimalPdf)));
+    await e.sanitize(stripMetadata: true, stripJavaScript: false);
     final sink = MemorySink();
     await e.save(sink);
     await e.dispose();
-    final saved = await pdf.open(_src(sink.takeBytes()));
-    expect(saved.pageCount, 1,
-        reason: 'a save that cannot be re-opened saved nothing');
+    final saved = await pdf.open(PdfInput(_src(sink.takeBytes())));
+    expect(
+      saved.pageCount,
+      1,
+      reason: 'a save that cannot be re-opened saved nothing',
+    );
     await saved.dispose();
   });
 
   testWidgets('editor convertToPdfA', (t) async {
-    final e = await pdf.edit(_src(minimalPdf));
+    final e = await pdf.edit(PdfInput(_src(minimalPdf)));
     await e.convertToPdfA();
     final sink = MemorySink();
     await e.save(sink);
     await e.dispose();
-    final saved = await pdf.open(_src(sink.takeBytes()));
-    expect(saved.pageCount, 1,
-        reason: 'a save that cannot be re-opened saved nothing');
+    final saved = await pdf.open(PdfInput(_src(sink.takeBytes())));
+    expect(
+      saved.pageCount,
+      1,
+      reason: 'a save that cannot be re-opened saved nothing',
+    );
     await saved.dispose();
   });
 
-  testWidgets('editor save options (full/incremental/encrypted/remove)',
-      (t) async {
-    final e = await pdf.edit(_src(minimalPdf));
+  testWidgets('editor save options (full/incremental/encrypted/remove)', (
+    t,
+  ) async {
+    final e = await pdf.edit(PdfInput(_src(minimalPdf)));
     final s1 = MemorySink();
-    await e.save(s1,
-        options: const PdfSaveOptions.fullRewrite(
-            compress: true, garbageCollect: true));
-    final full = await pdf.open(_src(s1.takeBytes()));
+    await e.save(
+      s1,
+      save: const PdfSave.full(
+        deflate: PdfDeflate.balanced,
+        garbageCollect: true,
+      ),
+    );
+    final full = await pdf.open(PdfInput(_src(s1.takeBytes())));
     expect(full.pageCount, 1);
     await full.dispose();
 
-    await e.setTitle('incremental edit');
+    await e.setMetadata(
+      (await e.metadata()).copyWith(title: 'incremental edit'),
+    );
     final s2 = MemorySink();
-    await e.save(s2, options: const PdfSaveOptions.incremental());
-    expect(s2.takeBytes().length, greaterThan(minimalPdf.length),
-        reason: 'incremental save appends the modification after the '
-            'original bytes — output must be strictly larger');
+    await e.save(s2, save: const PdfSave.incremental());
+    expect(
+      s2.takeBytes().length,
+      greaterThan(minimalPdf.length),
+      reason: 'incremental save appends the modification after the '
+          'original bytes — output must be strictly larger',
+    );
 
     final s3 = MemorySink();
-    await e.save(s3,
-        options: const PdfSaveOptions.fullRewrite(
-            encryption: PdfEncryption.config(ownerPassword: 'pw')));
-    final enc = await pdf.open(_src(s3.takeBytes()));
-    expect(enc.isEncrypted, isTrue,
-        reason: 'the encrypted save mode must actually encrypt');
+    await e.save(
+      s3,
+      save: const PdfSave.full(
+        encryption: PdfEncryption.password(ownerPassword: 'pw'),
+      ),
+    );
+    final enc = await pdf.open(PdfInput(_src(s3.takeBytes())));
+    expect(
+      enc.encryption,
+      isNotNull,
+      reason: 'the encrypted save mode must actually encrypt',
+    );
     await enc.dispose();
 
     final s4 = MemorySink();
-    await e.save(s4,
-        options: const PdfSaveOptions.fullRewrite(
-            encryption: PdfEncryption.remove()));
-    final plain = await pdf.open(_src(s4.takeBytes()));
-    expect(plain.isEncrypted, isFalse);
+    await e.save(
+      s4,
+      save: const PdfSave.full(encryption: PdfEncryption.remove()),
+    );
+    final plain = await pdf.open(PdfInput(_src(s4.takeBytes())));
+    expect(plain.encryption, isNull);
     await plain.dispose();
 
     await e.dispose();
@@ -650,12 +832,11 @@ void main() {
 
   testWidgets('builder text document (A4)', (t) async {
     final b = await pdf.build();
-    await b.setTitle('T');
-    await b.setAuthor('A');
-    await b.setSubject('S');
-    await b.setKeywords('K');
-    final p = await b.addA4Page();
-    await p.font('Helvetica', 14);
+    await b.setMetadata(
+      const PdfMetadata(title: 'T', author: 'A', subject: 'S', keywords: 'K'),
+    );
+    final p = await b.addPage();
+    await p.setFont('Helvetica', 14);
     await p.heading(1, 'Title');
     await p.space(10);
     await p.paragraph('Paragraph text.');
@@ -665,87 +846,97 @@ void main() {
     await p.footnote('1', 'Footnote text.');
     await p.watermark('DRAFT');
     await p.newline();
-    await p.done();
     final sink = MemorySink();
     await b.save(sink);
     await b.dispose();
-    final doc = await pdf.open(_src(sink.takeBytes()));
+    final doc = await pdf.open(PdfInput(_src(sink.takeBytes())));
     expect(doc.pageCount, 1);
     await doc.dispose();
   });
 
   testWidgets('builder Letter + custom size', (t) async {
     final b = await pdf.build();
-    final p1 = await b.addLetterPage();
+    final p1 = await b.addPage(PdfPageSize.letter());
     await p1.text('Letter');
-    await p1.done();
-    final p2 = await b.addPage(width: 400, height: 300);
+    final p2 = await b.addPage(PdfPageSize.points(400, 300));
     await p2.text('Custom');
-    await p2.done();
     final sink = MemorySink();
     await b.save(sink);
     await b.dispose();
-    final doc = await pdf.open(_src(sink.takeBytes()));
+    final doc = await pdf.open(PdfInput(_src(sink.takeBytes())));
     expect(doc.pageCount, 2);
     await doc.dispose();
   });
 
-  testWidgets('builder newPageSameSize', (t) async {
+  testWidgets('builder second page', (t) async {
     final b = await pdf.build();
-    final p = await b.addA4Page();
-    await p.text('Page 1');
-    await p.newPageSameSize();
-    await p.text('Page 2');
-    await p.done();
+    final p1 = await b.addPage();
+    await p1.text('Page 1');
+    final p2 = await b.addPage();
+    await p2.text('Page 2');
     final sink = MemorySink();
     await b.save(sink);
     await b.dispose();
-    final doc = await pdf.open(_src(sink.takeBytes()));
+    final doc = await pdf.open(PdfInput(_src(sink.takeBytes())));
     expect(doc.pageCount, 2);
     await doc.dispose();
   });
 
   testWidgets('builder form fields (all types)', (t) async {
     final b = await pdf.build();
-    final p = await b.addA4Page();
+    final p = await b.addPage();
     await p.textField(
-        'name', const PdfRect(x: 72, y: 700, width: 200, height: 20),
-        defaultValue: 'John');
+      'name',
+      const PdfRect(x: 72, y: 700, width: 200, height: 20),
+      value: 'John',
+      scripts: const PdfFieldScripts(
+        keystroke: 'AFNumber_Keystroke(2, 0, 0, 0, "", true)',
+        format: 'AFNumber_Format(2, 0, 0, 0, "", true)',
+        validate: 'AFRange_Validate(true, 0, true, 100)',
+        calculate: 'AFSimple_Calculate("SUM", new Array("f1", "f2"))',
+      ),
+    );
     await p.checkbox(
-        'agree', const PdfRect(x: 72, y: 660, width: 14, height: 14));
-    await p.comboBox('country',
-        const PdfRect(x: 72, y: 620, width: 150, height: 20), ['A', 'B'],
-        selected: 'A');
+      'agree',
+      const PdfRect(x: 72, y: 660, width: 14, height: 14),
+    );
+    await p.comboBox(
+      'country',
+      const PdfRect(x: 72, y: 620, width: 150, height: 20),
+      ['A', 'B'],
+      selected: 'A',
+    );
     await p.pushButton(
-        'btn', const PdfRect(x: 72, y: 580, width: 80, height: 30), 'Click');
+      'btn',
+      const PdfRect(x: 72, y: 580, width: 80, height: 30),
+      'Click',
+    );
     await p.signatureField(
-        'sig', const PdfRect(x: 72, y: 520, width: 200, height: 60));
+      'sig',
+      const PdfRect(x: 72, y: 520, width: 200, height: 60),
+    );
     // radioGroup — skipped: Rust handler not yet implemented (pre-existing gap)
-    await p.fieldKeystroke('AFNumber_Keystroke(2, 0, 0, 0, "", true)');
-    await p.fieldFormat('AFNumber_Format(2, 0, 0, 0, "", true)');
-    await p.fieldValidate('AFRange_Validate(true, 0, true, 100)');
-    await p.fieldCalculate('AFSimple_Calculate("SUM", new Array("f1", "f2"))');
-    await p.done();
     final sink = MemorySink();
     await b.save(sink);
     await b.dispose();
     final out = String.fromCharCodes(sink.takeBytes());
     for (final field in ['name', 'agree', 'country', 'btn', 'sig']) {
-      expect(out, contains(field),
-          reason: 'every declared form field must exist in the file');
+      expect(
+        out,
+        contains(field),
+        reason: 'every declared form field must exist in the file',
+      );
     }
   });
 
   testWidgets('builder links', (t) async {
     final b = await pdf.build();
-    final p = await b.addA4Page();
-    // Links anchor to the most recent text run — an empty page has
-    // nothing to link.
-    await p.text('Visit the site');
-    await p.linkUrl('https://example.com');
-    await p.text('Back to page one');
-    await p.linkPage(0);
-    await p.done();
+    final p = await b.addPage();
+    await p.text(
+      'Visit the site',
+      link: const PdfLink.url('https://example.com'),
+    );
+    await p.text('Back to page one', link: const PdfLink.page(0));
     final sink = MemorySink();
     await b.save(sink);
     await b.dispose();
@@ -757,62 +948,68 @@ void main() {
   testWidgets('dispose prevents further ops', (t) async {
     final p = Pdf();
     await p.dispose();
-    expect(() => p.open(_src(minimalPdf)), throwsStateError);
+    expect(
+      () => p.open(PdfInput(_src(minimalPdf))),
+      throwsA(isA<StateError>()),
+    );
   });
 
   testWidgets('doc dispose + editor dispose + builder dispose', (t) async {
-    final doc = await pdf.open(_src(minimalPdf));
+    final doc = await pdf.open(PdfInput(_src(minimalPdf)));
     await doc.dispose();
     await doc.dispose(); // double dispose safe
 
-    final e = await pdf.edit(_src(minimalPdf));
+    final e = await pdf.edit(PdfInput(_src(minimalPdf)));
     final sink = MemorySink();
     await e.save(sink);
     await e.dispose();
     await e.dispose();
 
     final b = await pdf.build();
-    final p = await b.addA4Page();
+    final p = await b.addPage();
     await p.text('x');
-    await p.done();
     final sink2 = MemorySink();
     await b.save(sink2);
     await b.dispose();
     await b.dispose();
 
     // Disposed means refusing, not just surviving.
-    expect(() => doc.extract(pages: const PdfPages.all()), throwsStateError);
-    expect(() => e.setTitle('x'), throwsStateError);
-    expect(() => b.save(MemorySink()), throwsStateError);
+    expect(() => doc.extractText(MemorySink()), throwsA(isA<StateError>()));
+    expect(
+      () => e.setMetadata(const PdfMetadata(title: 'x')),
+      throwsA(isA<StateError>()),
+    );
+    expect(() => b.save(MemorySink()), throwsA(isA<StateError>()));
   });
 
   // ── Runtime — the lane architecture, proven on THIS device ──────
 
-  testWidgets('task.cancel mid-op resolves PdfCancelled, instance survives',
-      (t) async {
+  testWidgets('task.cancel mid-op resolves PdfCancelled, instance survives', (
+    t,
+  ) async {
     final slow = _ParkedSource(minimalPdf);
-    final task = pdf.open(slow);
+    final task = pdf.open(PdfInput(slow));
     await slow.firstRead; // the engine is provably parked on the harness's read
     task.cancel();
     await expectLater(task, throwsA(isA<PdfCancelled>()));
     slow.release();
     // Only that job died — the instance keeps working.
-    final doc = await pdf.open(_src(minimalPdf));
+    final doc = await pdf.open(PdfInput(_src(minimalPdf)));
     expect(doc.pageCount, 1);
     await doc.dispose();
   });
 
   testWidgets('cancel before the job starts resolves PdfCancelled', (t) async {
-    final task = pdf.open(_src(minimalPdf));
+    final task = pdf.open(PdfInput(_src(minimalPdf)));
     task.cancel(); // same tick — the job never reaches a lane
     await expectLater(task, throwsA(isA<PdfCancelled>()));
-    final doc = await pdf.open(_src(minimalPdf));
+    final doc = await pdf.open(PdfInput(_src(minimalPdf)));
     expect(doc.pageCount, 1);
     await doc.dispose();
   });
 
   testWidgets('cancel after completion is a no-op', (t) async {
-    final task = pdf.open(_src(minimalPdf));
+    final task = pdf.open(PdfInput(_src(minimalPdf)));
     final doc = await task;
     task.cancel();
     task.cancel(); // idempotent
@@ -821,8 +1018,9 @@ void main() {
   });
 
   testWidgets('parallel opens land on independent lanes', (t) async {
-    final docs =
-        await Future.wait(List.generate(4, (_) => pdf.open(_src(minimalPdf))));
+    final docs = await Future.wait(
+      List.generate(4, (_) => pdf.open(PdfInput(_src(minimalPdf)))),
+    );
     for (final doc in docs) {
       expect(doc.pageCount, 1);
       await doc.dispose();
@@ -832,7 +1030,7 @@ void main() {
   testWidgets('instant dispose: in-flight op resolves PdfCancelled', (t) async {
     final lab = Pdf();
     final slow = _ParkedSource(minimalPdf);
-    final inflight = lab.open(slow);
+    final inflight = lab.open(PdfInput(slow));
     await slow.firstRead;
     final sw = Stopwatch()..start();
     await lab.dispose();
@@ -840,16 +1038,19 @@ void main() {
     slow.release();
     await expectLater(inflight, throwsA(isA<PdfCancelled>()));
     // "Instant" = same event-loop turn; generous bound for slow CI.
-    expect(sw.elapsedMilliseconds, lessThan(500),
-        reason: 'dispose must not wait for in-flight work');
+    expect(
+      sw.elapsedMilliseconds,
+      lessThan(500),
+      reason: 'dispose must not wait for in-flight work',
+    );
   });
 
   testWidgets('fresh instance works after an abrupt kill', (t) async {
     final lab = Pdf();
-    unawaited(lab.open(_src(minimalPdf)));
+    unawaited(lab.open(PdfInput(_src(minimalPdf))));
     await lab.dispose(); // killed mid-open
     final lab2 = Pdf();
-    final doc = await lab2.open(_src(minimalPdf));
+    final doc = await lab2.open(PdfInput(_src(minimalPdf)));
     expect(doc.pageCount, 1);
     await doc.dispose();
     await lab2.dispose();
@@ -871,8 +1072,8 @@ void main() {
     // The chip resolves from "…" to a real mode name.
     await pumpUntil(
       t,
-      () =>
-          ['NATIVE', 'JSPI', 'ATOMICS', 'OPFS'].any((m) => t.any(find.text(m))),
+      () => ['NATIVE', 'JSPI', 'ATOMICS', 'OPFS', 'ASYNCIFY']
+          .any((m) => t.any(find.text(m))),
       describe: 'I/O mode chip resolved',
     );
   });
@@ -909,8 +1110,11 @@ void main() {
     await robot.launch();
     for (final tab in appTabs) {
       await robot.openTab(tab);
-      expect(find.textContaining(tab.marker), findsOneWidget,
-          reason: '${tab.label} body not shown');
+      expect(
+        find.textContaining(tab.marker),
+        findsOneWidget,
+        reason: '${tab.label} body not shown',
+      );
     }
   });
 }
@@ -939,4 +1143,7 @@ class _ParkedSource implements DataSource {
     final end = (offset + count).clamp(0, _data.length);
     return Uint8List.sublistView(_data, offset, end);
   }
+
+  @override
+  void close() {}
 }

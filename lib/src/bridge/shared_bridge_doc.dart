@@ -25,154 +25,195 @@ class _SharedDocHandle extends BridgeDocHandle {
 
   int get _pageCount => _openResult['pageCount'] as int? ?? 0;
 
-  List<int> _pages(PdfPages pages) => _bridge._resolvePages(pages, _pageCount);
-
   PdfTask<Map<String, Object?>> _exec(
     EngineOp op,
     Map<String, Object?> args, {
     List<DataSink> sinks = const [],
-  }) => _bridge._exec(op, {'handleId': _handleId, ...args}, sinks: sinks);
+  }) => _bridge._exec(
+    op,
+    {'handleId': _handleId, ...args},
+    sinks: sinks,
+    scope: scope,
+  );
 
   @override
   Map<String, Object?> get openResult => _openResult;
 
+  /// The pages a read names.
+  List<int> _pageList(PdfPages pages) =>
+      codec.resolvePageIndices(pages, _pageCount);
+
   @override
-  PdfTask<String> extract({
+  PdfTask<List<PdfPageInfo>> pageInfo({required PdfPages pages}) => _exec(
+    EngineOp.pageInfo,
+    {'pageIndices': _pageList(pages)},
+  ).map(codec.decodePageInfos);
+
+  @override
+  PdfTask<void> extractText(
+    DataSink output, {
     required PdfPages pages,
     PdfExtractionFormat format = PdfExtractionFormat.auto,
   }) {
-    final fmt = _bridge._encodeExtractionFormat(format);
+    final fmt = codec.putEnum(format);
     return PdfTask.group((hook) async {
-      return switch (pages) {
-        PdfPagesAll() => codec.decodeExtractResult(
-          await hook.guard(_exec(EngineOp.extract, {'format': fmt})),
-        ),
-        PdfPagesSingle(:final index) => codec.decodeExtractResult(
+      // The first error [output] threw: the engine fails its write with an
+      // echo of it, and the caller's error is the one that ends the op.
+      ({Object error, StackTrace stack})? failure;
+      try {
+        if (pages is PdfPagesAll) {
+          // One frame per page: the text reaches the sink as each frame
+          // arrives, and the library never holds the document's text.
+          final sink = _FrameSink((frame) async {
+            onEngineFrame?.call();
+            try {
+              await output.write(
+                utf8.encode(
+                  codec.decodeExtractResult(bin.decodeResponse(frame)),
+                ),
+              );
+            } catch (error, stack) {
+              failure ??= (error: error, stack: stack);
+              rethrow;
+            }
+          });
           await hook.guard(
-            _exec(EngineOp.extract, {'format': fmt, 'page': index}),
-          ),
-        ),
-        PdfPagesList(:final indices) => () async {
-          final buf = StringBuffer();
-          for (final i in indices) {
-            buf.write(
-              codec.decodeExtractResult(
-                await hook.guard(
-                  _exec(EngineOp.extract, {'format': fmt, 'page': i}),
-                ),
-              ),
-            );
+            _exec(
+              EngineOp.extract,
+              {'format': fmt, 'hasSink': true},
+              sinks: [sink],
+            ),
+          );
+          if (failure case final failure?) {
+            Error.throwWithStackTrace(failure.error, failure.stack);
           }
-          return buf.toString();
-        }(),
-        PdfPagesRange(:final start, :final end) => () async {
-          final buf = StringBuffer();
-          for (var i = start; i < end; i++) {
-            buf.write(
-              codec.decodeExtractResult(
-                await hook.guard(
-                  _exec(EngineOp.extract, {'format': fmt, 'page': i}),
-                ),
-              ),
-            );
-          }
-          return buf.toString();
-        }(),
-      };
+          return;
+        }
+        for (final page in _pageList(pages)) {
+          final text = codec.decodeExtractResult(
+            await hook.guard(
+              _exec(EngineOp.extract, {'format': fmt, 'page': page}),
+            ),
+          );
+          await output.write(utf8.encode(text));
+        }
+      } catch (error) {
+        // The engine's sink is the library's; the text went to [output]. A
+        // sink that threw made the engine fail its write: the caller's error
+        // is the cause, the engine's is its echo.
+        final cause = failure;
+        await (scope ?? hook).abortSinks([output], cause?.error ?? error);
+        if (cause != null) {
+          Error.throwWithStackTrace(cause.error, cause.stack);
+        }
+        rethrow;
+      }
     });
   }
 
   @override
-  PdfTask<List<SearchResult>> search({
+  PdfTask<List<PdfSearchHit>> search({
     required String query,
     required PdfPages pages,
   }) {
     return PdfTask.group((hook) async {
-      return switch (pages) {
-        PdfPagesAll() => codec.decodeSearchResults(
+      if (pages is PdfPagesAll) {
+        return codec.decodeSearchHits(
           await hook.guard(_exec(EngineOp.search, {'query': query})),
-        ),
-        PdfPagesSingle(:final index) => codec.decodeSearchResults(
-          await hook.guard(
-            _exec(EngineOp.search, {'query': query, 'page': index}),
+        );
+      }
+      final all = <PdfSearchHit>[];
+      for (final page in _pageList(pages)) {
+        all.addAll(
+          codec.decodeSearchHits(
+            await hook.guard(
+              _exec(EngineOp.search, {'query': query, 'page': page}),
+            ),
           ),
-        ),
-        PdfPagesList(:final indices) => () async {
-          final all = <SearchResult>[];
-          for (final i in indices) {
-            all.addAll(
-              codec.decodeSearchResults(
-                await hook.guard(
-                  _exec(EngineOp.search, {'query': query, 'page': i}),
-                ),
-              ),
-            );
-          }
-          return all;
-        }(),
-        PdfPagesRange(:final start, :final end) => () async {
-          final all = <SearchResult>[];
-          for (var i = start; i < end; i++) {
-            all.addAll(
-              codec.decodeSearchResults(
-                await hook.guard(
-                  _exec(EngineOp.search, {'query': query, 'page': i}),
-                ),
-              ),
-            );
-          }
-          return all;
-        }(),
-      };
+        );
+      }
+      return all;
     });
   }
 
+  /// The engine writes each page as a header, data frames and an end frame;
+  /// [_ChunkDelivery] opens the page's sink at the header, writes each data
+  /// frame before it takes the next, and closes the sink at the end frame.
+  /// Whatever stops the render (an error, a cancel, a sink that throws)
+  /// closes the sink of the page in flight; pages already delivered stand.
   @override
-  Stream<RenderedPage> render({
+  PdfTask<List<PdfRenderedPage>> render(
+    FutureOr<DataSink> Function(PdfRenderedPage page) sinkFor, {
     required PdfPages pages,
-    PdfRenderSize? size,
-  }) async* {
-    final sink = _FrameCollectorSink();
-    final req = bin.encodeRequest(EngineOp.render.wire, {
-      'handleId': _handleId,
-      'pageIndices': _pages(pages),
-      if (size?.maxWidth != null) 'maxWidth': size!.maxWidth,
-      if (size?.maxHeight != null) 'maxHeight': size!.maxHeight,
-      'hasSink': true,
-    });
-    await _bridge._transport.execute(req, sinks: [sink]);
-    for (final frame in sink.frames) {
-      final map = bin.decodeResponse(frame);
-      if (map.containsKey('error')) {
-        throw PdfEngineError(map['error'] as String);
-      }
-      yield codec.decodeRenderedPage(map);
-    }
-  }
+    required PdfRenderSize size,
+    required PdfRenderFormat format,
+  }) => _deliver(
+    EngineOp.render,
+    {
+      'pageIndices': _pageList(pages),
+      ..._renderSizeArgs(size),
+      'format': codec.putEnum(format),
+    },
+    sinkFor,
+    codec.decodeRenderFrame,
+  );
 
+  /// The engine writes each image as a header, data frames and an end frame,
+  /// the same chunked wire as a render; the sink [sinkFor] returns is opened
+  /// at the header and closed at the end frame.
   @override
-  Stream<PdfImage> extractImages({required PdfPages pages}) async* {
-    final pageIndices = _pages(pages);
-    for (final page in pageIndices) {
-      final sink = _FrameCollectorSink();
-      final req = bin.encodeRequest(EngineOp.extractImages.wire, {
-        'handleId': _handleId,
-        'page': page,
-        'hasSink': true,
-      });
-      await _bridge._transport.execute(req, sinks: [sink]);
-      for (final frame in sink.frames) {
-        final map = bin.decodeResponse(frame);
-        if (map.containsKey('error')) {
-          throw PdfEngineError(map['error'] as String);
+  PdfTask<List<PdfImageInfo>> extractImages(
+    FutureOr<DataSink> Function(PdfImageInfo image) sinkFor, {
+    required PdfPages pages,
+  }) => _deliver(
+    EngineOp.extractImages,
+    {'pageIndices': _pageList(pages)},
+    sinkFor,
+    codec.decodeImageFrame,
+  );
+
+  /// Runs [op] with a [_ChunkDelivery] as its sink and resolves with the
+  /// items delivered.
+  PdfTask<List<H>> _deliver<H>(
+    EngineOp op,
+    Map<String, Object?> arguments,
+    FutureOr<DataSink> Function(H item) sinkFor,
+    codec.ChunkFrame<H> Function(Map<String, Object?> frame) decode,
+  ) {
+    return PdfTask.group((hook) async {
+      final delivery = _ChunkDelivery<H>(sinkFor, hook, decode);
+      try {
+        final res = await _bridge._transport.execute(
+          bin.encodeRequest(op.wire, {
+            'handleId': _handleId,
+            ...arguments,
+            'hasSink': true,
+          }),
+          sinks: [delivery],
+          cancel: hook,
+        );
+        bin.decodeResponse(res.bytes);
+        // A sink that failed made the engine fail its write: the caller's
+        // error ends the op, not the engine's echo.
+        if (delivery.failure case final failure?) {
+          Error.throwWithStackTrace(failure.error, failure.stack);
         }
-        yield codec.decodePdfImage(map);
+        if (delivery.dropped) throw const PdfCancelled();
+      } catch (error) {
+        await delivery.abandon(error);
+        // A sink or factory that threw made the engine fail its write; the
+        // caller's error is the cause, the engine's is its echo.
+        if (delivery.failure case final failure?) {
+          Error.throwWithStackTrace(failure.error, failure.stack);
+        }
+        rethrow;
       }
-    }
+      return delivery.items;
+    });
   }
 
   @override
-  PdfTask<List<PdfSignatureInfo>> get signatures => _exec(
+  PdfTask<List<PdfSignatureInfo>> signatures() => _exec(
     EngineOp.getSignatures,
     {},
   ).map((map) => codec.decodeSignatures(map));
@@ -184,37 +225,49 @@ class _SharedDocHandle extends BridgeDocHandle {
   ).map((map) => codec.decodeVerifySignatures(map));
 
   @override
-  PdfTask<PdfValidationResult> validatePdfA({int level = 2}) => _exec(
-    EngineOp.validatePdfA,
-    {'level': level},
-  ).map((map) => codec.decodeValidationResult(map));
+  PdfTask<PdfValidationReport> validatePdfA({required PdfALevel level}) =>
+      _exec(EngineOp.validatePdfA, {
+        'level': codec.putEnum(level),
+      }).map((map) => codec.decodeValidationResult(map));
 
   @override
-  PdfTask<bool> validatePdfUa({int level = 1}) => _exec(
-    EngineOp.validatePdfUa,
-    {'level': level},
-  ).map((map) => codec.decodeValidatePdfUa(map));
+  PdfTask<PdfValidationReport> validatePdfUa({required PdfUaLevel level}) =>
+      _exec(EngineOp.validatePdfUa, {
+        'level': codec.putEnum(level),
+      }).map((map) => codec.decodeValidationResult(map));
 
   @override
-  PdfTask<List<PdfBookmarkSplit>> planSplitByBookmarks() => _exec(
+  PdfTask<List<PdfBookmarkRange>> bookmarkRanges() => _exec(
     EngineOp.planSplitByBookmarks,
     {},
-  ).map((map) => codec.decodeBookmarkSplits(map));
+  ).map((map) => codec.decodeBookmarkRanges(map));
 
   @override
-  PdfTask<PdfPageClassification> classifyPage(int page) => _exec(
-    EngineOp.classifyPage,
-    {'page': page},
-  ).map((map) => codec.decodeClassifyPage(map));
+  PdfTask<List<PdfPageClassification>> classifyPages({
+    required PdfPages pages,
+  }) {
+    return PdfTask.group((hook) async {
+      final out = <PdfPageClassification>[];
+      for (final page in _pageList(pages)) {
+        out.add(
+          codec.decodeClassifyPage(
+            await hook.guard(_exec(EngineOp.classifyPage, {'page': page})),
+            page: page,
+          ),
+        );
+      }
+      return out;
+    });
+  }
 
   @override
-  PdfTask<PdfDocumentClassification> classifyDocument() => _exec(
+  PdfTask<PdfDocumentKind> classifyDocument() => _exec(
     EngineOp.classifyDocument,
     {},
   ).map((map) => codec.decodeClassifyDocument(map));
 
   @override
-  PdfTask<List<PdfFormField>> get formFields =>
+  PdfTask<List<PdfFormField>> formFields() =>
       _exec(EngineOp.formFields, {}).map(codec.decodeFormFields);
 
   @override
@@ -222,12 +275,16 @@ class _SharedDocHandle extends BridgeDocHandle {
       _exec(EngineOp.exportFormData, {'format': format}, sinks: [output]);
 
   @override
-  PdfTask<PdfXfaInfo?> get xfa =>
+  PdfTask<PdfXfaInfo?> xfa() =>
       _exec(EngineOp.xfa, {}).map(codec.decodeXfaInfo);
 
   @override
-  PdfTask<List<PdfAttachment>> get attachments =>
+  PdfTask<List<PdfAttachment>> attachments() =>
       _exec(EngineOp.attachments, {}).map(codec.decodeAttachments);
+
+  @override
+  PdfTask<List<PdfAnnotationInfo>> annotations(int page) =>
+      _exec(EngineOp.annotations, {'page': page}).map(codec.decodeAnnotations);
 
   @override
   PdfTask<void> extractAttachment(String name, DataSink output) =>
@@ -240,4 +297,134 @@ class _SharedDocHandle extends BridgeDocHandle {
       await _bridge._transport.releaseSource(_resourceId);
     }
   }
+}
+
+/// The sink the engine writes a chunked sequence to (the pages of a render,
+/// the images of an extraction): it cuts the stream into frames, hands each
+/// item to the caller's sink and keeps nothing of its bytes. The items are of
+/// type [H], the descriptor the header frame carries.
+///
+/// The transport awaits each [write] before the engine sends the next chunk,
+/// so a slow caller sink slows the engine (back-pressure). A frame is at
+/// most one data frame (256 KiB) plus a few bytes, and a chunk is the
+/// transport's 256 KiB buffer, so what waits here is bounded by both.
+class _ChunkDelivery<H> implements DataSink {
+  _ChunkDelivery(this._sinkFor, this._hook, this._decode);
+
+  final FutureOr<DataSink> Function(H item) _sinkFor;
+
+  final codec.ChunkFrame<H> Function(Map<String, Object?> frame) _decode;
+
+  /// Once it is cancelled the frames still in flight are dropped, never
+  /// written: a cancel stops the writes to the caller's sinks.
+  final CancelHook _hook;
+
+  /// The items whose end frame arrived: their sinks are closed.
+  final items = <H>[];
+
+  /// The first error the caller's factory or sink threw, if any.
+  ({Object error, StackTrace stack})? failure;
+
+  /// Whether a cancel made it drop frames the engine had already written: the
+  /// render then ends cancelled even when the engine finished.
+  bool dropped = false;
+
+  final _pending = BytesBuilder(copy: false);
+  DataSink? _open;
+  H? _openItem;
+
+  @override
+  Future<void> write(Uint8List chunk) async {
+    try {
+      _pending.add(chunk);
+      final bytes = _pending.takeBytes();
+      // Every frame the chunk holds is counted before the first is taken,
+      // as the engine wrote them all before this chunk was delivered.
+      final frames = <Uint8List>[];
+      var at = 0;
+      while (bytes.length - at >= 4) {
+        final length = ByteData.sublistView(
+          bytes,
+          at,
+          at + 4,
+        ).getUint32(0, Endian.little);
+        // A zero length ends the stream: no frame follows.
+        if (length == 0) {
+          at += 4;
+          continue;
+        }
+        if (bytes.length - at < 4 + length) break;
+        frames.add(Uint8List.sublistView(bytes, at + 4, at + 4 + length));
+        at += 4 + length;
+        onEngineFrame?.call();
+      }
+      if (at < bytes.length) _pending.add(Uint8List.sublistView(bytes, at));
+      for (final frame in frames) {
+        if (_hook.isCancelled) {
+          dropped = true;
+          break;
+        }
+        await _take(_decode(bin.decodeResponse(frame)));
+      }
+    } catch (error, stack) {
+      failure ??= (error: error, stack: stack);
+      rethrow;
+    }
+  }
+
+  Future<void> _take(codec.ChunkFrame<H> frame) async {
+    switch (frame) {
+      case codec.ChunkHeader<H>(:final item):
+        await abandon(
+          const PdfEngineFailed('an item began before the last one ended'),
+        );
+        _openItem = item;
+        _open = await _sinkFor(item);
+      case codec.ChunkData<H>(:final bytes):
+        final sink = _open;
+        if (sink == null) {
+          throw const PdfEngineFailed('a data frame came before its header');
+        }
+        await sink.write(bytes);
+      case codec.ChunkEnd<H>():
+        final sink = _open;
+        if (sink == null) {
+          throw const PdfEngineFailed('an end frame came before its header');
+        }
+        final item = _openItem as H;
+        _open = null;
+        _openItem = null;
+        await sink.close();
+        items.add(item);
+    }
+  }
+
+  /// Aborts, then closes, the sink of the item in flight, if any: the item
+  /// never ended, so its sink holds no partial item. A sink that fails to
+  /// abort or close here is not reported: [reason], whatever stopped the op,
+  /// is the error.
+  Future<void> abandon(Object reason) async {
+    final sink = _open;
+    _open = null;
+    _openItem = null;
+    if (sink == null) return;
+    try {
+      await sink.abort(reason);
+    } catch (_) {
+      // The error that stopped the op is the one reported.
+    }
+    try {
+      await sink.close();
+    } catch (_) {
+      // The error that stopped the op is the one reported.
+    }
+  }
+
+  /// The item in flight is aborted by [abandon], with the error that ended
+  /// the op; delivered items stand.
+  @override
+  void abort(Object reason) {}
+
+  @override
+  void close() {}
 }

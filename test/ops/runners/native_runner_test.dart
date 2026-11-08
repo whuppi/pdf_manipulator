@@ -14,11 +14,24 @@ import '../core/pdf_doc_battery.dart';
 import '../core/pdf_editor_battery.dart';
 import '../core/pdf_form_battery.dart';
 import '../core/pdf_form_encoding_battery.dart';
+import '../core/pdf_kept_encryption_battery.dart';
+import '../core/pdf_lzw_battery.dart';
+import '../core/pdf_merge_battery.dart';
 import '../core/pdf_builder_battery.dart';
 import '../core/pdf_standalone_battery.dart';
 import '../core/pdf_sugar_battery.dart';
+import '../core/pdf_one_shot_battery.dart';
+import '../core/pdf_render_battery.dart';
+import '../core/pdf_determinism_battery.dart';
+import '../core/pdf_abort_battery.dart';
+import '../core/pdf_cancel_battery.dart';
+import '../core/pdf_combinator_cancel_battery.dart';
 import '../core/pdf_lifecycle_battery.dart';
+import '../core/pdf_source_failure_battery.dart';
 import '../core/pdf_instance_battery.dart';
+import '../core/pdf_lane_protocol_battery.dart';
+import '../core/pdf_runtime_safety_battery.dart';
+import '../core/pdf_executor_battery.dart';
 import '../stress/pdf_doc_stress_battery.dart';
 import '../stress/pdf_editor_stress_battery.dart';
 import '../stress/pdf_sugar_stress_battery.dart';
@@ -26,6 +39,8 @@ import '../stress/pdf_standalone_stress_battery.dart';
 import '../stress/pdf_builder_stress_battery.dart';
 import '../stress/pdf_instance_stress_battery.dart';
 import '../platform/native/native_finalizer_battery.dart';
+import '../platform/native/native_lane_protocol_battery.dart';
+import '../platform/native/native_stale_answer_battery.dart';
 import '../../harness/timeouts.dart';
 
 void main() {
@@ -38,7 +53,7 @@ void main() {
   }, timeout: t(2));
 
   test('verify I/O mode is native', () async {
-    final doc = await pdf.open(src(minimalPdf));
+    final doc = await pdf.open(PdfInput(src(minimalPdf)));
     await doc.dispose();
     expect(pdf.ioMode, PdfIoMode.native);
   }, timeout: t(1));
@@ -50,12 +65,25 @@ void main() {
   registerDocTests(() => pdf);
   registerEditorTests(() => pdf);
   registerFormEncodingTests(() => pdf);
+  registerKeptEncryptionTests(() => pdf);
+  registerLzwTests(() => pdf);
+  registerMergeTests(() => pdf);
   registerFormTests(() => pdf);
   registerBuilderTests(() => pdf);
   registerStandaloneTests(() => pdf);
   registerSugarTests(() => pdf);
+  registerOneShotTests(() => pdf);
+  registerRenderTests(() => pdf);
+  registerDeterminismTests(() => pdf);
+  registerCancelTests(() => pdf);
+  registerCombinatorCancelTests(() => pdf);
+  registerAbortTests(() => pdf);
   registerLifecycleTests(() => Pdf());
+  registerSourceFailureTests(() => pdf);
   registerInstanceTests(() => Pdf());
+  registerRuntimeSafetyTests();
+  registerExecutorTests(() => Pdf());
+  registerLaneProtocolTests();
 
   // Stress tests
   registerDocStressTests(() => pdf);
@@ -67,4 +95,6 @@ void main() {
 
   // Native-only platform tests
   registerNativeFinalizerTests();
+  registerNativeStaleAnswerTests();
+  registerNativeLaneProtocolTests();
 }

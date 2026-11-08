@@ -1,32 +1,29 @@
-// WebLaneHost — worker fleet physics for the web lane runtime.
+// WebExecutorBooter — executor booting for the web runtime.
 //
-// Part of lane.dart (the lane itself lives there). This file owns
-// everything about WORKERS AS A RESOURCE, nothing about jobs:
+// Part of lease.dart (the lease adapter lives there). This file owns
+// everything about WORKERS AS A RESOURCE, nothing about jobs and nothing
+// about how many exist or who holds them (the pool does):
 //
-//   - the boot handshake (spawn → booted → init → ready): the worker
+//   - the boot handshake (start → booted → init → ready): the worker
 //     announces when its message handler is attached, because a
 //     message posted before that is silently dropped
-//   - the page-global worker budget (FIFO waiters past the cap — an
-//     op can wait, it can never fail for capacity)
-//   - the pristine pool: a lane killed before posting any work
-//     returns its worker here instead of terminating it, so rapid
-//     create+dispose churn recycles workers instead of booting
-//     thousands
-//   - WASM module compile-once caching + I/O mode detection
+//   - terminating a worker and reclaiming its OPFS directory
+//   - the wasm manifest, WASM module compile-once caching, and the I/O mode
+//     decision, which waits for what the app shipped
 
-part of 'lane.dart';
+part of 'lease.dart';
 
 // ── Host ────────────────────────────────────────────────────────────
 
-/// Spawns web lanes. Detects the I/O mode once and pre-compiles the
-/// WASM module once per page (workers receive the compiled module).
-class WebLaneHost implements LaneHost {
-  /// Creates a host. [laneWorkerUrl] locates lane_worker.js;
+/// Boots web executors. Decides the I/O mode once, from the manifest the app
+/// shipped, and pre-compiles the WASM module once per page (workers receive
+/// the compiled module).
+class WebExecutorBooter implements ExecutorBooter {
+  /// Creates a host. [laneWorkerUrl] locates executor_worker.js;
   /// [forceMode] overrides auto-detection (test runners use this).
-  WebLaneHost({String? laneWorkerUrl, PdfIoMode? forceMode})
-    : _laneWorkerUrl =
-          laneWorkerUrl ?? _cachedWorkerUrl ?? 'pdf_manipulator/lane_worker.js',
-      mode = _detectMode(forceMode ?? _cachedForceMode) {
+  WebExecutorBooter({String? laneWorkerUrl, PdfIoMode? forceMode})
+    : _laneWorkerUrl = _workerUrl(laneWorkerUrl),
+      _forceMode = forceMode ?? _cachedForceMode {
     // Page-level config inheritance: assets live in ONE place per
     // page, so explicitly-configured URLs/mode become the default
     // for later bare Pdf() instances (test generators, secondary
@@ -36,20 +33,20 @@ class WebLaneHost implements LaneHost {
     // Claim this page-session's liveness lock and reclaim dead
     // sessions' OPFS files (once per page).
     _startSessionOnce();
-    // Start warming one pristine worker — the first lane of the
-    // first instance adopts an already-booted worker.
-    _prewarm();
   }
 
   static String? _cachedWorkerUrl;
   static PdfIoMode? _cachedForceMode;
+
+  static String _workerUrl(String? configured) =>
+      configured ?? _cachedWorkerUrl ?? 'pdf_manipulator/executor_worker.js';
 
   // ── OPFS namespace + liveness-keyed reclamation ──
   //
   // Pre-copied source files live under ONE package-owned directory,
   // namespaced per page session, then per worker:
   //
-  //     pdf_manipulator_lanes/{sessionId}/{workerId}/pdf_lane_…
+  //     pdf_manipulator_executors/{sessionId}/{workerId}/pdf_executor_…
   //
   // The cleanup rule: NEVER race the living, ONLY sweep the dead.
   //
@@ -59,7 +56,7 @@ class WebLaneHost implements LaneHost {
   //            browser releases it on agent death (a spec guarantee
   //            — the web's analogue of the native lane's every-job-
   //            posts-exactly-once contract). An acquirable lock IS
-  //            the death certificate; only then is the directory
+  //            proof the agent is dead; only then is the directory
   //            reclaimed.
   //
   // Two reclaim layers, same key: a retired worker's dir (its lock,
@@ -68,9 +65,18 @@ class WebLaneHost implements LaneHost {
   // FinalizationRegistry is best-effort by spec and never fires on
   // tab close.
 
+  /// The source bytes a lane may hold as copies in its worker. Internal:
+  /// tests lower it to send every source down the mode's own path.
+  static int transferBudget = kTransferBytes;
+
   /// The package-owned OPFS directory. Everything inside it is
   /// reconciled by this host; nothing outside is ever touched.
-  static const opfsRootDir = 'pdf_manipulator_lanes';
+  static const opfsRootDir = 'pdf_manipulator_executors';
+
+  /// The name 5.x apps gave [opfsRootDir]. A user's device can still hold a
+  /// directory of this name, which no executor of this version touches; the
+  /// start-up reclaim removes it once no live session holds a lock in it.
+  static const legacyOpfsRootDir = 'pdf_manipulator_lanes';
 
   /// This page session's namespace (random per page load).
   static final String opfsSessionId = _newSessionId();
@@ -80,7 +86,10 @@ class WebLaneHost implements LaneHost {
     return List.generate(16, (_) => r.nextInt(16).toRadixString(16)).join();
   }
 
-  static String _sessionLockName(String sessionId) => '$opfsRootDir/$sessionId';
+  static String _sessionLockName(
+    String sessionId, [
+    String root = opfsRootDir,
+  ]) => '$root/$sessionId';
 
   static String _workerLockName(String workerId) =>
       '$opfsRootDir/$opfsSessionId/$workerId';
@@ -126,12 +135,23 @@ class WebLaneHost implements LaneHost {
   /// Deletes every session directory whose liveness lock is free —
   /// its page is gone, so its files are garbage. Never touches a
   /// directory whose lock is held (including the current session's).
-  /// Safe to call any time; visible for tests.
+  /// The same sweep runs over [legacyOpfsRootDir], and the old root itself
+  /// goes once nothing is left in it. Safe to call any time; visible for
+  /// tests.
   static Future<void> reclaimDeadSessions() async {
+    await _reclaimDeadSessionsIn(opfsRootDir);
+    await _reclaimDeadSessionsIn(legacyOpfsRootDir, removeRoot: true);
+  }
+
+  static Future<void> _reclaimDeadSessionsIn(
+    String rootDir, {
+    bool removeRoot = false,
+  }) async {
+    final web.FileSystemDirectoryHandle top;
     final web.FileSystemDirectoryHandle ours;
     try {
-      final root = await web.window.navigator.storage.getDirectory().toDart;
-      ours = await root.getDirectoryHandle(opfsRootDir).toDart;
+      top = await web.window.navigator.storage.getDirectory().toDart;
+      ours = await top.getDirectoryHandle(rootDir).toDart;
     } catch (_) {
       return; // no directory yet — nothing to reclaim
     }
@@ -150,7 +170,7 @@ class WebLaneHost implements LaneHost {
       if (session == opfsSessionId) continue;
       await web.window.navigator.locks
           .request(
-            _sessionLockName(session),
+            _sessionLockName(session, rootDir),
             web.LockOptions(ifAvailable: true),
             ((web.Lock? lock) {
               if (lock == null) return null; // owner alive — skip
@@ -167,30 +187,28 @@ class WebLaneHost implements LaneHost {
           .toDart
           .catchError((Object _) => null);
     }
+
+    if (removeRoot) {
+      try {
+        // Not recursive: a directory a live session still holds keeps its root.
+        await top.removeEntry(rootDir).toDart;
+      } catch (_) {
+        // A live session is inside, or the browser refused — next start-up.
+      }
+    }
   }
 
-  /// Terminates [worker] and returns its budget slot only once the
-  /// browser confirms the agent is dead. `terminate()` is a request:
-  /// the worker's WASM memory — and the address-space reservation the
-  /// browser holds for it — is released later, asynchronously. A slot
-  /// freed at the call let rapid create+dispose churn boot a new
-  /// worker into that window, and its instantiate failed with "Cannot
-  /// allocate Wasm memory" while dozens of dead workers were still
-  /// being reaped. The budget counts what the browser holds, not what
-  /// we asked for — the web twin of the native lane table, where a
-  /// dying thread's last act is handing its slot to the next waiter.
+  /// Reclaims a terminated worker's OPFS directory once the browser
+  /// confirms the agent is dead. `terminate()` is a request: the worker's
+  /// WASM memory — and the handles it held on its files — are released
+  /// later, asynchronously, so the directory cannot be deleted at the call.
   ///
-  /// The worker's liveness lock is the death certificate (the same
-  /// signal OPFS reclaim keys on); a used OPFS worker's directory is
+  /// The worker's liveness lock is the proof of death (the same signal
+  /// OPFS session reclaim keys on); a used OPFS worker's directory is
   /// deleted under the same grant. Where Web Locks are unavailable
-  /// (non-secure context) no death signal exists, so the slot frees
-  /// at once and the next session sweep remains the OPFS backstop.
-  void _terminateAndReleaseSlot(LaneWorker worker) {
-    worker.js.terminate();
-    unawaited(_releaseSlotWhenDead(worker));
-  }
-
-  static Future<void> _releaseSlotWhenDead(LaneWorker worker) async {
+  /// (non-secure context) no death signal exists, and the next session
+  /// sweep remains the OPFS backstop.
+  static Future<void> _reapDeadWorker(WebExecutor worker) async {
     try {
       await web.window.navigator.locks
           .request(
@@ -205,12 +223,36 @@ class WebLaneHost implements LaneHost {
           )
           .toDart;
     } catch (_) {
-      // No death signal available — fall through to the release.
-    } finally {
-      _liveBudget--;
-      _wakeWaiter();
+      // No death signal available — the session sweep reclaims it.
     }
   }
+
+  static final List<String> _abandonedDirs = [];
+  static final Map<String, List<String>> _setAsideFiles = {};
+  static int _retriedCreates = 0;
+
+  /// Pre-copy files that live workers set aside because the browser never
+  /// answered the creation of their handle, and have not removed yet, as the
+  /// last reset of each worker reported them (`worker directory/file`). A
+  /// file leaves with its pending call. Tests assert it is empty; nothing
+  /// decides on it. Workers a test marked [WebExecutor.provoked] are not in
+  /// it.
+  static List<String> get abandonedFiles => List.unmodifiable([
+    for (final MapEntry(:key, :value) in _setAsideFiles.entries)
+      for (final name in value) '$key/$name',
+  ]);
+
+  /// Pre-copy writes since the process started that created their handle a
+  /// second time because the first call passed [kCreateHandleWait]
+  /// unanswered. Tests assert it is zero; nothing decides on it. Workers a
+  /// test marked [WebExecutor.provoked] are not counted.
+  static int get retriedCreates => _retriedCreates;
+
+  /// Directories of dead workers that [_deleteDeadWorkerDir] gave up on,
+  /// by name: each one stays on disk until the next session's sweep. Tests
+  /// assert it is empty; nothing decides on it.
+  static List<String> get abandonedWorkerDirs =>
+      List.unmodifiable(_abandonedDirs);
 
   /// Deletes a PROVABLY-DEAD worker's directory. The only convergent
   /// loop in the runtime, and the only one that is sound: the owner
@@ -238,148 +280,105 @@ class WebLaneHost implements LaneHost {
       await Future<void>.delayed(delay);
       delay *= 2;
     }
+    _abandonedDirs.add(workerId);
   }
 
   final String _laneWorkerUrl;
+  final PdfIoMode? _forceMode;
+  Future<PdfIoMode>? _resolved;
 
-  /// The detected (or forced) I/O mode — the Router reports this as
-  /// the instance's [PdfIoMode].
+  /// Decides the I/O mode: forced, it must be one the browser can run and the
+  /// app shipped, or [PdfUnsupported]. Auto-detected, best first: Atomics,
+  /// JSPI, OPFS when the origin private file system opens, Asyncify when
+  /// the manifest lists its module. The manifest is fetched once per page; a
+  /// missing one is [PdfUnsupported] too.
   @override
-  final PdfIoMode mode;
-
-  @override
-  int get defaultLaneCount =>
-      suggestedLaneCount(web.window.navigator.hardwareConcurrency);
-
-  static JSObject? _cachedModule;
-  static Future<void>? _compileInFlight;
-
-  // ── Page-global worker budget + pristine pool ──
-  //
-  // Mirrors the native global lane budget: worker boots are capped
-  // page-wide; takers past the cap queue FIFO and are woken as
-  // workers free — an op can wait, it can never fail for capacity.
-  //
-  // The pool holds PRISTINE workers (booted + inited, never given
-  // work). A lane killed before posting any work returns its worker
-  // here instead of terminating it, so rapid create+dispose churn
-  // recycles one worker instead of booting thousands — without this,
-  // a 5000x instance churn floods the page with concurrent worker
-  // boots and stalls every later boot.
-
-  /// Page-wide cap on live workers (adopted + pooled + booting).
-  /// Mirrors the native global lane budget's headroom: instances the
-  /// app never disposes hold their worker, so the cap must dwarf any
-  /// sane leak count or idle instances starve fresh ones. Fixed, not
-  /// device-derived: behavior must not vary by machine.
-  static const _maxWorkers = 64;
-
-  /// Pristine pool ceiling per key — beyond this a returned worker is
-  /// terminated so pooled idle workers can't starve the budget.
-  static const _maxPooled = 4;
-
-  static int _liveBudget = 0;
-  static final Map<String, List<LaneWorker>> _pool = {};
-  static final Set<String> _warming = {};
-  static final List<Completer<void>> _waiters = [];
-
-  String get _spareKey => '$_laneWorkerUrl#${mode.name}';
-
-  /// Adopt a pooled pristine worker, boot one under the budget, or
-  /// queue until a slot frees. Never fails for capacity.
-  ///
-  /// [isKilled] is the requesting lane's kill flag: a lane that dies
-  /// while queued must take nothing — and must pass its wake signal
-  /// on, or one dead waiter strands every live waiter behind it.
-  Future<LaneWorker?> takeWorker(bool Function() isKilled) async {
-    while (true) {
-      if (isKilled()) return null;
-      final pool = _pool[_spareKey];
-      if (pool != null && pool.isNotEmpty) return pool.removeLast();
-      if (_liveBudget < _maxWorkers) {
-        _liveBudget++;
-        // A failed boot returns its own slot (see _bootWorker).
-        return await _bootWorker();
-      }
-      final waiter = Completer<void>();
-      _waiters.add(waiter);
-      await waiter.future;
-      if (isKilled()) {
-        _wakeWaiter();
-        return null;
-      }
+  Future<PdfIoMode> resolveMode() async {
+    final deciding = _resolved ??= _decideMode();
+    try {
+      return await deciding;
+    } catch (_) {
+      if (identical(_resolved, deciding)) _resolved = null;
+      rethrow;
     }
   }
 
-  /// A killed lane's worker that never received work: still pristine
-  /// (init done, no engine state, no files — work is a precondition
-  /// for writing), safe for any future lane. Pool-overflow terminate
-  /// therefore needs no directory reclaim.
-  void returnPristine(LaneWorker worker) {
-    final pool = _pool[_spareKey] ??= [];
-    if (pool.length >= _maxPooled) {
-      _terminateAndReleaseSlot(worker);
-    } else {
-      pool.add(worker);
-      _wakeWaiter();
+  Future<PdfIoMode> _decideMode() async {
+    final manifest = await _manifestOf(_baseUrl);
+    final force = _forceMode;
+    if (force != null) {
+      await _requireRunnable(force, manifest);
+      return force;
     }
-  }
-
-  /// Terminates a USED worker; its slot and OPFS directory return
-  /// once the liveness lock confirms the agent is gone.
-  void retire(LaneWorker worker) => _terminateAndReleaseSlot(worker);
-
-  static void _wakeWaiter() {
-    if (_waiters.isNotEmpty) _waiters.removeAt(0).complete();
-  }
-
-  /// Boot one pristine worker into the pool if none exists or is on
-  /// the way. Constructor-time only — keeps the first op on a fresh
-  /// page off the cold-boot path.
-  void _prewarm() {
-    if ((_pool[_spareKey]?.isNotEmpty ?? false) ||
-        _warming.contains(_spareKey) ||
-        _liveBudget >= _maxWorkers) {
-      return;
+    if (_hasSharedArrayBuffer) return PdfIoMode.atomics;
+    if (_hasJspi) return PdfIoMode.jspi;
+    if (await _opfsRuns()) return PdfIoMode.opfs;
+    if (manifest.modules.containsKey(asyncifyWasmModule)) {
+      return PdfIoMode.asyncify;
     }
-    _liveBudget++;
-    _warming.add(_spareKey);
-    unawaited(
-      _bootWorker()
-          .then((worker) {
-            _warming.remove(_spareKey);
-            (_pool[_spareKey] ??= []).add(worker);
-            _wakeWaiter();
-          })
-          .catchError((Object _) {
-            // A failed prewarm is silent by design — the first real take
-            // boots inline and surfaces the error on the op that needs it.
-            // The slot came back through _bootWorker's own failure path.
-            _warming.remove(_spareKey);
-          }),
+    throw PdfUnsupported(
+      'no web I/O mode can run here: opfs needs the origin private file '
+      'system, which this browser does not open, and asyncify needs the '
+      'Asyncify wasm, which the app did not ship (set asyncify: true under '
+      'hooks: user_defines: pdf_manipulator: and run $_setupCommand).',
     );
   }
 
-  /// Spawn a worker and drive its boot handshake to `ready`. The
+  static const _setupCommand = 'flutter pub run pdf_manipulator:setup';
+
+  @override
+  int get defaultConcurrency =>
+      suggestedLaneCount(web.window.navigator.hardwareConcurrency);
+
+  /// The wasm module a mode runs: the Asyncify engine only in Asyncify mode,
+  /// so a browser fetches the parts of the one module it runs.
+  static String wasmModuleOf(PdfIoMode mode) =>
+      mode == PdfIoMode.asyncify ? asyncifyWasmModule : normalWasmModule;
+
+  /// The module of the instrumented engine in the manifest, present only in
+  /// an app that set `asyncify: true`.
+  static const asyncifyWasmModule = 'pdf_oxide_asyncify_bg';
+
+  /// The module every other mode runs.
+  static const normalWasmModule = 'pdf_oxide_bg';
+
+  static final Map<String, JSObject> _cachedModules = {};
+
+  /// Per location and module: the compile that location got, null when it
+  /// failed.
+  static final Map<String, Future<JSObject?>> _compilesInFlight = {};
+
+  @override
+  String get poolKey => '$_laneWorkerUrl#${_forceMode?.name ?? 'auto'}';
+
+  @override
+  Future<Executor> boot() => _bootWorker();
+
+  /// Start a worker and drive its boot handshake to `ready`. The
   /// temporary listener is detached before the worker is handed out;
   /// an idle ready worker sends nothing, so no message can be lost.
-  Future<LaneWorker> _bootWorker() async {
+  Future<WebExecutor> _bootWorker() async {
+    final clock = Stopwatch()..start();
+    final marks = <String, int>{};
+    void mark(String phase) => marks[phase] = clock.elapsedMilliseconds;
+    final mode = await resolveMode();
+    final entry = (await _manifestOf(_baseUrl)).modules[wasmModuleOf(mode)]!;
+    mark('manifest');
     // Every worker holds a liveness lock for its lifetime, in every
-    // mode: it is the budget's death signal. Only OPFS mode also gives
-    // the worker a directory under the same name.
+    // mode: it is the death signal that reclaims its files. Only OPFS mode
+    // also gives the worker a directory under the same name.
     final workerId = _newSessionId();
     final lockName = _workerLockName(workerId);
     final opfsDir = mode == PdfIoMode.opfs ? workerId : null;
-    final web.Worker worker;
-    try {
-      worker = _spawnWorker();
-    } catch (_) {
-      _liveBudget--;
-      _wakeWaiter();
-      rethrow;
+    final (worker, bootstrapUrl) = _spawnWorker();
+    // The bootstrap blob is read once, when the worker starts: it goes once
+    // the worker has announced itself, or failed to.
+    void revokeBootstrap() {
+      if (bootstrapUrl != null) web.URL.revokeObjectURL(bootstrapUrl);
     }
-    // Everything after the spawn runs inside the slot-owning try: a throw
-    // anywhere here must still terminate the worker and return the slot.
+
+    // Everything after the start runs inside the try: a throw anywhere here
+    // must still terminate the worker.
     StreamSubscription<web.MessageEvent>? sub;
     StreamSubscription<web.Event>? errSub;
     try {
@@ -388,13 +387,17 @@ class WebLaneHost implements LaneHost {
       // On boot failure both completers carry the error but only `booted`
       // is awaited (its throw aborts before the `ready` await exists) —
       // mark `ready` observed so the abandoned error can't surface as an
-      // unhandled async error in the caller's zone.
+      // unhandled async error in the caller's zone. `booted` is awaited only
+      // after the module compile, which a slow network outlasts: a worker
+      // that fails meanwhile must not surface its error unobserved either.
+      booted.future.ignore();
       ready.future.ignore();
       sub = EventStreamProviders.messageEvent.forTarget(worker).listen((event) {
         final obj = event.data as JSObject?;
         if (obj == null) return;
         final type = (obj[LaneMsgFields.type] as JSString?)?.toDart;
         if (type == LaneMsg.booted && !booted.isCompleted) {
+          revokeBootstrap();
           booted.complete();
         } else if (type == LaneMsg.ready && !ready.isCompleted) {
           ready.complete();
@@ -417,20 +420,23 @@ class WebLaneHost implements LaneHost {
         }
       });
 
-      final wasmModule = await _wasmModule();
+      final wasmModule = await _wasmModule(wasmModuleOf(mode), entry);
+      mark('module');
       // The worker announces `booted` once its message handler is
       // attached; posting before that drops the message silently
       // (the blob bootstrap's dynamic import is not part of module
       // evaluation, so the port enables before the handler exists).
       // No deadline: every boot-failure class completes this future
       // with a typed error (bootfailed post / worker error event), so
-      // a wall clock here would only kill healthy boots on slow
+      // a wall clock here would only fail healthy boots on slow
       // networks. Timeouts are never load-bearing.
       await booted.future;
+      mark('script');
       final init = JSObject()
         ..[LaneMsgFields.type] = LaneMsg.init.toJS
         ..['ioMode'] = mode.name.toJS
         ..['baseUrl'] = _baseUrl.toJS
+        ..['wasmEntry'] = entry.json.jsify()
         ..['protocol'] = () {
           final p = JSObject();
           laneProtocolCodes().forEach((k, v) => p[k] = v.toJS);
@@ -451,13 +457,14 @@ class WebLaneHost implements LaneHost {
       // arrive as worker error messages; a 21MB wasm on a slow network
       // takes as long as it takes and is not a failure.
       await ready.future;
-      return LaneWorker(worker, opfsDir, lockName);
+      mark('ready');
+      _recordBoot(mode, marks);
+      return WebExecutor._(worker, opfsDir, lockName, mode)..attach();
     } catch (_) {
       // A worker that never readied wrote no files (writing requires
-      // work, work requires ready) — no directory to reclaim, but it
-      // may already hold its lock with a WASM instance behind it, so
-      // its slot returns the same way every other worker's does.
-      _terminateAndReleaseSlot(LaneWorker(worker, null, lockName));
+      // work, work requires ready) — no directory to reclaim.
+      revokeBootstrap();
+      worker.terminate();
       rethrow;
     } finally {
       unawaited(sub?.cancel() ?? Future<void>.value());
@@ -465,47 +472,200 @@ class WebLaneHost implements LaneHost {
     }
   }
 
-  @override
-  Lane spawn() => WebLane._(this);
+  static final List<String> _recentBoots = [];
 
-  static PdfIoMode _detectMode(PdfIoMode? force) {
-    if (force != null) return force;
-    final wasm = globalContext['WebAssembly'];
-    if (wasm != null &&
-        (wasm as JSObject).hasProperty('Suspending'.toJS).toDart) {
-      return PdfIoMode.jspi;
-    }
-    if (globalContext.hasProperty('SharedArrayBuffer'.toJS).toDart) {
-      return PdfIoMode.atomics;
-    }
-    return PdfIoMode.opfs;
+  /// The last boots of this page, oldest first: each phase's end in ms since
+  /// the boot began (`manifest`: mode and manifest, `module`: the compiled
+  /// module, compiled or awaited, `script`: the worker's script announced,
+  /// `ready`: the engine initialised), and each compile of a module with its
+  /// time or its failure. Internal: a test prints them when a
+  /// boot was slow, so the phase that took the time is named.
+  static List<String> get recentBoots => List.unmodifiable(_recentBoots);
+
+  static void _recordBoot(PdfIoMode mode, Map<String, int> marks) => _note(
+    '${mode.name}: ${[for (final m in marks.entries) '${m.key} ${m.value}'].join(', ')} ms',
+  );
+
+  static void _note(String line) {
+    _recentBoots.add(line);
+    if (_recentBoots.length > 40) _recentBoots.removeAt(0);
   }
 
-  String get _baseUrl {
-    final url = web.URL(_laneWorkerUrl, web.window.location.href);
-    final s = url.href;
+  static bool get _hasJspi {
+    final wasm = globalContext['WebAssembly'];
+    return wasm != null &&
+        (wasm as JSObject).hasProperty('Suspending'.toJS).toDart;
+  }
+
+  static bool get _hasSharedArrayBuffer =>
+      globalContext.hasProperty('SharedArrayBuffer'.toJS).toDart;
+
+  /// Whether the origin private file system opens: `getDirectory()` resolves.
+  /// Some private-browsing modes reject it, so the property merely existing
+  /// proves nothing.
+  static Future<bool> _opfsRuns() async {
+    try {
+      await web.window.navigator.storage.getDirectory().toDart;
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  static Future<void> _requireRunnable(
+    PdfIoMode mode,
+    _WasmManifest manifest,
+  ) async {
+    final String? lacks = switch (mode) {
+      PdfIoMode.native => 'the native mode runs only outside a browser',
+      PdfIoMode.jspi =>
+        _hasJspi ? null : 'this browser has no JSPI (WebAssembly.Suspending)',
+      PdfIoMode.atomics =>
+        _hasSharedArrayBuffer
+            ? null
+            : 'this page has no SharedArrayBuffer (it needs the COOP and '
+                  'COEP headers)',
+      PdfIoMode.asyncify =>
+        manifest.modules.containsKey(asyncifyWasmModule)
+            ? null
+            : 'the app did not ship the Asyncify wasm: '
+                  '$_manifestFile has no $asyncifyWasmModule entry (set '
+                  'asyncify: true under hooks: user_defines: '
+                  'pdf_manipulator: and run $_setupCommand)',
+      PdfIoMode.opfs =>
+        await _opfsRuns()
+            ? null
+            : 'this browser does not open its origin private file system',
+    };
+    if (lacks != null) {
+      throw PdfUnsupported('webIoMode ${mode.name} cannot run here: $lacks.');
+    }
+  }
+
+  static const _manifestFile = 'pdf_oxide_manifest.json';
+
+  static final Map<String, Future<_WasmManifest>> _manifests = {};
+
+  /// The manifest beside the worker script, fetched once per page and
+  /// location. The manifest is the only way the runtime learns which modules
+  /// exist: no probe, no guessing, so a host that answers any path with an
+  /// HTML page cannot pass for one that shipped a module.
+  static Future<_WasmManifest> _manifestOf(String baseUrl) async {
+    final loading = _manifests[baseUrl] ?? _fetchManifest(baseUrl);
+    _manifests[baseUrl] = loading;
+    try {
+      return await loading;
+    } catch (_) {
+      _manifests.removeWhere((_, kept) => identical(kept, loading));
+      rethrow;
+    }
+  }
+
+  static Future<_WasmManifest> _fetchManifest(String baseUrl) async {
+    final url = '$baseUrl$_manifestFile';
+    String why;
+    try {
+      final response = await _fetch(url.toJS).toDart;
+      if (response.getProperty<JSBoolean>('ok'.toJS).toDart) {
+        final text = await response
+            .callMethod<JSPromise<JSString>>('text'.toJS)
+            .toDart;
+        try {
+          return _WasmManifest.parse(text.toDart);
+        } on PdfUnsupported catch (e) {
+          why = 'it is not a manifest (${e.message})';
+        }
+      } else {
+        why = 'HTTP ${response.getProperty<JSNumber>('status'.toJS).toDartInt}';
+      }
+    } catch (e) {
+      why = 'it could not be fetched ($e)';
+    }
+    throw PdfUnsupported(
+      'the web assets are incomplete: $url — $why. Run $_setupCommand to '
+      'provide the wasm parts, $_manifestFile and executor_worker.js '
+      'beside each other.',
+    );
+  }
+
+  static String _baseUrlOf(String workerUrl) {
+    final s = web.URL(workerUrl, web.window.location.href).href;
     return s.substring(0, s.lastIndexOf('/') + 1);
   }
 
-  /// Compile the WASM once per page; failures fall back to letting
-  /// each worker stream-compile its own copy.
-  Future<JSObject?> _wasmModule() async {
-    if (_cachedModule != null) return _cachedModule;
-    _compileInFlight ??= () async {
+  String get _baseUrl => _baseUrlOf(_laneWorkerUrl);
+
+  /// Compiles a module once per page, keyed by what it is: the SHA-256 of
+  /// its parts, which the manifest lists. A page that reaches the same engine
+  /// at two locations compiles it once.
+  ///
+  /// A part at fault (an HTTP error, a wrong size or SHA-256) fails the boot
+  /// with the [PdfIoFailed] that names it: the worker would fetch the same
+  /// part and fail the same way, after a second download and compile. The
+  /// failure is not kept, so a later boot fetches the parts again. Any other
+  /// failure (the page cannot compile wasm on its main thread, a fetch the
+  /// browser refused) is kept per location, and each worker there compiles
+  /// its own copy from the manifest entry.
+  Future<JSObject?> _wasmModule(String module, _WasmModuleEntry entry) async {
+    final key = '$module:${entry.parts.map((p) => p.sha256).join(',')}';
+    final compiled = _cachedModules[key];
+    if (compiled != null) return compiled;
+    final here = '$_baseUrl $key';
+    final compiling = _compilesInFlight.putIfAbsent(here, () async {
+      final clock = Stopwatch()..start();
       try {
-        final response = await _fetch(
-          '${_baseUrl}pdf_oxide_bg.wasm'.toJS,
-        ).toDart;
-        _cachedModule = await _wasmCompileStreaming(response).toDart;
-      } catch (_) {
-        _cachedModule = null;
+        final compiled = _cachedModules[key] = await _compileParts(
+          _baseUrl,
+          entry,
+        );
+        _note('compile $module: ${clock.elapsedMilliseconds} ms');
+        return compiled;
+      } on PdfIoFailed catch (error) {
+        _note(
+          'compile $module failed after ${clock.elapsedMilliseconds} ms: '
+          '$error',
+        );
+        rethrow;
+      } catch (error) {
+        _note(
+          'compile $module failed after ${clock.elapsedMilliseconds} ms: '
+          '$error (each worker compiles its own)',
+        );
+        return null;
       }
-    }();
-    await _compileInFlight;
-    return _cachedModule;
+    });
+    try {
+      return await compiling;
+    } on PdfIoFailed {
+      if (identical(_compilesInFlight[here], compiling)) {
+        _compilesInFlight.remove(here)?.ignore();
+      }
+      rethrow;
+    }
   }
 
-  web.Worker _spawnWorker() {
+  /// Sets every compiled module aside, so the next boot fetches and compiles
+  /// its parts again, and returns them for [restoreCompiledModules].
+  /// Internal: for tests that watch that fetch, without costing the rest of
+  /// the page a compile.
+  static Map<String, JSObject> setCompiledModulesAside() {
+    final aside = Map.of(_cachedModules);
+    _cachedModules.clear();
+    _compilesInFlight.clear();
+    return aside;
+  }
+
+  /// Puts back what [setCompiledModulesAside] returned.
+  static void restoreCompiledModules(Map<String, JSObject> aside) {
+    _cachedModules
+      ..clear()
+      ..addAll(aside);
+    _compilesInFlight.clear();
+  }
+
+  /// The worker, and the blob URL its cross-origin bootstrap runs from (null
+  /// for a same-origin script): the caller revokes it.
+  (web.Worker, String?) _spawnWorker() {
     final url = _laneWorkerUrl;
     if (url.startsWith('http://') || url.startsWith('https://')) {
       // Cross-origin: bootstrap through a same-origin blob. The import
@@ -520,24 +680,23 @@ class WebLaneHost implements LaneHost {
         [script.toJS].toJS,
         web.BlobPropertyBag(type: 'application/javascript'),
       );
-      return web.Worker(
-        web.URL.createObjectURL(blob).toJS,
-        web.WorkerOptions(type: 'module'),
+      final bootstrapUrl = web.URL.createObjectURL(blob);
+      return (
+        web.Worker(bootstrapUrl.toJS, web.WorkerOptions(type: 'module')),
+        bootstrapUrl,
       );
     }
-    return web.Worker(url.toJS, web.WorkerOptions(type: 'module'));
+    return (web.Worker(url.toJS, web.WorkerOptions(type: 'module')), null);
   }
 }
 
-// ── A booted worker plus its OPFS identity ─────────────────────────
+// ── A booted worker: the web executor ─────────────────────────────
 
-/// A ready worker as handed out by the host. [opfsDir] is the
-/// worker's own directory name under the session (OPFS mode only) —
-/// the key the host reclaims by after the worker is retired.
-class LaneWorker {
-  /// Wraps a [js] worker with its OPFS directory name (null outside
-  /// OPFS mode) and the name of the liveness lock it holds.
-  LaneWorker(this.js, this.opfsDir, this.lockName);
+/// A ready worker with its OPFS identity, as the pool leases it. [opfsDir]
+/// is the worker's own directory name under the session (OPFS mode only) —
+/// the key the host reclaims by after the worker is terminated.
+class WebExecutor implements Executor {
+  WebExecutor._(this.js, this.opfsDir, this.lockName, this._mode);
 
   /// The underlying Web Worker.
   final web.Worker js;
@@ -549,4 +708,84 @@ class LaneWorker {
   /// The Web Lock the worker holds from before `ready` until the
   /// browser tears it down — the host's death signal.
   final String lockName;
+
+  final PdfIoMode _mode;
+  WebLease? _lane;
+  StreamSubscription<web.MessageEvent>? _sub;
+  int _lastLease = 0;
+  int _heapBytes = 0;
+  int _memBytes = 0;
+  int _heldBytes = 0;
+  bool _dead = false;
+  bool _terminated = false;
+
+  /// Set by a test that makes the browser's handle creation hang on purpose:
+  /// this worker's set-aside files and retried creates are kept here and
+  /// stay out of [WebExecutorBooter.abandonedFiles] and
+  /// [WebExecutorBooter.retriedCreates], which judge the runs that did not.
+  bool provoked = false;
+
+  /// The files this worker reported set aside at its last reset.
+  List<String> get setAsideFiles => List.unmodifiable(_setAside);
+  List<String> _setAside = const [];
+
+  /// How many creates of this worker were retried.
+  int get retriedCreates => _retriedCreates;
+  int _retriedCreates = 0;
+
+  void _retriedCreate() {
+    _retriedCreates++;
+    if (!provoked) WebExecutorBooter._retriedCreates++;
+  }
+
+  void _setAsideNow(List<String> names) {
+    _setAside = names;
+    if (_terminated || provoked) return;
+    if (names.isEmpty) {
+      WebExecutorBooter._setAsideFiles.remove(opfsDir ?? lockName);
+    } else {
+      WebExecutorBooter._setAsideFiles[opfsDir ?? lockName] = names;
+    }
+  }
+
+  @override
+  int get heapBytes => _heapBytes;
+
+  /// The worker's WASM linear memory as of its last answer; it never falls.
+  /// A diagnostic: no decision reads it.
+  int get memBytes => _memBytes;
+
+  /// The bytes of source copies the worker held as of its last `result` or
+  /// `resetDone`. A diagnostic: no decision reads it.
+  int get heldBytes => _heldBytes;
+
+  /// Routes the worker's messages to the lane that holds the lease now.
+  void attach() {
+    _sub = EventStreamProviders.messageEvent.forTarget(js).listen((event) {
+      _lane?.deliver(event.data as JSObject?);
+    });
+  }
+
+  /// Starts a new lease and returns its lane. One counter per worker: ids
+  /// count up from 1 and are never reused, so a smaller id always names a
+  /// lease that has ended.
+  @override
+  Lease beginLane() {
+    if (_dead || _terminated) throw const LeaseProtocolError(engineDeadMessage);
+    return _lane = WebLease._(this, ++_lastLease);
+  }
+
+  @override
+  void terminate() {
+    if (_terminated) return;
+    _terminated = true;
+    WebExecutorBooter._setAsideFiles.remove(opfsDir ?? lockName);
+    // Browser terminate: frees the worker, its WASM heap, and every open
+    // SyncAccessHandle in one stroke. Nothing can call back after.
+    unawaited(_sub?.cancel());
+    _sub = null;
+    js.terminate();
+    _lane?._abandon();
+    unawaited(WebExecutorBooter._reapDeadWorker(this));
+  }
 }

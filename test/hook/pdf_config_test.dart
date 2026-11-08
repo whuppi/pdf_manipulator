@@ -106,6 +106,44 @@ void main() {
       });
     });
 
+    group('asyncify', () {
+      test('absent → false; true and false parse', () {
+        expect(PdfManipulatorConfig.parse(const {}).asyncify, isFalse);
+        expect(
+          PdfManipulatorConfig.parse(const {'asyncify': true}).asyncify,
+          isTrue,
+        );
+        expect(
+          PdfManipulatorConfig.parse(const {'asyncify': false}).asyncify,
+          isFalse,
+        );
+      });
+
+      test('stacks with a trimmed keep', () {
+        final cfg = PdfManipulatorConfig.parse(const {
+          'keep': ['render'],
+          'asyncify': true,
+        });
+        expect(cfg.asyncify, isTrue);
+        expect(cfg.keep.mode, KeepMode.manual);
+      });
+
+      for (final bad in <Object>['yes', 'true', 1, <Object>[]]) {
+        test('$bad is refused', () {
+          expect(
+            () => PdfManipulatorConfig.parse({'asyncify': bad}),
+            throwsA(
+              isA<PdfConfigError>().having(
+                (e) => e.message,
+                'message',
+                contains('asyncify'),
+              ),
+            ),
+          );
+        });
+      }
+    });
+
     group('scan-dirs', () {
       test('absent → empty, and it parses with keep: auto', () {
         expect(PdfManipulatorConfig.parse(const {}).scanDirs, isEmpty);

@@ -1,0 +1,12 @@
+[package]
+name = "fuelprobe-host"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+wasmtime = { version = "50", default-features = false, features = ["cranelift", "runtime", "std"] }
+wasmtime-wasi = "50"
+rustc-demangle = "0.1"
+
+[workspace]

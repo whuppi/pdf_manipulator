@@ -1,15 +1,16 @@
 import 'package:meta/meta.dart';
+import 'package:pdf_manipulator/src/types/pdf_wire.dart';
 
 /// One file embedded in a document's `/Names /EmbeddedFiles` tree.
 ///
 /// Listing reads the file spec only; the bytes come from
-/// `PdfDoc.extractAttachment`.
+/// `PdfDocument.extractAttachment`.
 @immutable
-class PdfAttachment {
+final class PdfAttachment {
   /// Creates an attachment record from the engine's listing.
   const PdfAttachment({
     required this.name,
-    required this.size,
+    required this.sizeBytes,
     required this.description,
     required this.mimeType,
   });
@@ -19,30 +20,46 @@ class PdfAttachment {
 
   /// Byte size as the file spec declares it, or `null` when it declares
   /// none. A declared size is the producer's claim, not a measurement.
-  final int? size;
+  final int? sizeBytes;
 
   /// The file spec's description, or `null` when it has none.
   final String? description;
 
   /// MIME type of the embedded stream, or `null` when it declares none.
   final String? mimeType;
+
+  @override
+  bool operator ==(Object other) =>
+      other is PdfAttachment &&
+      other.name == name &&
+      other.sizeBytes == sizeBytes &&
+      other.description == description &&
+      other.mimeType == mimeType;
+
+  @override
+  int get hashCode => Object.hash(name, sizeBytes, description, mimeType);
 }
 
 /// How an embedded file relates to the document that carries it
 /// (ISO 32000-2 associated files).
-enum PdfAttachmentRelationship {
+enum PdfAttachmentRelationship implements PdfWire {
   /// The original source the document was made from.
-  source,
+  source('source'),
 
   /// Data the document's content references.
-  data,
+  data('data'),
 
   /// An alternative representation of the document.
-  alternative,
+  alternative('alternative'),
 
   /// Supplementary material.
-  supplement,
+  supplement('supplement'),
 
   /// No stated relationship.
-  unspecified,
+  unspecified('unspecified');
+
+  const PdfAttachmentRelationship(this.wire);
+
+  @override
+  final String wire;
 }

@@ -6,6 +6,21 @@
 import 'dart:convert';
 import 'dart:io';
 
+/// The largest file Cloudflare Pages and Workers static assets serve: 25 MiB.
+/// Every file the web assets and the release hold stays under it.
+const maxWebAssetBytes = 25 * 1024 * 1024;
+
+/// The size of every part but the last of a cut wasm module. Static hosts cap
+/// the file, not the module a browser compiles, so a module ships as parts
+/// the browser joins into one stream.
+const wasmPartBytes = 16 * 1024 * 1024;
+
+/// Gzip bytes of the whole normal wasm at most: raising it is a decision, not a fix.
+const normalWasmGzipBudget = 9306112; // 8.875 MiB
+
+/// Gzip bytes of the whole Asyncify wasm at most: raising it is a decision, not a fix.
+const asyncifyWasmGzipBudget = 11796480; // 11.25 MiB
+
 /// The parsed contents of the package's `build.json`.
 class BuildConstants {
   BuildConstants._({

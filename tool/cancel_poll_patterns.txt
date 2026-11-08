@@ -1,0 +1,31 @@
+# One regex per line, matched against a loop header (`for ... in ...`,
+# `while ...`; a `loop` is matched on its first statement). A `#` after two
+# spaces names what the line matches. tool/check_cancel_polls.sh reads this.
+
+# pages: the page list, a count of pages, an index range over them
+\bin\b.*\b(pages|page_refs|page_ids|page_indices|page_order|page_list|page_objs|page_count|num_pages|n_pages|total_pages|page_total)\b  # a walk over the pages of a document
+\bin\b.*\.\.\s*(self\.)?(page_count|num_pages|n_pages|total_pages|pages\.len|page_order\.len)\b  # an index range 0..page_count
+
+# cross-reference entries and object ids
+\bin\b.*\b(xref|xref_entries|object_ids|obj_ids|obj_nums|object_numbers|all_objects|object_refs|obj_refs)\b  # a walk over xref entries or object ids
+\bin\b.*\b(modified_objects|new_objects)\b  # a walk over every staged object of an editor
+\bin\b.*\.\.\s*(self\.)?(next_object_id|max_obj|max_object|object_count|obj_count|xref_len|size)\b  # an id range up to the object count
+
+# content-stream operators and tokens
+\bin\b.*\b(operators|ops|tokens|content_ops|stream_ops|operations)\b  # a walk over content operators or tokens
+\bwhile\b.*\b(operators|ops|tokens|lexer|parser)\b.*\.(next|read|peek)  # a pull loop over operators or tokens
+
+# annotations
+\bin\b.*\b(annots?|annotations?|annot_refs|widgets)\b  # a walk over annotations
+
+# structure elements
+\bin\b.*\b(struct_elems?|structure_elements?|struct_children|struct_refs|elems)\b  # a walk over structure elements
+
+# images and fonts
+\bin\b.*\b(images|image_refs|image_handles|xobjects|image_objects|image_ids)\b  # a walk over images
+\bin\b.*\b(fonts|font_refs|font_objects|font_ids)\b  # a walk over fonts
+\bin\b.*\b(glyph_ids|glyph_set|charstrings)\b  # a walk over the glyphs or charstrings of a font program
+
+# raster rows and bands
+\bin\b.*\b(bands|scanlines|row_range|band_rows)\b  # a walk over the bands or scanlines of a raster
+\bin\b.*\.\.\s*(self\.)?(height|rows|total_rows|img_h|image_height)\b  # a row range 0..height of a raster

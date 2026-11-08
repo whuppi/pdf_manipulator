@@ -48,7 +48,7 @@ class ResolveRequest {
   });
 
   /// GitHub Release asset name (e.g. `macos-arm64-libpdf_oxide.dylib`
-  /// or `wasm-pdf_oxide_bg.wasm`). Used as the hash lookup key.
+  /// or `wasm-pdf_oxide_bg.0.wasm`). Used as the hash lookup key.
   final String assetName;
 
   /// Full download URL for this asset on GitHub Releases.

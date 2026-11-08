@@ -1,0 +1,55 @@
+# Bench — the compression comparison against pdf_document, with a size gate.
+# Runs on a PR that touches tool/bench (Dependabot's pdf_document bump is one),
+# weekly, and on demand. A red run means pdf_document produced a smaller file
+# than ours at the same or better quality, or our output lost pages, text or (lossless) pixels: read the
+# release's changelog and diff, then port the idea or fix the regression.
+# Never loosen the gate (tool/bench/lib/gate.dart).
+name: Bench
+
+on:
+  pull_request:
+    branches: [dev]
+    paths: ['tool/bench/**']
+  schedule:
+    - cron: '0 10 * * 1'
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: bench-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  bench:
+    name: Compression bench
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    permissions:
+      contents: read   # checkout + build, read-only
+      packages: write  # oci-cache: the Flutter SDK lives on ghcr.io (read on PRs, write from dev)
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { submodules: recursive, persist-credentials: false }
+      # The corpus is downloaded on the first run and checked against the
+      # SHA-256 pins in corpus.toml, so its key is that file.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: tool/bench/.corpus
+          key: bench-corpus-${{ hashFiles('tool/bench/corpus.toml') }}
+      - uses: ./.github/actions/make-target
+        with:
+          make-target: bench-gate
+          # The bench links the host engine the consumer hook builds: the
+          # `native` family, the one `ci.yml`'s package tests share.
+          rust-cache-key: native
+          rust-cache-save: ${{ github.event_name == 'schedule' }}
+          cache-backend: ghcr
+          cache-save: ${{ github.event_name == 'schedule' }}
+      - name: Upload bench results
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: bench-results
+          path: tool/bench/out/
+          if-no-files-found: ignore

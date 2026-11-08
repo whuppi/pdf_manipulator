@@ -9,7 +9,7 @@
 # Usage:
 #   run_web_test.sh <mode> <flutter_cmd...>
 #
-#   mode         jspi | atomics | opfs
+#   mode         jspi | atomics | opfs | asyncify
 #   flutter_cmd  e.g. "fvm flutter"
 #
 # Called by:  Makefile targets (test-example-web-*)
