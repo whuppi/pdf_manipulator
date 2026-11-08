@@ -477,14 +477,17 @@ class WebExecutorBooter implements ExecutorBooter {
   /// The last boots of this page, oldest first: each phase's end in ms since
   /// the boot began (`manifest`: mode and manifest, `module`: the compiled
   /// module, compiled or awaited, `script`: the worker's script announced,
-  /// `ready`: the engine initialised). Internal: a test prints them when a
+  /// `ready`: the engine initialised), and each compile of a module with its
+  /// time or its failure. Internal: a test prints them when a
   /// boot was slow, so the phase that took the time is named.
   static List<String> get recentBoots => List.unmodifiable(_recentBoots);
 
-  static void _recordBoot(PdfIoMode mode, Map<String, int> marks) {
-    _recentBoots.add(
-      '${mode.name}: ${[for (final m in marks.entries) '${m.key} ${m.value}'].join(', ')} ms',
-    );
+  static void _recordBoot(PdfIoMode mode, Map<String, int> marks) => _note(
+    '${mode.name}: ${[for (final m in marks.entries) '${m.key} ${m.value}'].join(', ')} ms',
+  );
+
+  static void _note(String line) {
+    _recentBoots.add(line);
     if (_recentBoots.length > 40) _recentBoots.removeAt(0);
   }
 
@@ -594,10 +597,15 @@ class WebExecutorBooter implements ExecutorBooter {
 
   /// Compiles a module once per page, keyed by what it is: the SHA-256 of
   /// its parts, which the manifest lists. A page that reaches the same engine
-  /// at two locations compiles it once. A compile that failed is kept per
-  /// location: the parts at fault are fetched once per page, and each worker
-  /// compiles its own copy from the same manifest entry, which fails with the
-  /// same message when the part is at fault.
+  /// at two locations compiles it once.
+  ///
+  /// A part at fault (an HTTP error, a wrong size or SHA-256) fails the boot
+  /// with the [PdfIoFailed] that names it: the worker would fetch the same
+  /// part and fail the same way, after a second download and compile. The
+  /// failure is not kept, so a later boot fetches the parts again. Any other
+  /// failure (the page cannot compile wasm on its main thread, a fetch the
+  /// browser refused) is kept per location, and each worker there compiles
+  /// its own copy from the manifest entry.
   Future<JSObject?> _wasmModule(String module, _WasmModuleEntry entry) async {
     final key = '$module:${entry.parts.map((p) => p.sha256).join(',')}';
     final compiled = _cachedModules[key];
@@ -610,17 +618,30 @@ class WebExecutorBooter implements ExecutorBooter {
           _baseUrl,
           entry,
         );
-        _recentBoots.add('compile $module: ${clock.elapsedMilliseconds} ms');
+        _note('compile $module: ${clock.elapsedMilliseconds} ms');
         return compiled;
+      } on PdfIoFailed catch (error) {
+        _note(
+          'compile $module failed after ${clock.elapsedMilliseconds} ms: '
+          '$error',
+        );
+        rethrow;
       } catch (error) {
-        _recentBoots.add(
+        _note(
           'compile $module failed after ${clock.elapsedMilliseconds} ms: '
           '$error (each worker compiles its own)',
         );
         return null;
       }
     });
-    return compiling;
+    try {
+      return await compiling;
+    } on PdfIoFailed {
+      if (identical(_compilesInFlight[here], compiling)) {
+        _compilesInFlight.remove(here)?.ignore();
+      }
+      rethrow;
+    }
   }
 
   /// Sets every compiled module aside, so the next boot fetches and compiles

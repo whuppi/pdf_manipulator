@@ -120,6 +120,9 @@ void registerWebWasmPartsTests({
           ),
         );
         await pdf.dispose();
+        await server.settle();
+        // The host's error ends the boot: no worker fetches the part again.
+        expect(server.asked('$module.0.wasm'), ['GET $part']);
         await restoreSuiteConfig();
       }, timeout: t(12));
 
@@ -302,7 +305,8 @@ typedef _BootOutcome = ({String type, String message});
 
 /// Boots the executor script at [workerUrl] by itself, without a module the
 /// host compiled, so the worker compiles from the manifest entry of [module]
-/// the way it does when the host's compile failed.
+/// the way it does when the host could not compile for a reason other than
+/// a part at fault.
 Future<_BootOutcome> _bootWorker(
   String workerUrl,
   String module,

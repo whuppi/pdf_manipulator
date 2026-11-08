@@ -821,9 +821,10 @@ enqueue them in order into one `ReadableStream`, and hand `new Response(stream)`
 `content-type: application/wasm` to `WebAssembly.compileStreaming`. Each part is counted and its
 SHA-256 checked against the manifest before the stream goes on; a short or corrupt part errors
 the stream and the compile rejects with a message naming the part. The host compiles once per
-page and posts the module to its workers; when that compile fails, each worker compiles from
-the manifest entry the host sends in `init`. The web battery pins both loaders against the same
-manifest.
+page and posts the module to its workers. A part at fault fails the boot with the host's error
+naming it, and the next boot fetches the parts again; any other failure of the host's compile
+sends each worker to compile from the manifest entry the host sends in `init`. The web battery
+pins both loaders against the same manifest.
 
 The walls (`test/guards/wasm_size_test.dart`, and the release in `tool/compile.dart`): every
 file in `web_assets/` and the release output is under 26,214,400 bytes; each module's parts

@@ -26,6 +26,7 @@
 // fetch web_assets/.
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:shelf/shelf.dart';
 import 'package:shelf/shelf_io.dart' as io;
@@ -72,9 +73,15 @@ Future<void> hybridMain(StreamChannel<Object?> channel, Object? message) async {
       );
     }
     if (corrupt.contains(path) || truncate.contains(path)) {
-      final bytes = await response.read().expand((c) => c).toList();
+      // One copy into a byte buffer: a part is 16 MiB, and a list of ints
+      // built byte by byte takes seconds on a slow runner.
+      final builder = BytesBuilder(copy: false);
+      await response.read().forEach(builder.add);
+      var bytes = builder.takeBytes();
       if (corrupt.contains(path)) bytes[bytes.length ~/ 2] ^= 0xff;
-      if (truncate.contains(path)) bytes.length -= 16;
+      if (truncate.contains(path)) {
+        bytes = Uint8List.sublistView(bytes, 0, bytes.length - 16);
+      }
       return Response.ok(
         bytes,
         headers: {..._headers, 'content-type': 'application/wasm'},

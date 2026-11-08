@@ -3,11 +3,12 @@
 // Part of lease.dart. Every module the package ships is cut into parts listed
 // in pdf_oxide_manifest.json (see lib/src/hook/wasm_parts.dart); nothing
 // fetches a whole `.wasm`. [_compileParts] is the main-thread twin of
-// compileParts in executor_worker.js, which the worker runs when the host's
-// compile failed: both fetch every part at once, join them in order into one
-// stream the browser compiles while it arrives, and refuse a part that is not
-// the size and SHA-256 the manifest lists, with a message naming the part.
-// The web battery pins both against the same manifest.
+// compileParts in executor_worker.js, which the worker runs when the host
+// could not compile for a reason other than a part at fault: both fetch every
+// part at once, join them in order into one stream the browser compiles while
+// it arrives, and refuse a part that is not the size and SHA-256 the manifest
+// lists, with a message naming the part. The web battery pins both against
+// the same manifest.
 
 part of 'lease.dart';
 
