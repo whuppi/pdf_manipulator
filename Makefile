@@ -1,4 +1,4 @@
-.PHONY: check analyze check-keep-sets check-bindings analyze-floor platforms lint-shell format fixtures test-guards bench bench-gate \
+.PHONY: ci-setup check analyze check-keep-sets check-bindings analyze-floor platforms lint-shell format fixtures test-guards bench bench-gate \
        build build-native build-wasm build-wasm-asyncify \
        compile-macos compile-ios compile-android compile-linux compile-windows compile-wasm compile-natives \
        test test-pkg-native test-unit test-rust test-rust-run test-memory test-fuel prune-target shake-audit verify-readme-sizes verify-tarball \
@@ -598,10 +598,22 @@ test-example-android:
 	rc=$$?; kill $$logcat 2>/dev/null; exit $$rc
 
 # Runs on the booted simulator. CI boots the simulator via setup-ios.
+# make ci-setup  Nothing: a Full Test row run with ssh: setup provisions its
+#                tools through make-target, runs this, then holds for SSH.
+ci-setup:
+	@echo "provisioned; nothing to run"
+
 test-example-ios:
 	@echo "=== Example: iOS ==="
 	@mkdir -p $(TEST_RESULTS_DIR)
-	cd example && $(FLUTTER) test $(VERBOSE) $(TIMEOUT) integration_test/pdf_smoke_test.dart --file-reporter json:../$(TEST_RESULTS_DIR)/int-ios.json
+	@# The first `simctl spawn` on a fresh simulator is slow on a CI Mac, slow enough that
+	@# flutter_tools' log stream attaches after the app prints its VM Service URL; one spawn
+	@# here warms it, and ios_vm_rescue.sh relaunches the app if the line is still missed.
+	@xcrun simctl spawn booted log show --last 1s >/dev/null 2>&1 || true
+	@set -o pipefail; R=$$PWD/$(TEST_RESULTS_DIR); : > $$R/int-ios.log; \
+	bash tool/ios_vm_rescue.sh $$R/int-ios.log & rescue=$$!; \
+	cd example && $(FLUTTER) test -v $(TIMEOUT) integration_test/pdf_smoke_test.dart --file-reporter json:../$(TEST_RESULTS_DIR)/int-ios.json 2>&1 | tee $$R/int-ios.log; \
+	rc=$$?; kill $$rescue 2>/dev/null; exit $$rc
 
 test-example-device:
 	@echo "=== Example: device=$(DEVICE) ==="
