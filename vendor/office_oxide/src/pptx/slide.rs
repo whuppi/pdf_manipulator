@@ -1,0 +1,3561 @@
+use quick_xml::events::Event;
+
+use crate::core::relationships::{Relationships, TargetMode};
+use crate::core::xml;
+
+use super::shape::{
+    AutoShape, BulletStyle, ConnectorShape, GraphicContent, GraphicFrame, GroupShape,
+    HyperlinkInfo, HyperlinkTarget, MediaKind, MediaReference, OleObject, PictureShape,
+    PlaceholderInfo, Shape, ShapePosition, TabStop, Table, TableCell, TableRow, TextBody,
+    TextContent, TextField, TextParagraph, TextRun, TextSpacing,
+};
+
+type CoreResult<T> = crate::core::Result<T>;
+
+/// Parsed run properties: (bold, italic, strikethrough, hyperlink, font_size_hundredths_pt).
+///
+/// PPTX `<a:rPr sz="..."/>` carries font size in hundredths of a point
+/// (e.g. `sz="1800"` = 18 pt). Carrying it through the parser is what
+/// keeps PDF→PPTX→PDF round-trips from defaulting every paragraph to
+/// the writer's 12 pt fallback (which inflated 8-page A4 sources to
+/// ~30 pages).
+#[derive(Default)]
+struct RunProps {
+    bold: Option<bool>,
+    italic: Option<bool>,
+    strikethrough: bool,
+    hyperlink: Option<HyperlinkInfo>,
+    font_size_hundredths_pt: Option<u32>,
+    color_rgb: Option<[u8; 3]>,
+    underline: Option<String>,
+    font_name: Option<String>,
+    baseline: Option<i32>,
+    caps: Option<String>,
+    char_spacing_hundredths_pt: Option<i32>,
+}
+
+/// Read the `<a:rPr>` attributes shared by the Start and Empty forms.
+fn run_props_from_attrs(e: &quick_xml::events::BytesStart) -> CoreResult<RunProps> {
+    let strike = xml::optional_attr_str(e, "strike")?;
+    Ok(RunProps {
+        bold: parse_bool_attr(e, "b")?,
+        italic: parse_bool_attr(e, "i")?,
+        strikethrough: strike.as_deref().is_some_and(|v| v != "noStrike"),
+        font_size_hundredths_pt: parse_u32_attr(e, "sz")?,
+        // `u`, `baseline`, `cap` and `spc` were parsed by no one, so
+        // underline in particular — the third most common piece of direct
+        // formatting — never reached the IR from PPTX even though it did
+        // from DOCX.
+        underline: xml::optional_attr_str(e, "u")?.map(|v| v.into_owned()),
+        baseline: xml::optional_attr_str(e, "baseline")?.and_then(|v| v.parse().ok()),
+        caps: xml::optional_attr_str(e, "cap")?.map(|v| v.into_owned()),
+        char_spacing_hundredths_pt: xml::optional_attr_str(e, "spc")?.and_then(|v| v.parse().ok()),
+        ..Default::default()
+    })
+}
+
+/// A parsed PPTX slide.
+#[derive(Debug, Clone, Default)]
+pub struct Slide {
+    /// Slide name from the `<p:cSld name="...">` attribute.
+    pub name: String,
+    /// All top-level shapes on this slide.
+    pub shapes: Vec<Shape>,
+    /// Speaker notes body, if a notes slide is present. Kept as the
+    /// structured `TextBody` (same model ordinary slide body text uses)
+    /// rather than flattened text, so bold/italic/bullets/numbering in
+    /// notes survive through to the IR.
+    ///
+    /// Shared (`Arc`): several slides can relate to one notes part, which
+    /// is then parsed and held once.
+    pub notes: Option<std::sync::Arc<TextBody>>,
+    /// Solid background colour (RGB) extracted from the slide's
+    /// `<p:cSld><p:bg><p:bgPr><a:solidFill>` element. Only the solid
+    /// case is parsed; gradient / image / theme-reference fills are
+    /// dropped silently and surface as `None`.
+    pub background_rgb: Option<[u8; 3]>,
+    /// `<p:sld show="0">` — the slide is hidden from the slideshow. Its
+    /// content is still extracted, but a consumer can now tell that the
+    /// author excluded it, which was impossible before.
+    pub hidden: bool,
+    /// The comments parts this slide names, from `ppt/comments/*.xml`, each
+    /// shared: every slide that names a part holds the same allocation, and a
+    /// slide that names several holds each, never a concatenation of them. Read
+    /// them through [`Slide::comments`].
+    pub comment_parts: Vec<std::sync::Arc<[SlideComment]>>,
+    /// Why this slide's part could not be read, when it could not. The
+    /// slide keeps its place in the deck with no content, so every
+    /// renderer can show a notice where it was; the part and the reason are
+    /// also listed in [`super::PptxDocument::unreadable_parts`].
+    pub parse_error: Option<String>,
+    /// Index into [`super::PptxDocument::layouts`] of the slide's layout.
+    pub layout_index: Option<usize>,
+    /// `<p:sld showMasterSp="0">` — the slide hides the shapes of its
+    /// layout and master.
+    pub hide_master_shapes: bool,
+}
+
+/// A comment attached to a slide (`ppt/comments/modernComment*.xml` or the
+/// legacy `ppt/comments/comment*.xml`).
+#[derive(Debug, Clone)]
+pub struct SlideComment {
+    /// Author name, when the deck's author list resolves the id.
+    pub author: Option<String>,
+    /// Comment body text.
+    pub text: String,
+}
+
+/// Create a fast reader that does NOT trim text content.
+fn make_content_reader(xml_data: &[u8]) -> quick_xml::Reader<&[u8]> {
+    let mut reader = quick_xml::Reader::from_reader(xml_data);
+    reader.config_mut().check_end_names = false;
+    reader.config_mut().check_comments = false;
+    reader
+}
+
+impl Slide {
+    /// Every comment on this slide, part by part in the order the slide names
+    /// them.
+    pub fn comments(&self) -> impl Iterator<Item = &SlideComment> {
+        self.comment_parts.iter().flat_map(|part| part.iter())
+    }
+
+    /// Parse a slide from its XML data.
+    ///
+    /// `media` maps an image relationship id to its bytes and format;
+    /// `part_text` maps the relationship id of a chart part or a SmartArt
+    /// data part to the text lines extracted from it. Both are resolved by
+    /// the caller, which holds the package reader.
+    pub(crate) fn parse(
+        xml_data: &[u8],
+        name: String,
+        rels: &Relationships,
+        media: &std::collections::HashMap<String, (std::sync::Arc<[u8]>, String)>,
+        part_text: &PartText,
+    ) -> CoreResult<Self> {
+        let mut reader = make_content_reader(xml_data);
+        let mut shapes = Vec::new();
+        let mut background_rgb = None;
+        let mut hidden = false;
+        let mut hide_master_shapes = false;
+
+        loop {
+            match reader.read_event()? {
+                // The root: `p:sld`, or `p:sldLayout`/`p:sldMaster` when a
+                // layout or master part is read with the same parser.
+                Event::Start(ref e) | Event::Empty(ref e)
+                    if matches!(e.local_name().as_ref(), "sld" | "sldLayout" | "sldMaster") =>
+                {
+                    hidden = xml::optional_attr_str(e, "show")?
+                        .is_some_and(|v| matches!(v.as_ref(), "0" | "false"));
+                    hide_master_shapes = xml::optional_attr_str(e, "showMasterSp")?
+                        .is_some_and(|v| matches!(v.as_ref(), "0" | "false"));
+                },
+                Event::Start(ref e) if e.local_name().as_ref() == "bg" => {
+                    background_rgb = parse_slide_bg(&mut reader)?;
+                },
+                Event::Start(ref e) if e.local_name().as_ref() == "spTree" => {
+                    shapes = parse_shape_tree(&mut reader, rels, media, part_text)?;
+                },
+                Event::Eof => break,
+                _ => {},
+            }
+        }
+
+        Ok(Slide {
+            name,
+            shapes,
+            notes: None,
+            background_rgb,
+            hidden,
+            comment_parts: Vec::new(),
+            parse_error: None,
+            layout_index: None,
+            hide_master_shapes,
+        })
+    }
+}
+
+/// Parse `<p:bg>` looking for a single solid-fill colour.
+///
+/// Returns `Some([r, g, b])` if the background is a `<p:bgPr>` with an
+/// `<a:solidFill><a:srgbClr val="RRGGBB"/>`. All other forms (gradient,
+/// blip / image, scheme / theme references via `<p:bgRef>`) return
+/// `None` — the renderer silently falls back to no background, which
+/// matches "minimum theme-background support" per the v0.3.42 plan.
+fn parse_slide_bg(reader: &mut quick_xml::Reader<&[u8]>) -> CoreResult<Option<[u8; 3]>> {
+    let mut rgb = None;
+    let mut depth = 1u32;
+    let mut in_solid_fill = false;
+    loop {
+        match reader.read_event()? {
+            Event::Start(ref e) => {
+                depth += 1;
+                if e.local_name().as_ref() == "solidFill" {
+                    in_solid_fill = true;
+                }
+            },
+            Event::Empty(ref e) => {
+                if in_solid_fill && e.local_name().as_ref() == "srgbClr" {
+                    if let Some(val) = xml::optional_attr_str(e, "val")? {
+                        rgb = parse_hex_rgb(val.as_ref());
+                    }
+                }
+            },
+            Event::End(ref e) => {
+                if e.local_name().as_ref() == "solidFill" {
+                    in_solid_fill = false;
+                }
+                depth -= 1;
+                if depth == 0 {
+                    break;
+                }
+            },
+            Event::Eof => break,
+            _ => {},
+        }
+    }
+    Ok(rgb)
+}
+
+/// Parse a 6-character hex colour (e.g. `"0E273B"`) into `[r, g, b]`.
+fn parse_hex_rgb(s: &str) -> Option<[u8; 3]> {
+    let bytes = s.as_bytes();
+    if bytes.len() != 6 {
+        return None;
+    }
+    let h = |hi, lo| -> Option<u8> {
+        let n = |c: u8| match c {
+            b'0'..=b'9' => Some(c - b'0'),
+            b'a'..=b'f' => Some(c - b'a' + 10),
+            b'A'..=b'F' => Some(c - b'A' + 10),
+            _ => None,
+        };
+        Some(n(hi)? * 16 + n(lo)?)
+    };
+    Some([
+        h(bytes[0], bytes[1])?,
+        h(bytes[2], bytes[3])?,
+        h(bytes[4], bytes[5])?,
+    ])
+}
+
+// ---------------------------------------------------------------------------
+// Shape tree parsing
+// ---------------------------------------------------------------------------
+
+fn parse_shape_tree(
+    reader: &mut quick_xml::Reader<&[u8]>,
+    rels: &Relationships,
+    media: &std::collections::HashMap<String, (std::sync::Arc<[u8]>, String)>,
+    part_text: &PartText,
+) -> CoreResult<Vec<Shape>> {
+    parse_shape_tree_until(reader, rels, media, part_text, "spTree")
+}
+
+/// Shared shape-tree loop, parameterized on the closing tag so it can also
+/// read the contents of an `<mc:Choice>`/`<mc:Fallback>` branch (see
+/// [`parse_alternate_content`]).
+fn parse_shape_tree_until(
+    reader: &mut quick_xml::Reader<&[u8]>,
+    rels: &Relationships,
+    media: &std::collections::HashMap<String, (std::sync::Arc<[u8]>, String)>,
+    part_text: &PartText,
+    end_local: &str,
+) -> CoreResult<Vec<Shape>> {
+    let mut shapes = Vec::new();
+
+    loop {
+        match reader.read_event()? {
+            Event::Start(ref e) => match e.local_name().as_ref() {
+                "sp" => shapes.push(parse_auto_shape(reader, rels)?),
+                "pic" => shapes.push(parse_picture(reader, rels, media)?),
+                "grpSp" => shapes.push(parse_group_shape(reader, rels, media, part_text)?),
+                "graphicFrame" => shapes.push(parse_graphic_frame(reader, rels, media, part_text)?),
+                "cxnSp" => shapes.push(parse_connector(reader)?),
+                "AlternateContent" => {
+                    shapes.extend(parse_alternate_content(reader, rels, media, part_text)?);
+                },
+                _ => {
+                    xml::skip_element_fast(reader)?;
+                },
+            },
+            Event::End(ref e) if e.local_name().as_ref() == end_local => {
+                break;
+            },
+            Event::Eof => break,
+            _ => {},
+        }
+    }
+
+    Ok(shapes)
+}
+
+/// `<mc:AlternateContent>` wraps two or more renderings of the same shape
+/// behind a markup-compatibility switch — typically a modern extension
+/// (`<mc:Choice Requires="…">`, e.g. an OMML equation) and a plain
+/// `<mc:Fallback>` for older readers. There's no namespace-support
+/// negotiation here: this takes the first `Choice` branch that actually
+/// yields a recognized shape, and falls back to `Fallback` otherwise —
+/// strictly better than the old behavior of skipping the whole block,
+/// which silently dropped shapes like equation text boxes.
+fn parse_alternate_content(
+    reader: &mut quick_xml::Reader<&[u8]>,
+    rels: &Relationships,
+    media: &std::collections::HashMap<String, (std::sync::Arc<[u8]>, String)>,
+    part_text: &PartText,
+) -> CoreResult<Vec<Shape>> {
+    let mut shapes: Vec<Shape> = Vec::new();
+    let mut have_choice = false;
+
+    loop {
+        match reader.read_event()? {
+            Event::Start(ref e) => match e.local_name().as_ref() {
+                "Choice" => {
+                    let s = parse_shape_tree_until(reader, rels, media, part_text, "Choice")?;
+                    if !s.is_empty() {
+                        shapes = s;
+                        have_choice = true;
+                    }
+                },
+                "Fallback" => {
+                    let s = parse_shape_tree_until(reader, rels, media, part_text, "Fallback")?;
+                    if !have_choice && shapes.is_empty() {
+                        shapes = s;
+                    }
+                },
+                _ => {
+                    xml::skip_element_fast(reader)?;
+                },
+            },
+            Event::End(ref e) if e.local_name().as_ref() == "AlternateContent" => {
+                break;
+            },
+            Event::Eof => break,
+            _ => {},
+        }
+    }
+
+    Ok(shapes)
+}
+
+// ---------------------------------------------------------------------------
+// AutoShape (p:sp)
+// ---------------------------------------------------------------------------
+
+fn parse_auto_shape(
+    reader: &mut quick_xml::Reader<&[u8]>,
+    rels: &Relationships,
+) -> CoreResult<Shape> {
+    let mut id = 0u32;
+    let mut name = String::new();
+    let mut alt_text = None;
+    let mut position = None;
+    let mut text_body = None;
+    let mut placeholder = None;
+    let mut hyperlink = None;
+
+    loop {
+        match reader.read_event()? {
+            Event::Start(ref e) => match e.local_name().as_ref() {
+                "nvSpPr" => {
+                    let props = parse_nv_common_props(reader, rels)?;
+                    id = props.0;
+                    name = props.1;
+                    alt_text = props.2;
+                    placeholder = props.3;
+                    hyperlink = props.4;
+                },
+                "spPr" => {
+                    position = parse_shape_properties(reader, "spPr")?;
+                },
+                "txBody" => {
+                    text_body = Some(parse_text_body(reader, rels)?);
+                },
+                _ => {
+                    xml::skip_element_fast(reader)?;
+                },
+            },
+            Event::End(ref e) if e.local_name().as_ref() == "sp" => {
+                break;
+            },
+            Event::Eof => break,
+            _ => {},
+        }
+    }
+
+    Ok(Shape::AutoShape(AutoShape {
+        id,
+        name,
+        alt_text,
+        position,
+        hyperlink,
+        text_body,
+        placeholder,
+    }))
+}
+
+// ---------------------------------------------------------------------------
+// PictureShape (p:pic)
+// ---------------------------------------------------------------------------
+
+fn parse_picture(
+    reader: &mut quick_xml::Reader<&[u8]>,
+    rels: &Relationships,
+    media: &std::collections::HashMap<String, (std::sync::Arc<[u8]>, String)>,
+) -> CoreResult<Shape> {
+    let mut props = NvPicProps::default();
+    let mut position = None;
+    let mut blip = BlipRefs::default();
+
+    loop {
+        match reader.read_event()? {
+            Event::Start(ref e) => match e.local_name().as_ref() {
+                "nvPicPr" => {
+                    props = parse_nv_pic_props(reader, rels)?;
+                },
+                "blipFill" => {
+                    blip = parse_blip_fill(reader)?;
+                },
+                "spPr" => {
+                    position = parse_shape_properties(reader, "spPr")?;
+                },
+                _ => {
+                    xml::skip_element_fast(reader)?;
+                },
+            },
+            Event::End(ref e) if e.local_name().as_ref() == "pic" => {
+                break;
+            },
+            Event::Eof => break,
+            _ => {},
+        }
+    }
+
+    let (data, format) = match blip.embed.as_deref().and_then(|rid| media.get(rid)) {
+        Some((bytes, ext)) => (Some(bytes.clone()), Some(ext.clone())),
+        None => (None, None),
+    };
+    // A linked picture's bytes live outside the package; its relationship
+    // target says where.
+    let link_target = blip
+        .link
+        .as_deref()
+        .and_then(|rid| rels.get_by_id(rid))
+        .map(|rel| std::sync::Arc::clone(&rel.target));
+
+    Ok(Shape::Picture(PictureShape {
+        id: props.id,
+        name: props.name,
+        alt_text: props.alt_text,
+        position,
+        embed_rid: blip.embed,
+        data,
+        format,
+        hyperlink: props.hyperlink,
+        link_target,
+        media: props.media,
+    }))
+}
+
+/// The relationship ids on a picture's `<a:blip>` (ECMA-376 Part 1
+/// §20.1.8.13): `r:embed` names an image part inside the package, `r:link`
+/// an image outside it. A blip may carry either or both.
+#[derive(Default)]
+struct BlipRefs {
+    embed: Option<String>,
+    link: Option<String>,
+}
+
+/// Parse `<p:blipFill>…<a:blip r:embed="rIdN" r:link="rIdM"/>…</p:blipFill>`.
+/// Other contents (stretch, crop, tile) are skipped — only the ids are
+/// needed to resolve the image.
+fn parse_blip_fill(reader: &mut quick_xml::Reader<&[u8]>) -> CoreResult<BlipRefs> {
+    let mut refs = BlipRefs::default();
+    let mut seen_blip = false;
+    let mut depth: u32 = 1;
+    loop {
+        match reader.read_event()? {
+            Event::Start(ref e) => {
+                if e.local_name().as_ref() == "blip" && !seen_blip {
+                    seen_blip = true;
+                    refs = read_blip_refs(e)?;
+                }
+                depth += 1;
+            },
+            Event::Empty(ref e) => {
+                if e.local_name().as_ref() == "blip" && !seen_blip {
+                    seen_blip = true;
+                    refs = read_blip_refs(e)?;
+                }
+            },
+            Event::End(_) => {
+                depth -= 1;
+                if depth == 0 {
+                    break;
+                }
+            },
+            Event::Eof => break,
+            _ => {},
+        }
+    }
+    Ok(refs)
+}
+
+fn read_blip_refs(e: &quick_xml::events::BytesStart) -> CoreResult<BlipRefs> {
+    Ok(BlipRefs {
+        embed: read_blip_embed_attr(e)?,
+        link: read_rel_attr(e, "link")?,
+    })
+}
+
+fn read_blip_embed_attr(e: &quick_xml::events::BytesStart) -> CoreResult<Option<String>> {
+    // `<a:blip>` carries `r:embed="rIdN"` (DrawingML namespace `a:`,
+    // relationship namespace `r:`). The attribute may be present in
+    // either the `Empty` or `Start` form; both routes feed this helper.
+    read_rel_attr(e, "embed")
+}
+
+/// A relationship-namespace attribute (`r:{local}`) under any prefix.
+fn read_rel_attr(e: &quick_xml::events::BytesStart, local: &str) -> CoreResult<Option<String>> {
+    for attr in e.attributes().with_checks(false) {
+        let attr = attr.map_err(crate::core::Error::from)?;
+        let key = attr.key.as_ref();
+        let matches = key == local
+            || key
+                .strip_suffix(local)
+                .is_some_and(|prefix| prefix.ends_with(':'));
+        if matches {
+            return Ok(Some(crate::core::xml::unescape_attr_value(&attr)?));
+        }
+    }
+    Ok(None)
+}
+
+// ---------------------------------------------------------------------------
+// GroupShape (p:grpSp)
+// ---------------------------------------------------------------------------
+
+fn parse_group_shape(
+    reader: &mut quick_xml::Reader<&[u8]>,
+    rels: &Relationships,
+    media: &std::collections::HashMap<String, (std::sync::Arc<[u8]>, String)>,
+    part_text: &PartText,
+) -> CoreResult<Shape> {
+    // Groups nest, so this is the recursion an adversarial deck drives.
+    // Past the limit the subtree is skipped: a stack overflow aborts the
+    // process and no caller can catch it.
+    let Some(_depth) = xml::DepthGuard::enter() else {
+        xml::skip_element_fast(reader)?;
+        return Ok(Shape::Group(GroupShape {
+            id: 0,
+            name: String::new(),
+            position: None,
+            children: Vec::new(),
+        }));
+    };
+    let mut id = 0u32;
+    let mut name = String::new();
+    let mut position = None;
+    let mut children = Vec::new();
+
+    loop {
+        match reader.read_event()? {
+            Event::Start(ref e) => match e.local_name().as_ref() {
+                "nvGrpSpPr" => {
+                    let props = parse_nv_id_name(reader, "nvGrpSpPr")?;
+                    id = props.0;
+                    name = props.1;
+                },
+                "grpSpPr" => {
+                    position = parse_shape_properties(reader, "grpSpPr")?;
+                },
+                "sp" => children.push(parse_auto_shape(reader, rels)?),
+                "pic" => children.push(parse_picture(reader, rels, media)?),
+                "grpSp" => children.push(parse_group_shape(reader, rels, media, part_text)?),
+                "graphicFrame" => {
+                    children.push(parse_graphic_frame(reader, rels, media, part_text)?)
+                },
+                "cxnSp" => children.push(parse_connector(reader)?),
+                "AlternateContent" => {
+                    children.extend(parse_alternate_content(reader, rels, media, part_text)?);
+                },
+                _ => {
+                    xml::skip_element_fast(reader)?;
+                },
+            },
+            Event::End(ref e) if e.local_name().as_ref() == "grpSp" => {
+                break;
+            },
+            Event::Eof => break,
+            _ => {},
+        }
+    }
+
+    Ok(Shape::Group(GroupShape {
+        id,
+        name,
+        position,
+        children,
+    }))
+}
+
+// ---------------------------------------------------------------------------
+// GraphicFrame (p:graphicFrame)
+// ---------------------------------------------------------------------------
+
+/// Collect every `<a:t>` text value inside a subtree, reading through the
+/// matching `</end_local>`. Used for graphic payloads we don't model
+/// structurally (SmartArt, charts) so their words still reach the IR.
+fn collect_a_t_text(
+    reader: &mut quick_xml::Reader<&[u8]>,
+    end_local: &str,
+) -> CoreResult<Vec<String>> {
+    let mut out = Vec::new();
+    let mut depth = 1i32;
+    loop {
+        match reader.read_event()? {
+            Event::Start(ref e) => {
+                if e.local_name().as_ref() == "t" {
+                    let t = xml::read_text_content_fast(reader)?;
+                    let t = t.trim();
+                    if !t.is_empty() {
+                        out.push(t.to_string());
+                    }
+                } else {
+                    depth += 1;
+                }
+            },
+            Event::End(ref e) => {
+                if e.local_name().as_ref() == end_local && depth <= 1 {
+                    break;
+                }
+                depth -= 1;
+                if depth <= 0 {
+                    break;
+                }
+            },
+            Event::Eof => break,
+            _ => {},
+        }
+    }
+    Ok(out)
+}
+
+/// Relationship id → the text lines of the chart or SmartArt data part it
+/// names. A part is read once and its lines are shared by every reference,
+/// so a part named by thousands of frames or slides costs one copy.
+pub(crate) type PartText = std::collections::HashMap<String, std::sync::Arc<[String]>>;
+
+/// The text of a SmartArt data part (`ppt/diagrams/dataN.xml`,
+/// `<dgm:dataModel>`, ECMA-376 Part 1 §21.4.3): one line per non-empty
+/// paragraph of each point's `<dgm:t>` body, in point-list order. The runs
+/// of one paragraph are joined without a separator — a word split across
+/// runs stays one word.
+///
+/// Also says why the part could not be read to its end (`None` when it
+/// could): the lines are then what came before the damage.
+pub(crate) fn diagram_data_text_lines(xml_data: &[u8]) -> (Vec<String>, Option<String>) {
+    let mut reader = make_content_reader(xml_data);
+    let mut lines = Vec::new();
+    let mut depth = 0usize;
+    let damage;
+    let mut in_point_text = 0u32;
+    let mut current = String::new();
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(ref e)) => match e.local_name().as_ref() {
+                // `t` is both the point's text body (`dgm:t`) and a run's
+                // text (`a:t`); the outer one is told apart by nesting.
+                "t" if in_point_text == 0 => {
+                    in_point_text = 1;
+                    depth += 1;
+                },
+                "t" => {
+                    if let Ok(t) = xml::read_text_content_fast(&mut reader) {
+                        current.push_str(&t);
+                    }
+                },
+                _ if in_point_text > 0 => {
+                    in_point_text += 1;
+                    depth += 1;
+                },
+                _ => depth += 1,
+            },
+            Ok(Event::End(_)) if in_point_text == 0 => depth = depth.saturating_sub(1),
+            Ok(Event::End(ref e)) if in_point_text > 0 => {
+                depth = depth.saturating_sub(1);
+                in_point_text -= 1;
+                if matches!(e.local_name().as_ref(), "p" | "t") {
+                    let line = current.trim();
+                    if !line.is_empty() {
+                        lines.push(line.to_string());
+                    }
+                    current.clear();
+                }
+            },
+            Ok(Event::Eof) => {
+                damage = (depth > 0 || in_point_text > 0)
+                    .then(|| "the XML ends inside an open element".to_string());
+                break;
+            },
+            Err(e) => {
+                damage = Some(format!("the XML is malformed: {e}"));
+                break;
+            },
+            _ => {},
+        }
+    }
+    (lines, damage)
+}
+
+/// Find a part reference inside a `<a:graphicData>` subtree — the first
+/// `<{element} {attr}="rIdN"/>`, e.g. `<c:chart r:id>` or SmartArt's
+/// `<dgm:relIds r:dm>` — reading through the matching `</end_local>`
+/// regardless of whether one was found (so the reader position stays
+/// correct either way).
+fn find_part_rid(
+    reader: &mut quick_xml::Reader<&[u8]>,
+    end_local: &str,
+    element: &str,
+    attr: &str,
+) -> CoreResult<Option<String>> {
+    let mut rid = None;
+    let mut depth = 1i32;
+    loop {
+        match reader.read_event()? {
+            Event::Start(ref e) => {
+                if rid.is_none() && e.local_name().as_ref() == element {
+                    rid = xml::optional_attr_str(e, attr)?
+                        .filter(|v| !v.is_empty())
+                        .map(|v| v.into_owned());
+                }
+                depth += 1;
+            },
+            Event::Empty(ref e) => {
+                if rid.is_none() && e.local_name().as_ref() == element {
+                    rid = xml::optional_attr_str(e, attr)?
+                        .filter(|v| !v.is_empty())
+                        .map(|v| v.into_owned());
+                }
+            },
+            Event::End(ref e) => {
+                if e.local_name().as_ref() == end_local && depth <= 1 {
+                    break;
+                }
+                depth -= 1;
+                if depth <= 0 {
+                    break;
+                }
+            },
+            Event::Eof => break,
+            _ => {},
+        }
+    }
+    Ok(rid)
+}
+
+/// Read an OLE object's `<a:graphicData>` payload through its end tag: the
+/// first `<p:oleObj>`'s attributes (in either branch of the
+/// `mc:AlternateContent` PowerPoint wraps it in) and the first
+/// `<a:blip r:embed>` — the preview picture of the Fallback branch —
+/// resolved against the slide's pre-read images.
+fn parse_ole_graphic_data(
+    reader: &mut quick_xml::Reader<&[u8]>,
+    media: &std::collections::HashMap<String, (std::sync::Arc<[u8]>, String)>,
+) -> CoreResult<GraphicContent> {
+    let mut ole = OleObject {
+        prog_id: None,
+        name: None,
+        rel_id: None,
+        preview_data: None,
+        preview_format: None,
+    };
+    let mut seen_obj = false;
+    let mut depth = 1i32;
+    loop {
+        let event = reader.read_event()?;
+        let is_start = matches!(event, Event::Start(_));
+        match event {
+            Event::Start(ref e) | Event::Empty(ref e) => {
+                match e.local_name().as_ref() {
+                    "oleObj" if !seen_obj => {
+                        seen_obj = true;
+                        ole.prog_id = xml::optional_attr_str(e, "progId")?.map(|v| v.into_owned());
+                        ole.name = xml::optional_attr_str(e, "name")?.map(|v| v.into_owned());
+                        ole.rel_id = read_rel_attr(e, "id")?;
+                    },
+                    "blip" if ole.preview_data.is_none() => {
+                        if let Some((bytes, ext)) =
+                            read_blip_embed_attr(e)?.and_then(|rid| media.get(&rid))
+                        {
+                            ole.preview_data = Some(std::sync::Arc::clone(bytes));
+                            ole.preview_format = Some(ext.clone());
+                        }
+                    },
+                    _ => {},
+                }
+                if is_start {
+                    depth += 1;
+                }
+            },
+            Event::End(_) => {
+                depth -= 1;
+                if depth <= 0 {
+                    break;
+                }
+            },
+            Event::Eof => break,
+            _ => {},
+        }
+    }
+    Ok(if seen_obj {
+        GraphicContent::OleObject(ole)
+    } else {
+        GraphicContent::Unknown
+    })
+}
+
+fn parse_graphic_frame(
+    reader: &mut quick_xml::Reader<&[u8]>,
+    rels: &Relationships,
+    media: &std::collections::HashMap<String, (std::sync::Arc<[u8]>, String)>,
+    part_text: &PartText,
+) -> CoreResult<Shape> {
+    let mut id = 0u32;
+    let mut name = String::new();
+    let mut position = None;
+    let mut content = GraphicContent::Unknown;
+
+    loop {
+        match reader.read_event()? {
+            Event::Start(ref e) => {
+                match e.local_name().as_ref() {
+                    "nvGraphicFramePr" => {
+                        let props = parse_nv_id_name(reader, "nvGraphicFramePr")?;
+                        id = props.0;
+                        name = props.1;
+                    },
+                    "xfrm" => {
+                        position = parse_xfrm(reader)?;
+                    },
+                    // <a:graphic> is a wrapper — keep parsing to find <a:graphicData>
+                    "graphic" => {},
+                    "graphicData" => {
+                        let uri = xml::optional_attr_str(e, "uri")?;
+                        if uri.as_deref()
+                            == Some("http://schemas.openxmlformats.org/drawingml/2006/table")
+                        {
+                            content = parse_graphic_data_table(reader, rels)?;
+                        } else if uri.as_deref()
+                            == Some("http://schemas.openxmlformats.org/drawingml/2006/chart")
+                        {
+                            // The slide XML holds only a reference —
+                            // <c:chart r:id="rIdN"/> — with no text of its
+                            // own; the title, axis labels, category names
+                            // and cached data values all live in the
+                            // separate part that id resolves to
+                            // (ppt/charts/chartN.xml), pre-read into
+                            // `part_text`.
+                            let rid = find_part_rid(reader, "graphicData", "chart", "r:id")?;
+                            let texts = rid.and_then(|r| part_text.get(&r)).cloned();
+                            content = match texts {
+                                Some(t) if !t.is_empty() => GraphicContent::Text(t),
+                                _ => GraphicContent::Unknown,
+                            };
+                        } else if uri.as_deref()
+                            == Some("http://schemas.openxmlformats.org/drawingml/2006/diagram")
+                        {
+                            // SmartArt: the frame holds only
+                            // <dgm:relIds r:dm="rIdN" …/>; the node text
+                            // lives in the data part that id resolves to
+                            // (ppt/diagrams/dataN.xml, ECMA-376 Part 1
+                            // §21.4.2.8 relIds), pre-read into `part_text`.
+                            let rid = find_part_rid(reader, "graphicData", "relIds", "r:dm")?;
+                            let texts = rid.and_then(|r| part_text.get(&r)).cloned();
+                            content = match texts {
+                                Some(t) if !t.is_empty() => GraphicContent::Text(t),
+                                _ => GraphicContent::Unknown,
+                            };
+                        } else if uri.as_deref()
+                            == Some("http://schemas.openxmlformats.org/presentationml/2006/ole")
+                        {
+                            content = parse_ole_graphic_data(reader, media)?;
+                        } else {
+                            // Anything else is a graphic this reader does
+                            // not model. We can't render it, but its `<a:t>`
+                            // runs are document text.
+                            let texts = collect_a_t_text(reader, "graphicData")?;
+                            content = if texts.is_empty() {
+                                GraphicContent::Unknown
+                            } else {
+                                GraphicContent::Text(texts.into())
+                            };
+                        }
+                    },
+                    _ => {
+                        xml::skip_element_fast(reader)?;
+                    },
+                }
+            },
+            Event::End(ref e) if e.local_name().as_ref() == "graphicFrame" => {
+                break;
+            },
+            Event::Eof => break,
+            _ => {},
+        }
+    }
+
+    Ok(Shape::GraphicFrame(GraphicFrame {
+        id,
+        name,
+        position,
+        content,
+    }))
+}
+
+fn parse_graphic_data_table(
+    reader: &mut quick_xml::Reader<&[u8]>,
+    rels: &Relationships,
+) -> CoreResult<GraphicContent> {
+    loop {
+        match reader.read_event()? {
+            Event::Start(ref e) if e.local_name().as_ref() == "tbl" => {
+                let table = parse_table(reader, rels)?;
+                // Skip to end of graphicData
+                skip_to_end_of(reader, "graphicData")?;
+                return Ok(GraphicContent::Table(table));
+            },
+            Event::End(ref e) if e.local_name().as_ref() == "graphicData" => {
+                break;
+            },
+            Event::Eof => break,
+            _ => {},
+        }
+    }
+
+    Ok(GraphicContent::Unknown)
+}
+
+/// Skip remaining events until the end tag for the given element.
+fn skip_to_end_of(reader: &mut quick_xml::Reader<&[u8]>, local: &str) -> CoreResult<()> {
+    let mut depth = 1u32;
+    loop {
+        match reader.read_event()? {
+            Event::Start(_) => depth += 1,
+            Event::End(ref e) => {
+                depth -= 1;
+                if depth == 0 && e.local_name().as_ref() == local {
+                    return Ok(());
+                }
+            },
+            Event::Eof => return Ok(()),
+            _ => {},
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ConnectorShape (p:cxnSp)
+// ---------------------------------------------------------------------------
+
+fn parse_connector(reader: &mut quick_xml::Reader<&[u8]>) -> CoreResult<Shape> {
+    let mut id = 0u32;
+    let mut name = String::new();
+    let mut position = None;
+
+    loop {
+        match reader.read_event()? {
+            Event::Start(ref e) => match e.local_name().as_ref() {
+                "nvCxnSpPr" => {
+                    let props = parse_nv_id_name(reader, "nvCxnSpPr")?;
+                    id = props.0;
+                    name = props.1;
+                },
+                "spPr" => {
+                    position = parse_shape_properties(reader, "spPr")?;
+                },
+                _ => {
+                    xml::skip_element_fast(reader)?;
+                },
+            },
+            Event::End(ref e) if e.local_name().as_ref() == "cxnSp" => {
+                break;
+            },
+            Event::Eof => break,
+            _ => {},
+        }
+    }
+
+    Ok(Shape::Connector(ConnectorShape { id, name, position }))
+}
+
+// ---------------------------------------------------------------------------
+// Non-visual property parsing helpers
+// ---------------------------------------------------------------------------
+
+/// Parse `p:nvSpPr` → (id, name, alt_text, placeholder)
+///
+/// Structure:
+/// ```xml
+/// <p:nvSpPr>
+///   <p:cNvPr id="4" name="Title 1" descr="Alt text"/>
+///   <p:cNvSpPr/>
+///   <p:nvPr><p:ph type="title"/></p:nvPr>
+/// </p:nvSpPr>
+/// ```
+fn parse_nv_common_props(
+    reader: &mut quick_xml::Reader<&[u8]>,
+    rels: &Relationships,
+) -> CoreResult<(u32, String, Option<String>, Option<PlaceholderInfo>, Option<HyperlinkInfo>)> {
+    let mut id = 0u32;
+    let mut name = String::new();
+    let mut alt_text = None;
+    let mut placeholder = None;
+    let mut hyperlink = None;
+
+    loop {
+        match reader.read_event()? {
+            Event::Start(ref e) => {
+                {
+                    match e.local_name().as_ref() {
+                        "cNvPr" => {
+                            id = xml::optional_attr_str(e, "id")?
+                                .and_then(|v| v.parse().ok())
+                                .unwrap_or(0);
+                            name = xml::optional_attr_str(e, "name")?
+                                .map(|v| v.into_owned())
+                                .unwrap_or_default();
+                            alt_text = xml::optional_attr_str(e, "descr")?.map(|v| v.into_owned());
+                            hyperlink = parse_cnvpr_hyperlink(reader, rels)?;
+                        },
+                        // p:nvPr contains p:ph — don't skip, keep parsing
+                        "nvPr" => {},
+                        _ => {
+                            xml::skip_element_fast(reader)?;
+                        },
+                    }
+                }
+            },
+            Event::Empty(ref e) => match e.local_name().as_ref() {
+                "cNvPr" => {
+                    id = xml::optional_attr_str(e, "id")?
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(0);
+                    name = xml::optional_attr_str(e, "name")?
+                        .map(|v| v.into_owned())
+                        .unwrap_or_default();
+                    alt_text = xml::optional_attr_str(e, "descr")?.map(|v| v.into_owned());
+                },
+                "ph" => {
+                    placeholder = Some(PlaceholderInfo {
+                        ph_type: xml::optional_attr_str(e, "type")?.map(|v| v.into_owned()),
+                        idx: xml::optional_attr_str(e, "idx")?.and_then(|v| v.parse().ok()),
+                    });
+                },
+                _ => {},
+            },
+            Event::End(ref e) if e.local_name().as_ref() == "nvSpPr" => {
+                break;
+            },
+            Event::Eof => break,
+            _ => {},
+        }
+    }
+
+    Ok((id, name, alt_text, placeholder, hyperlink))
+}
+
+/// Parse `p:cNvPr`'s children (`a:hlinkClick`/`a:hlinkHover`) after the
+/// caller already consumed the `cNvPr` Start event and read its own
+/// attributes. Reads through the matching `</p:cNvPr>`. `a:hlinkClick`
+/// wins when both are present — a hover-only action with no click
+/// target is unusual and click is the primary action.
+///
+/// This is the shape's own click action (Action Buttons, "jump to
+/// slide" navigation icons) — a separate mechanism from the run-level
+/// `a:rPr/a:hlinkClick` hyperlink `parse_run_properties` already
+/// handles. Both `p:nvSpPr` (AutoShape) and `p:nvPicPr` (PictureShape)
+/// used to skip this subtree entirely, so a shape whose only purpose
+/// was its click action (typical for Action Buttons, which are drawn
+/// as icons with no text) vanished from the IR completely.
+fn parse_cnvpr_hyperlink(
+    reader: &mut quick_xml::Reader<&[u8]>,
+    rels: &Relationships,
+) -> CoreResult<Option<HyperlinkInfo>> {
+    let mut hover: Option<HyperlinkInfo> = None;
+    let mut click: Option<HyperlinkInfo> = None;
+    loop {
+        match reader.read_event()? {
+            Event::Start(ref e) if e.local_name().as_ref() == "hlinkClick" => {
+                click = parse_hlink_click(e, rels)?;
+                // A non-empty `<a:hlinkClick>...</a:hlinkClick>` can carry
+                // an `<a:snd>` child (Action Button sound); its content
+                // has no IR representation, so skip it.
+                xml::skip_element_fast(reader)?;
+            },
+            Event::Empty(ref e) if e.local_name().as_ref() == "hlinkClick" => {
+                click = parse_hlink_click(e, rels)?;
+            },
+            Event::Start(ref e) if e.local_name().as_ref() == "hlinkHover" => {
+                hover = parse_hlink_click(e, rels)?;
+                xml::skip_element_fast(reader)?;
+            },
+            Event::Empty(ref e) if e.local_name().as_ref() == "hlinkHover" => {
+                hover = parse_hlink_click(e, rels)?;
+            },
+            Event::End(ref e) if e.local_name().as_ref() == "cNvPr" => break,
+            Event::Eof => break,
+            _ => {},
+        }
+    }
+    Ok(click.or(hover))
+}
+
+/// What `p:nvPicPr` says about a picture.
+#[derive(Default)]
+struct NvPicProps {
+    id: u32,
+    name: String,
+    alt_text: Option<String>,
+    hyperlink: Option<HyperlinkInfo>,
+    media: Option<MediaReference>,
+}
+
+/// Parse `p:nvPicPr`: the `p:cNvPr` identity and click action, plus the
+/// audio/video clip a media shape's `p:nvPr` references.
+fn parse_nv_pic_props(
+    reader: &mut quick_xml::Reader<&[u8]>,
+    rels: &Relationships,
+) -> CoreResult<NvPicProps> {
+    let mut props = NvPicProps::default();
+    // The declared clip kind (`a:videoFile`/`a:audioFile`/…) and the id of
+    // its relationship; `p14:media` names the embedded copy, when present.
+    let mut declared: Option<(MediaKind, Option<String>)> = None;
+    let mut embedded_media: Option<String> = None;
+
+    let read_cnvpr =
+        |e: &quick_xml::events::BytesStart, props: &mut NvPicProps| -> CoreResult<()> {
+            props.id = xml::optional_attr_str(e, "id")?
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0);
+            props.name = xml::optional_attr_str(e, "name")?
+                .map(|v| v.into_owned())
+                .unwrap_or_default();
+            props.alt_text = xml::optional_attr_str(e, "descr")?.map(|v| v.into_owned());
+            Ok(())
+        };
+
+    loop {
+        match reader.read_event()? {
+            Event::Start(ref e) if e.local_name().as_ref() == "cNvPr" => {
+                read_cnvpr(e, &mut props)?;
+                props.hyperlink = parse_cnvpr_hyperlink(reader, rels)?;
+            },
+            Event::Empty(ref e) if e.local_name().as_ref() == "cNvPr" => {
+                read_cnvpr(e, &mut props)?;
+            },
+            Event::Start(ref e) | Event::Empty(ref e) => {
+                // ECMA-376 Part 1 §20.1.3: a:audioCd, a:audioFile,
+                // a:quickTimeFile, a:videoFile, a:wavAudioFile.
+                let kind = match e.local_name().as_ref() {
+                    "videoFile" | "quickTimeFile" => Some(MediaKind::Video),
+                    "audioFile" | "wavAudioFile" | "audioCd" => Some(MediaKind::Audio),
+                    // [MS-PPTX] p14:media: the embedded media part.
+                    "media" => {
+                        embedded_media = read_rel_attr(e, "embed")?.or(read_rel_attr(e, "link")?);
+                        None
+                    },
+                    _ => None,
+                };
+                if let Some(kind) = kind {
+                    if declared.is_none() {
+                        let rid = read_rel_attr(e, "link")?.or(read_rel_attr(e, "embed")?);
+                        declared = Some((kind, rid));
+                    }
+                }
+            },
+            Event::End(ref e) if e.local_name().as_ref() == "nvPicPr" => {
+                break;
+            },
+            Event::Eof => break,
+            _ => {},
+        }
+    }
+
+    let kind = declared.as_ref().map_or(MediaKind::Unknown, |(k, _)| *k);
+    let rid = embedded_media.or_else(|| declared.and_then(|(_, rid)| rid));
+    if let Some(rel) = rid.as_deref().and_then(|id| rels.get_by_id(id)) {
+        let external = rel.target_mode == TargetMode::External;
+        props.media = Some(MediaReference {
+            kind,
+            target: std::sync::Arc::clone(&rel.target),
+            external,
+        });
+    }
+
+    Ok(props)
+}
+/// Parse a non-visual-properties wrapper (`p:nvGrpSpPr`, `p:nvGraphicFramePr`,
+/// `p:nvCxnSpPr`) → (id, name) from its `p:cNvPr` child. `end_tag` is the
+/// wrapper's local name, which is the only thing that differs between them.
+fn parse_nv_id_name(
+    reader: &mut quick_xml::Reader<&[u8]>,
+    end_tag: &str,
+) -> CoreResult<(u32, String)> {
+    let mut id = 0u32;
+    let mut name = String::new();
+
+    loop {
+        match reader.read_event()? {
+            Event::Start(ref e) | Event::Empty(ref e) if e.local_name().as_ref() == "cNvPr" => {
+                id = xml::optional_attr_str(e, "id")?
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(0);
+                name = xml::optional_attr_str(e, "name")?
+                    .map(|v| v.into_owned())
+                    .unwrap_or_default();
+            },
+            Event::End(ref e) if e.local_name().as_ref() == end_tag => {
+                break;
+            },
+            Event::Eof => break,
+            _ => {},
+        }
+    }
+
+    Ok((id, name))
+}
+
+// ---------------------------------------------------------------------------
+// Shape properties (a:xfrm within p:spPr or p:grpSpPr)
+// ---------------------------------------------------------------------------
+
+/// Parse `p:spPr` or `p:grpSpPr` → extract position from `a:xfrm`.
+/// `end_tag` is the wrapper's local name.
+fn parse_shape_properties(
+    reader: &mut quick_xml::Reader<&[u8]>,
+    end_tag: &str,
+) -> CoreResult<Option<ShapePosition>> {
+    let mut position = None;
+
+    loop {
+        match reader.read_event()? {
+            Event::Start(ref e) if e.local_name().as_ref() == "xfrm" => {
+                position = Some(parse_xfrm_contents(reader)?);
+            },
+            Event::End(ref e) if e.local_name().as_ref() == end_tag => {
+                break;
+            },
+            Event::Eof => break,
+            _ => {},
+        }
+    }
+
+    Ok(position)
+}
+
+/// Parse `p:xfrm` (used in graphicFrame) → extract position.
+fn parse_xfrm(reader: &mut quick_xml::Reader<&[u8]>) -> CoreResult<Option<ShapePosition>> {
+    Ok(Some(parse_xfrm_contents(reader)?))
+}
+
+/// Parse the contents of an `a:xfrm` or `p:xfrm` element: `<a:off x y/>`, `<a:ext cx cy/>`.
+fn parse_xfrm_contents(reader: &mut quick_xml::Reader<&[u8]>) -> CoreResult<ShapePosition> {
+    let mut x = 0i64;
+    let mut y = 0i64;
+    let mut cx = 0i64;
+    let mut cy = 0i64;
+
+    loop {
+        match reader.read_event()? {
+            Event::Start(ref e) | Event::Empty(ref e) => match e.local_name().as_ref() {
+                "off" => {
+                    x = xml::optional_attr_str(e, "x")?
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(0);
+                    y = xml::optional_attr_str(e, "y")?
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(0);
+                },
+                "ext" => {
+                    cx = xml::optional_attr_str(e, "cx")?
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(0);
+                    cy = xml::optional_attr_str(e, "cy")?
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(0);
+                },
+                _ => {},
+            },
+            Event::End(_) => {
+                // End of xfrm
+                break;
+            },
+            Event::Eof => break,
+            _ => {},
+        }
+    }
+
+    Ok(ShapePosition { x, y, cx, cy })
+}
+
+// ---------------------------------------------------------------------------
+// Text body parsing (DrawingML a: namespace)
+// ---------------------------------------------------------------------------
+
+/// Parse `<p:txBody>` or `<a:txBody>`.
+fn parse_text_body(
+    reader: &mut quick_xml::Reader<&[u8]>,
+    rels: &Relationships,
+) -> CoreResult<TextBody> {
+    let mut paragraphs = Vec::new();
+    let mut list_style = None;
+
+    loop {
+        match reader.read_event()? {
+            Event::Start(ref e) => match e.local_name().as_ref() {
+                "p" => {
+                    paragraphs.push(parse_text_paragraph(reader, rels)?);
+                },
+                // The shape's own list style: the first inherited layer
+                // under the paragraph's and runs' direct formatting.
+                "lstStyle" => {
+                    list_style = Some(super::master::parse_level_styles(reader, "lstStyle")?);
+                },
+                _ => {
+                    xml::skip_element_fast(reader)?;
+                },
+            },
+            Event::End(_) => {
+                // End of txBody
+                break;
+            },
+            Event::Eof => break,
+            _ => {},
+        }
+    }
+
+    let mut body = TextBody { paragraphs };
+    if let Some(styles) = list_style.filter(|s| !s.is_empty()) {
+        for para in &mut body.paragraphs {
+            if let Some(d) = styles.level(para.level) {
+                apply_inherited_defaults(para, d);
+            }
+        }
+    }
+    Ok(body)
+}
+
+/// Fill every unset formatting field of `para` and its runs from inherited
+/// defaults — never overriding a value the paragraph or run specifies.
+pub(crate) fn apply_inherited_defaults(
+    para: &mut TextParagraph,
+    defaults: &super::master::MasterRunDefaults,
+) {
+    if para.alignment.is_none() {
+        para.alignment.clone_from(&defaults.alignment);
+    }
+    if para.bullet.is_none() {
+        para.bullet.clone_from(&defaults.bullet);
+    }
+    for content in &mut para.content {
+        if let TextContent::Run(run) = content {
+            if run.bold.is_none() {
+                run.bold = defaults.bold;
+            }
+            if run.italic.is_none() {
+                run.italic = defaults.italic;
+            }
+            if run.underline.is_none() {
+                run.underline.clone_from(&defaults.underline);
+            }
+            if run.font_size_hundredths_pt.is_none() {
+                run.font_size_hundredths_pt = defaults.font_size_hundredths_pt;
+            }
+            if run.color_rgb.is_none() {
+                run.color_rgb = defaults.color_rgb;
+            }
+        }
+    }
+}
+
+/// Parse `<a:p>`.
+fn parse_text_paragraph(
+    reader: &mut quick_xml::Reader<&[u8]>,
+    rels: &Relationships,
+) -> CoreResult<TextParagraph> {
+    let mut para = TextParagraph::default();
+    let mut content = Vec::new();
+
+    loop {
+        match reader.read_event()? {
+            Event::Start(ref e) => match e.local_name().as_ref() {
+                "pPr" => {
+                    para = parse_paragraph_properties(reader, e, true)?;
+                },
+                "r" => {
+                    content.push(TextContent::Run(parse_text_run(reader, rels)?));
+                },
+                "br" => {
+                    content.push(TextContent::LineBreak);
+                    xml::skip_element_fast(reader)?;
+                },
+                "fld" => {
+                    content.push(TextContent::Field(parse_text_field(reader, e)?));
+                },
+                // `<a14:m>` wraps an OMML equation (`<m:oMath>`/`<m:oMathPara>`)
+                // as a markup-compatibility extension; there's no structural
+                // math model, so pull out every `<m:t>` run so the equation's
+                // text isn't silently dropped (PPTX analogue of
+                // the DOCX OMML fix).
+                "m" => {
+                    let text = collect_a_t_text(reader, "m")?.concat();
+                    if !text.is_empty() {
+                        content.push(TextContent::Run(TextRun {
+                            text,
+                            ..Default::default()
+                        }));
+                    }
+                },
+                _ => {
+                    xml::skip_element_fast(reader)?;
+                },
+            },
+            Event::Empty(ref e) => match e.local_name().as_ref() {
+                "pPr" => {
+                    para = parse_paragraph_properties(reader, e, false)?;
+                },
+                "br" => {
+                    content.push(TextContent::LineBreak);
+                },
+                _ => {},
+            },
+            Event::End(ref e) if e.local_name().as_ref() == "p" => {
+                break;
+            },
+            Event::Eof => break,
+            _ => {},
+        }
+    }
+
+    para.content = content;
+    Ok(para)
+}
+
+/// Parse `<a:pPr>` (`CT_TextParagraphProperties`, ECMA-376 Part 1
+/// §21.1.2.2.7) into a paragraph with no content yet: `lvl`, `algn`,
+/// `marL`/`marR`/`indent`, and — for the Start form, read through its end
+/// tag — spacing before/after, line spacing, tab stops and the bullet.
+fn parse_paragraph_properties(
+    reader: &mut quick_xml::Reader<&[u8]>,
+    start: &quick_xml::events::BytesStart,
+    is_start: bool,
+) -> CoreResult<TextParagraph> {
+    let emu = |key: &str| -> CoreResult<Option<i64>> {
+        Ok(xml::optional_attr_str(start, key)?.and_then(|v| v.parse().ok()))
+    };
+    let mut para = TextParagraph {
+        level: xml::optional_attr_str(start, "lvl")?
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0),
+        alignment: parse_algn_attr(start)?,
+        margin_left_emu: emu("marL")?,
+        margin_right_emu: emu("marR")?,
+        indent_emu: emu("indent")?,
+        ..Default::default()
+    };
+    if !is_start {
+        return Ok(para);
+    }
+
+    /// Which spacing element (`spcBef`/`spcAft`/`lnSpc`) is open.
+    #[derive(Clone, Copy)]
+    enum Slot {
+        Before,
+        After,
+        Line,
+    }
+    let mut slot: Option<Slot> = None;
+    let mut in_bu_blip = false;
+    let mut depth = 1i32;
+    loop {
+        let event = reader.read_event()?;
+        let is_start_ev = matches!(event, Event::Start(_));
+        match event {
+            Event::Start(ref e) | Event::Empty(ref e) => {
+                match e.local_name().as_ref() {
+                    "spcBef" => slot = Some(Slot::Before),
+                    "spcAft" => slot = Some(Slot::After),
+                    "lnSpc" => slot = Some(Slot::Line),
+                    // §21.1.2.2.11 spcPts: hundredths of a point;
+                    // §21.1.2.2.12 spcPct: thousandths of a percent.
+                    name @ ("spcPts" | "spcPct") => {
+                        let val = xml::optional_attr_str(e, "val")?.and_then(|v| v.parse().ok());
+                        if let (Some(s), Some(v)) = (slot, val) {
+                            let spacing = if name == "spcPts" {
+                                TextSpacing::Points(v)
+                            } else {
+                                TextSpacing::Percent(v)
+                            };
+                            match s {
+                                Slot::Before => para.space_before = Some(spacing),
+                                Slot::After => para.space_after = Some(spacing),
+                                Slot::Line => para.line_spacing = Some(spacing),
+                            }
+                        }
+                    },
+                    "tab" => {
+                        if let Some(pos) =
+                            xml::optional_attr_str(e, "pos")?.and_then(|v| v.parse().ok())
+                        {
+                            para.tab_stops.push(TabStop {
+                                position_emu: pos,
+                                alignment: xml::optional_attr_str(e, "algn")?
+                                    .map(|v| v.into_owned()),
+                            });
+                        }
+                    },
+                    "buBlip" => {
+                        in_bu_blip = is_start_ev;
+                        para.bullet = Some(BulletStyle::Picture { rel_id: None });
+                    },
+                    "blip" if in_bu_blip => {
+                        para.bullet = Some(BulletStyle::Picture {
+                            rel_id: read_blip_embed_attr(e)?,
+                        });
+                    },
+                    _ => {
+                        if let Some(b) = parse_bullet(e)? {
+                            para.bullet = Some(b);
+                        }
+                    },
+                }
+                if is_start_ev {
+                    depth += 1;
+                }
+            },
+            Event::End(ref e) => {
+                depth -= 1;
+                match e.local_name().as_ref() {
+                    "spcBef" | "spcAft" | "lnSpc" => slot = None,
+                    "buBlip" => in_bu_blip = false,
+                    _ => {},
+                }
+                if depth <= 0 {
+                    break;
+                }
+            },
+            Event::Eof => break,
+            _ => {},
+        }
+    }
+    if let Some(TextSpacing::Points(v)) = para.space_before {
+        para.space_before_hundredths_pt = Some(v);
+    }
+    Ok(para)
+}
+
+/// `<a:pPr algn>` → alignment.
+fn parse_algn_attr(
+    e: &quick_xml::events::BytesStart,
+) -> CoreResult<Option<crate::ir::ParagraphAlignment>> {
+    use crate::ir::ParagraphAlignment;
+    Ok(xml::optional_attr_str(e, "algn")?.and_then(|v| match v.as_ref() {
+        "l" => Some(ParagraphAlignment::Left),
+        "ctr" => Some(ParagraphAlignment::Center),
+        "r" => Some(ParagraphAlignment::Right),
+        "just" | "justLow" => Some(ParagraphAlignment::Justify),
+        "dist" | "thaiDist" => Some(ParagraphAlignment::Distribute),
+        _ => None,
+    }))
+}
+
+/// Parse `<a:r>` text run.
+fn parse_text_run(
+    reader: &mut quick_xml::Reader<&[u8]>,
+    rels: &Relationships,
+) -> CoreResult<TextRun> {
+    let mut text = String::new();
+    let mut props = RunProps::default();
+
+    loop {
+        match reader.read_event()? {
+            Event::Start(ref e) => match e.local_name().as_ref() {
+                "rPr" => {
+                    props = parse_run_properties(reader, e, rels)?;
+                },
+                "t" => {
+                    text = xml::read_text_content_fast(reader)?;
+                },
+                _ => {
+                    xml::skip_element_fast(reader)?;
+                },
+            },
+            Event::Empty(ref e) if e.local_name().as_ref() == "rPr" => {
+                props = run_props_from_attrs(e)?;
+            },
+            Event::End(ref e) if e.local_name().as_ref() == "r" => {
+                break;
+            },
+            Event::Eof => break,
+            _ => {},
+        }
+    }
+
+    Ok(TextRun {
+        text,
+        bold: props.bold,
+        italic: props.italic,
+        strikethrough: props.strikethrough,
+        hyperlink: props.hyperlink,
+        font_size_hundredths_pt: props.font_size_hundredths_pt,
+        color_rgb: props.color_rgb,
+        underline: props.underline,
+        font_name: props.font_name,
+        baseline: props.baseline,
+        caps: props.caps,
+        char_spacing_hundredths_pt: props.char_spacing_hundredths_pt,
+    })
+}
+
+/// Parse run properties from an `<a:rPr>` Start element (has children like hlinkClick).
+fn parse_run_properties(
+    reader: &mut quick_xml::Reader<&[u8]>,
+    start: &quick_xml::events::BytesStart,
+    rels: &Relationships,
+) -> CoreResult<RunProps> {
+    let mut props = run_props_from_attrs(start)?;
+    let mut hyperlink = None;
+    let mut color_rgb: Option<[u8; 3]> = None;
+    let mut font_name: Option<String> = None;
+    // Track whether we are inside `<a:solidFill>` so we only pick up
+    // the inner `<a:srgbClr>` (the fill colour proper) and not
+    // unrelated `<a:srgbClr>` elements that may appear in sibling
+    // effects (e.g. `<a:hl><a:srgbClr/>` for hyperlink colour).
+    let mut in_solid_fill = false;
+
+    loop {
+        match reader.read_event()? {
+            Event::Start(ref e) => {
+                if e.local_name().as_ref() == "solidFill" {
+                    in_solid_fill = true;
+                } else if e.local_name().as_ref() == "hlinkClick" {
+                    hyperlink = parse_hlink_click(e, rels)?;
+                }
+            },
+            Event::Empty(ref e) => {
+                if e.local_name().as_ref() == "hlinkClick" {
+                    hyperlink = parse_hlink_click(e, rels)?;
+                } else if e.local_name().as_ref() == "latin" && font_name.is_none() {
+                    font_name = xml::optional_attr_str(e, "typeface")?.map(|v| v.into_owned());
+                } else if in_solid_fill
+                    && e.local_name().as_ref() == "srgbClr"
+                    && color_rgb.is_none()
+                {
+                    color_rgb = parse_srgb_clr(e);
+                }
+            },
+            Event::End(ref e) => {
+                if e.local_name().as_ref() == "solidFill" {
+                    in_solid_fill = false;
+                } else if e.local_name().as_ref() == "rPr" {
+                    break;
+                }
+            },
+            Event::Eof => break,
+            _ => {},
+        }
+    }
+
+    props.hyperlink = hyperlink;
+    props.color_rgb = color_rgb;
+    props.font_name = font_name;
+    Ok(props)
+}
+
+/// Decode a 6-hex-digit `val="RRGGBB"` attribute from `<a:srgbClr/>`
+/// to a `[u8; 3]`. Returns `None` when the attribute is absent or
+/// malformed.
+fn parse_srgb_clr(e: &quick_xml::events::BytesStart) -> Option<[u8; 3]> {
+    let val = xml::optional_attr_str(e, "val").ok().flatten()?;
+    let s = val.as_ref();
+    if s.len() != 6 {
+        return None;
+    }
+    let r = u8::from_str_radix(&s[0..2], 16).ok()?;
+    let g = u8::from_str_radix(&s[2..4], 16).ok()?;
+    let b = u8::from_str_radix(&s[4..6], 16).ok()?;
+    Some([r, g, b])
+}
+
+/// Parse a non-negative integer DrawingML attribute (e.g. `sz="1800"`).
+/// Returns `None` if the attribute is absent or not parseable.
+fn parse_u32_attr(e: &quick_xml::events::BytesStart, key: &str) -> CoreResult<Option<u32>> {
+    Ok(xml::optional_attr_str(e, key)?.and_then(|v| v.parse::<u32>().ok()))
+}
+
+/// Parse a DrawingML boolean attribute: `b="1"` → Some(true), `b="0"` → Some(false), absent → None.
+fn parse_bool_attr(e: &quick_xml::events::BytesStart, key: &str) -> CoreResult<Option<bool>> {
+    Ok(xml::optional_attr_str(e, key)?.map(|v| v.as_ref() != "0"))
+}
+
+/// Parse `<a:hlinkClick r:id="rId1" tooltip="..."/>` into a HyperlinkInfo.
+fn parse_hlink_click(
+    e: &quick_xml::events::BytesStart,
+    rels: &Relationships,
+) -> CoreResult<Option<HyperlinkInfo>> {
+    // A *present but empty* `r:id=""` is real, valid PowerPoint output —
+    // an Action Button whose only "target" is its own action attribute
+    // (e.g. `action="ppaction://noaction"` on a sound-effect button)
+    // still writes an empty r:id. Treating it the same as a real,
+    // unresolvable id used to give up entirely instead of falling
+    // through to `action`, losing the shape completely.
+    let r_id = xml::optional_attr_str(e, "r:id")?.filter(|v| !v.is_empty());
+    let tooltip = xml::optional_attr_str(e, "tooltip")?.map(|v| v.into_owned());
+    let action = xml::optional_attr_str(e, "action")?;
+
+    // A non-empty id that names no relationship (dangling after an edit)
+    // falls through to `action` as well, when there is one.
+    let resolved = r_id.as_deref().and_then(|id| rels.get_by_id(id));
+    let target = if let Some(rel) = resolved {
+        if rel.target_mode == TargetMode::External {
+            HyperlinkTarget::External(std::sync::Arc::clone(&rel.target))
+        } else {
+            HyperlinkTarget::Internal(std::sync::Arc::clone(&rel.target))
+        }
+    } else if let Some(ref action) = action {
+        // Internal action like ppaction://hlinksldjump
+        HyperlinkTarget::Internal(action.as_ref().into())
+    } else {
+        return Ok(None);
+    };
+
+    Ok(Some(HyperlinkInfo { target, tooltip }))
+}
+
+/// Parse `<a:fld type="..." ...>` field element.
+fn parse_text_field(
+    reader: &mut quick_xml::Reader<&[u8]>,
+    start: &quick_xml::events::BytesStart,
+) -> CoreResult<TextField> {
+    let field_type = xml::optional_attr_str(start, "type")?.map(|v| v.into_owned());
+    let mut text = String::new();
+
+    loop {
+        match reader.read_event()? {
+            Event::Start(ref e) if e.local_name().as_ref() == "t" => {
+                text = xml::read_text_content_fast(reader)?;
+            },
+            Event::End(ref e) if e.local_name().as_ref() == "fld" => {
+                break;
+            },
+            Event::Eof => break,
+            _ => {},
+        }
+    }
+
+    Ok(TextField { field_type, text })
+}
+
+// ---------------------------------------------------------------------------
+// Table parsing (DrawingML a: namespace)
+// ---------------------------------------------------------------------------
+
+/// Parse `<a:tbl>`.
+fn parse_table(reader: &mut quick_xml::Reader<&[u8]>, rels: &Relationships) -> CoreResult<Table> {
+    let mut rows = Vec::new();
+    let mut first_row_header = false;
+    let mut last_row_header = false;
+
+    loop {
+        let event = reader.read_event()?;
+        let is_start = matches!(event, Event::Start(_));
+        match event {
+            Event::Start(ref e) | Event::Empty(ref e) if e.local_name().as_ref() == "tblPr" => {
+                // `firstRow` is how a DrawingML table declares a header row.
+                // Assuming row 0 is always a header labelled data rows as
+                // headers in every table that does not have one.
+                first_row_header = xml::optional_attr_str(e, "firstRow")?
+                    .is_some_and(|v| v.as_ref() == "1" || v.as_ref() == "true");
+                last_row_header = xml::optional_attr_str(e, "lastRow")?
+                    .is_some_and(|v| v.as_ref() == "1" || v.as_ref() == "true");
+                // Only the Start form has children to skip. Reading one
+                // event unconditionally consumed whatever followed
+                // `<a:tblPr/>` — the first `<a:tr>` when there is no
+                // `<a:tblGrid>`.
+                if is_start {
+                    xml::skip_element_fast(reader)?;
+                }
+            },
+            Event::Start(ref e) => match e.local_name().as_ref() {
+                "tr" => {
+                    rows.push(parse_table_row(reader, rels)?);
+                },
+                _ => {
+                    xml::skip_element_fast(reader)?;
+                },
+            },
+            Event::End(ref e) if e.local_name().as_ref() == "tbl" => {
+                break;
+            },
+            Event::Eof => break,
+            _ => {},
+        }
+    }
+
+    Ok(Table {
+        rows,
+        first_row_header,
+        last_row_header,
+    })
+}
+
+/// Parse `<a:buNone/>`, `<a:buChar char="•"/>` or
+/// `<a:buAutoNum type="…" startAt="…"/>`.
+pub(crate) fn parse_bullet(e: &quick_xml::events::BytesStart) -> CoreResult<Option<BulletStyle>> {
+    Ok(match e.local_name().as_ref() {
+        "buNone" => Some(BulletStyle::None),
+        "buChar" => Some(BulletStyle::Char(
+            xml::optional_attr_str(e, "char")?
+                .map(|v| v.into_owned())
+                .unwrap_or_else(|| "\u{2022}".to_string()),
+        )),
+        "buAutoNum" => Some(BulletStyle::AutoNum {
+            scheme: xml::optional_attr_str(e, "type")?
+                .map(|v| v.into_owned())
+                .unwrap_or_else(|| "arabicPeriod".to_string()),
+            start_at: xml::optional_attr_str(e, "startAt")?.and_then(|v| v.parse().ok()),
+        }),
+        _ => None,
+    })
+}
+
+/// Parse `<a:tr>`.
+fn parse_table_row(
+    reader: &mut quick_xml::Reader<&[u8]>,
+    rels: &Relationships,
+) -> CoreResult<TableRow> {
+    let mut cells = Vec::new();
+
+    loop {
+        match reader.read_event()? {
+            Event::Start(ref e) if e.local_name().as_ref() == "tc" => {
+                cells.push(parse_table_cell(reader, e, rels)?);
+            },
+            Event::End(ref e) if e.local_name().as_ref() == "tr" => {
+                break;
+            },
+            Event::Eof => break,
+            _ => {},
+        }
+    }
+
+    Ok(TableRow { cells })
+}
+
+/// Parse `<a:tc>`.
+fn parse_table_cell(
+    reader: &mut quick_xml::Reader<&[u8]>,
+    start: &quick_xml::events::BytesStart,
+    rels: &Relationships,
+) -> CoreResult<TableCell> {
+    // Spans are clamped at parse time. Unbounded, they reach the DOCX
+    // writer's grid loop through the IR and make it iterate
+    // gridSpan * rowSpan times, so a hostile deck could hang save_as
+    // indefinitely without allocating anything.
+    const MAX_SPAN: u32 = 1_000;
+    let grid_span: u32 = xml::optional_attr_str(start, "gridSpan")?
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1)
+        .clamp(1, MAX_SPAN);
+    let row_span: u32 = xml::optional_attr_str(start, "rowSpan")?
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1)
+        .clamp(1, MAX_SPAN);
+    let h_merge = xml::optional_attr_str(start, "hMerge")?
+        .is_some_and(|v| v.as_ref() == "1" || v.as_ref() == "true");
+    let v_merge = xml::optional_attr_str(start, "vMerge")?
+        .is_some_and(|v| v.as_ref() == "1" || v.as_ref() == "true");
+
+    let mut text_body = None;
+
+    loop {
+        match reader.read_event()? {
+            Event::Start(ref e) if e.local_name().as_ref() == "txBody" => {
+                text_body = Some(parse_text_body(reader, rels)?);
+            },
+            Event::End(ref e) if e.local_name().as_ref() == "tc" => {
+                break;
+            },
+            Event::Eof => break,
+            _ => {},
+        }
+    }
+
+    Ok(TableCell {
+        text_body,
+        grid_span,
+        row_span,
+        h_merge,
+        v_merge,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Notes text extraction (used by lib.rs)
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+thread_local! {
+    /// How many comments parts this thread has parsed (tests only).
+    pub(crate) static COMMENT_PARSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Parse a slide comments part.
+///
+/// Handles both shapes PowerPoint writes: the legacy
+/// `<p:cmLst><p:cm authorId="0"><p:text>…` (ECMA-376 Part 1 §19.4) and the
+/// modern `<p188:cmLst><p188:cm authorId="{guid}"><p188:txBody><a:p>…`
+/// ([MS-PPTX] modern comments), whose `<p188:replyLst>` replies each become
+/// a comment of their own, after the comment they answer. `authors` maps an
+/// author id to its display name — read from the presentation's
+/// comment-authors / authors part, see [`parse_comment_authors`].
+///
+/// A part that is not well-formed gives the comments read before the damage
+/// and, second, why reading stopped.
+pub(crate) fn parse_comments(
+    xml_data: &[u8],
+    authors: &std::collections::HashMap<String, String>,
+) -> (Vec<SlideComment>, Option<String>) {
+    #[cfg(test)]
+    COMMENT_PARSES.with(|n| n.set(n.get() + 1));
+    /// One open `cm` or `reply` element.
+    struct Frame {
+        author_id: Option<String>,
+        text: String,
+        /// Set at the end of an `<a:p>`; the next text starts a new
+        /// paragraph, separated by a space.
+        paragraph_ended: bool,
+        replies: Vec<SlideComment>,
+    }
+    impl Frame {
+        fn finish(self, authors: &std::collections::HashMap<String, String>) -> SlideComment {
+            SlideComment {
+                author: self.author_id.and_then(|id| authors.get(&id).cloned()),
+                text: self.text,
+            }
+        }
+    }
+
+    let mut reader = make_content_reader(xml_data);
+    let mut out = Vec::new();
+    let mut frames: Vec<Frame> = Vec::new();
+    let mut error = None;
+
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(ref e)) => match e.local_name().as_ref() {
+                "cm" | "reply" => frames.push(Frame {
+                    author_id: xml::optional_attr_str(e, "authorId")
+                        .ok()
+                        .flatten()
+                        .map(|v| v.into_owned()),
+                    text: String::new(),
+                    paragraph_ended: false,
+                    replies: Vec::new(),
+                }),
+                "text" | "t" => {
+                    let Some(frame) = frames.last_mut() else {
+                        continue;
+                    };
+                    if let Ok(t) = xml::read_text_content_fast(&mut reader) {
+                        if !t.is_empty() {
+                            if frame.paragraph_ended && !frame.text.is_empty() {
+                                frame.text.push(' ');
+                            }
+                            frame.paragraph_ended = false;
+                            frame.text.push_str(&t);
+                        }
+                    }
+                },
+                _ => {},
+            },
+            Ok(Event::End(ref e)) => match e.local_name().as_ref() {
+                "p" => {
+                    if let Some(frame) = frames.last_mut() {
+                        frame.paragraph_ended = true;
+                    }
+                },
+                "reply" => {
+                    if let Some(frame) = frames.pop() {
+                        let reply = frame.finish(authors);
+                        match frames.last_mut() {
+                            Some(parent) if !reply.text.trim().is_empty() => {
+                                parent.replies.push(reply)
+                            },
+                            None if !reply.text.trim().is_empty() => out.push(reply),
+                            _ => {},
+                        }
+                    }
+                },
+                "cm" => {
+                    if let Some(mut frame) = frames.pop() {
+                        let replies = std::mem::take(&mut frame.replies);
+                        let mut comment = frame.finish(authors);
+                        comment.text = comment.text.trim().to_string();
+                        if !comment.text.is_empty() {
+                            out.push(comment);
+                        }
+                        out.extend(replies.into_iter().map(|mut r| {
+                            r.text = r.text.trim().to_string();
+                            r
+                        }));
+                    }
+                },
+                _ => {},
+            },
+            Ok(Event::Eof) => break,
+            Err(e) => {
+                error = Some(e.to_string());
+                break;
+            },
+            _ => {},
+        }
+    }
+    (out, error)
+}
+
+/// Parse a comment-authors part into `id → name`: the legacy
+/// `<p:cmAuthorLst><p:cmAuthor id="0" name="…"/>` (ECMA-376 Part 1
+/// §19.4.2) or the modern `<p188:authorLst><p188:author id="{guid}"
+/// name="…"/>` ([MS-PPTX] authors part).
+///
+/// A part that is not well-formed gives the authors read before the damage
+/// and, second, why reading stopped.
+pub(crate) fn parse_comment_authors(
+    xml_data: &[u8],
+) -> (std::collections::HashMap<String, String>, Option<String>) {
+    let mut reader = make_content_reader(xml_data);
+    let mut authors = std::collections::HashMap::new();
+    let mut error = None;
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(ref e)) | Ok(Event::Empty(ref e))
+                if matches!(e.local_name().as_ref(), "cmAuthor" | "author") =>
+            {
+                let id = xml::optional_attr_str(e, "id").ok().flatten();
+                let name = xml::optional_attr_str(e, "name").ok().flatten();
+                if let (Some(id), Some(name)) = (id, name) {
+                    authors.insert(id.into_owned(), name.into_owned());
+                }
+            },
+            Ok(Event::Eof) => break,
+            Err(e) => {
+                error = Some(e.to_string());
+                break;
+            },
+            _ => {},
+        }
+    }
+    (authors, error)
+}
+
+/// Extract the speaker notes body from a notes slide XML. Finds the
+/// body placeholder (`type="body"`) and returns its structured
+/// `TextBody` — the same model ordinary slide body text uses, so a
+/// caller converting it (see `convert_text_body` in `convert_pptx.rs`)
+/// gets the same bold/italic/bullet/numbering fidelity for free.
+///
+/// `rels` are the notes part's own relationships, so hyperlinks in the
+/// notes resolve. A notes part that is not well-formed is an `Err`, for the
+/// caller to record — it used to read as "no notes".
+pub(crate) fn extract_notes_body(
+    xml_data: &[u8],
+    rels: &Relationships,
+) -> CoreResult<Option<TextBody>> {
+    let mut reader = make_content_reader(xml_data);
+    let mut shapes = Vec::new();
+
+    // Parse the notes slide's shape tree
+    loop {
+        match reader.read_event()? {
+            Event::Start(ref e) if e.local_name().as_ref() == "spTree" => {
+                shapes = parse_shape_tree(
+                    &mut reader,
+                    rels,
+                    &std::collections::HashMap::new(),
+                    &std::collections::HashMap::new(),
+                )?;
+            },
+            Event::Eof => break,
+            _ => {},
+        }
+    }
+
+    // Find the body placeholder and return its text body.
+    for shape in &shapes {
+        if let Shape::AutoShape(auto) = shape {
+            if let Some(ref ph) = auto.placeholder {
+                if ph.ph_type.as_deref() == Some("body") {
+                    if let Some(ref tb) = auto.text_body {
+                        if !extract_plain_text_from_body(tb).is_empty() {
+                            return Ok(Some(tb.clone()));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(None)
+}
+
+/// Extract plain text from a TextBody.
+pub(crate) fn extract_plain_text_from_body(body: &TextBody) -> String {
+    let mut parts = Vec::new();
+    for para in &body.paragraphs {
+        let mut para_text = String::new();
+        for content in &para.content {
+            match content {
+                TextContent::Run(run) => para_text.push_str(&run.text),
+                TextContent::LineBreak => para_text.push('\n'),
+                TextContent::Field(field) => para_text.push_str(&field.text),
+            }
+        }
+        parts.push(para_text);
+    }
+    parts.join("\n")
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+
+    const DIAGRAM_HEAD: &str = r#"<dgm:dataModel xmlns:dgm="http://schemas.openxmlformats.org/drawingml/2006/diagram" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><dgm:ptLst><dgm:pt><dgm:t><a:p><a:r><a:t>first point</a:t></a:r></a:p></dgm:t></dgm:pt>"#;
+
+    #[test]
+    fn test_a_sound_diagram_part_reports_no_damage() {
+        let xml = format!("{DIAGRAM_HEAD}</dgm:ptLst></dgm:dataModel>");
+        let (lines, damage) = diagram_data_text_lines(xml.as_bytes());
+        assert_eq!(lines, vec!["first point".to_string()]);
+        assert_eq!(damage, None);
+    }
+
+    #[test]
+    fn test_a_damaged_diagram_part_keeps_what_came_first_and_says_it_was_cut() {
+        for tail in ["<dgm:pt><dgm:t><a:p><a:r", "<dgm:pt><<", "<dgm:pt>"] {
+            let xml = format!("{DIAGRAM_HEAD}{tail}");
+            let (lines, damage) = diagram_data_text_lines(xml.as_bytes());
+            assert_eq!(lines, vec!["first point".to_string()], "{tail}");
+            assert!(damage.is_some(), "{tail}");
+        }
+    }
+    use super::*;
+
+    fn make_slide_xml(body: &str) -> Vec<u8> {
+        format!(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
+       xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"
+       xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <p:cSld>
+    <p:spTree>
+      <p:nvGrpSpPr>
+        <p:cNvPr id="1" name=""/>
+        <p:cNvGrpSpPr/>
+        <p:nvPr/>
+      </p:nvGrpSpPr>
+      <p:grpSpPr/>
+      {body}
+    </p:spTree>
+  </p:cSld>
+</p:sld>"#
+        )
+        .into_bytes()
+    }
+
+    /// Parse a slide whose spTree holds `body`, with the given rels.
+    fn parse_with_rels(body: &str, rels_xml: Option<&[u8]>) -> Slide {
+        let xml = make_slide_xml(body);
+        let rels = match rels_xml {
+            Some(r) => Relationships::parse(r).unwrap(),
+            None => Relationships::empty(),
+        };
+        Slide::parse(
+            &xml,
+            String::new(),
+            &rels,
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
+        )
+        .unwrap()
+    }
+
+    fn only_table(slide: &Slide) -> &Table {
+        match slide.shapes.as_slice() {
+            [
+                Shape::GraphicFrame(GraphicFrame {
+                    content: GraphicContent::Table(t),
+                    ..
+                }),
+            ] => t,
+            other => panic!("expected one table frame, got {other:?}"),
+        }
+    }
+
+    fn only_paragraphs(slide: &Slide) -> &[TextParagraph] {
+        match slide.shapes.as_slice() {
+            [
+                Shape::AutoShape(AutoShape {
+                    text_body: Some(tb),
+                    ..
+                }),
+            ] => &tb.paragraphs,
+            other => panic!("expected one text shape, got {other:?}"),
+        }
+    }
+
+    /// Only `spcBef`/`spcPts` and the bullet were read from `<a:pPr>`:
+    /// space after, line spacing, the percent form of every spacing, the
+    /// margins/indent, tab stops and picture bullets were dropped.
+    #[test]
+    fn test_paragraph_properties_spacing_indent_tabs_and_picture_bullet() {
+        let slide = parse_with_rels(
+            r#"<p:sp><p:nvSpPr><p:cNvPr id="2" name="T"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/>
+              <a:p><a:pPr marL="457200" marR="91440" indent="-228600" lvl="1">
+                <a:lnSpc><a:spcPct val="150000"/></a:lnSpc>
+                <a:spcBef><a:spcPct val="20000"/></a:spcBef>
+                <a:spcAft><a:spcPts val="600"/></a:spcAft>
+                <a:buBlip><a:blip r:embed="rIdB"/></a:buBlip>
+                <a:tabLst><a:tab pos="914400" algn="ctr"/><a:tab pos="1828800"/></a:tabLst>
+              </a:pPr><a:r><a:t>X</a:t></a:r></a:p>
+              <a:p><a:pPr><a:spcBef><a:spcPts val="1200"/></a:spcBef><a:lnSpc><a:spcPts val="2400"/></a:lnSpc></a:pPr><a:r><a:t>Y</a:t></a:r></a:p>
+            </p:txBody></p:sp>"#,
+            None,
+        );
+        let paras = only_paragraphs(&slide);
+        let p = &paras[0];
+        assert_eq!(p.level, 1);
+        assert_eq!(
+            (p.margin_left_emu, p.margin_right_emu, p.indent_emu),
+            (Some(457_200), Some(91_440), Some(-228_600))
+        );
+        assert_eq!(p.line_spacing, Some(TextSpacing::Percent(150_000)));
+        assert_eq!(p.space_before, Some(TextSpacing::Percent(20_000)));
+        assert_eq!(p.space_before_hundredths_pt, None, "a percentage is not points");
+        assert_eq!(p.space_after, Some(TextSpacing::Points(600)));
+        assert_eq!(
+            p.bullet,
+            Some(BulletStyle::Picture {
+                rel_id: Some("rIdB".into())
+            })
+        );
+        assert_eq!(
+            p.tab_stops,
+            vec![
+                TabStop {
+                    position_emu: 914_400,
+                    alignment: Some("ctr".into())
+                },
+                TabStop {
+                    position_emu: 1_828_800,
+                    alignment: None
+                },
+            ]
+        );
+        let q = &paras[1];
+        assert_eq!(q.space_before_hundredths_pt, Some(1200));
+        assert_eq!(q.line_spacing, Some(TextSpacing::Points(2400)));
+        assert_eq!(
+            extract_plain_text_from_body(&TextBody {
+                paragraphs: paras.to_vec()
+            }),
+            "X\nY"
+        );
+    }
+
+    /// The same properties reach the IR paragraph.
+    #[test]
+    fn test_paragraph_properties_reach_the_ir() {
+        let slide = parse_with_rels(
+            r#"<p:sp><p:nvSpPr><p:cNvPr id="2" name="T"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/>
+              <a:p><a:pPr marL="457200" indent="-228600"><a:lnSpc><a:spcPct val="150000"/></a:lnSpc><a:spcAft><a:spcPts val="600"/></a:spcAft><a:tabLst><a:tab pos="914400" algn="r"/></a:tabLst></a:pPr><a:r><a:t>X</a:t></a:r></a:p>
+            </p:txBody></p:sp>"#,
+            None,
+        );
+        let doc = crate::pptx::PptxDocument {
+            input_bytes: 0,
+            presentation: crate::pptx::PresentationInfo {
+                slides: Vec::new(),
+                slide_size: None,
+            },
+            slides: vec![slide],
+            theme: None,
+            embedded_fonts: Vec::new(),
+            core_properties: None,
+            app_properties: None,
+            has_macros: false,
+            unreadable_parts: Vec::new(),
+            unreadable_parts_omitted: 0,
+            cosmetic_parts: Vec::new(),
+            layouts: Vec::new(),
+            masters: Vec::new(),
+            package_properties: Default::default(),
+        };
+        let ir = crate::convert_pptx::pptx_to_ir(&doc);
+        let crate::ir::Element::Paragraph(ref p) = ir.sections[0].elements[0] else {
+            panic!("expected a paragraph: {:?}", ir.sections[0].elements);
+        };
+        assert_eq!(p.indent_left_twips, Some(720));
+        assert_eq!(p.first_line_indent_twips, Some(-360));
+        assert_eq!(p.space_after_twips, Some(120));
+        assert_eq!(p.line_spacing, Some(crate::ir::LineSpacing::Auto(360)));
+        assert_eq!(p.tabs.len(), 1);
+        assert_eq!(p.tabs[0].position_twips, 1440);
+        assert_eq!(p.tabs[0].alignment, crate::ir::TabAlignment::Right);
+    }
+
+    /// Percent-form space before/after (`<a:spcBef>`/`<a:spcAft>` holding
+    /// `<a:spcPct>`, §21.1.2.2.11) was parsed but dropped from the IR: it
+    /// is a percentage of the text size, which is now taken from the
+    /// paragraph's resolved run size (own `sz`, or inherited through the
+    /// shape's list style), and 18 pt when nothing in the chain sets one.
+    #[test]
+    fn test_percent_paragraph_spacing_uses_the_resolved_font_size() {
+        let slide = parse_with_rels(
+            r#"<p:sp><p:nvSpPr><p:cNvPr id="2" name="T"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/>
+              <a:p><a:pPr><a:spcBef><a:spcPct val="50000"/></a:spcBef><a:spcAft><a:spcPct val="25000"/></a:spcAft></a:pPr><a:r><a:rPr sz="2400"/><a:t>Own</a:t></a:r></a:p>
+              <a:p><a:pPr><a:spcAft><a:spcPct val="20000"/></a:spcAft></a:pPr><a:r><a:t>Default</a:t></a:r></a:p>
+            </p:txBody></p:sp>
+            <p:sp><p:nvSpPr><p:cNvPr id="3" name="U"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/>
+              <a:lstStyle><a:lvl1pPr><a:defRPr sz="4000"/></a:lvl1pPr></a:lstStyle>
+              <a:p><a:pPr><a:spcBef><a:spcPct val="100000"/></a:spcBef><a:lnSpc><a:spcPct val="90000"/></a:lnSpc></a:pPr><a:r><a:t>Inherited</a:t></a:r></a:p>
+            </p:txBody></p:sp>"#,
+            None,
+        );
+        let doc = crate::pptx::PptxDocument {
+            input_bytes: 0,
+            presentation: crate::pptx::PresentationInfo {
+                slides: Vec::new(),
+                slide_size: None,
+            },
+            slides: vec![slide],
+            theme: None,
+            embedded_fonts: Vec::new(),
+            core_properties: None,
+            app_properties: None,
+            has_macros: false,
+            unreadable_parts: Vec::new(),
+            unreadable_parts_omitted: 0,
+            cosmetic_parts: Vec::new(),
+            layouts: Vec::new(),
+            masters: Vec::new(),
+            package_properties: Default::default(),
+        };
+        let ir = crate::convert_pptx::pptx_to_ir(&doc);
+        let paras: Vec<_> = ir.sections[0]
+            .elements
+            .iter()
+            .map(|e| match e {
+                crate::ir::Element::Paragraph(p) => {
+                    (p.space_before_twips, p.space_after_twips, p.line_spacing.clone())
+                },
+                other => panic!("expected a paragraph: {other:?}"),
+            })
+            .collect();
+        assert_eq!(
+            paras,
+            [
+                // 50% / 25% of 24 pt = 12 pt / 6 pt.
+                (Some(240), Some(120), None),
+                // 20% of the 18 pt default = 3.6 pt.
+                (None, Some(72), None),
+                // 100% of the list style's 40 pt; 90% line spacing stays
+                // proportional (240ths of a line).
+                (Some(800), None, Some(crate::ir::LineSpacing::Auto(216))),
+            ]
+        );
+    }
+
+    /// `<a:tblPr/>` followed directly by a row (no `<a:tblGrid>`, which a
+    /// damaged or minimal producer can omit): the parser consumed one event
+    /// past `tblPr` unconditionally, which swallowed the first `<a:tr>`.
+    #[test]
+    fn test_table_row_directly_after_tbl_pr_is_kept() {
+        for tbl_pr in [
+            r#"<a:tblPr firstRow="1"/>"#,
+            r#"<a:tblPr firstRow="1"><a:tableStyleId>{X}</a:tableStyleId></a:tblPr>"#,
+        ] {
+            let slide = parse_with_rels(
+                &format!(
+                    r#"<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="2" name="T"/></p:nvGraphicFramePr>
+                    <a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/table">
+                    <a:tbl>{tbl_pr}<a:tr><a:tc><a:txBody><a:p><a:r><a:t>R1</a:t></a:r></a:p></a:txBody></a:tc></a:tr>
+                      <a:tr><a:tc><a:txBody><a:p><a:r><a:t>R2</a:t></a:r></a:p></a:txBody></a:tc></a:tr>
+                    </a:tbl></a:graphicData></a:graphic></p:graphicFrame>"#
+                ),
+                None,
+            );
+            let t = only_table(&slide);
+            assert!(t.first_row_header);
+            let texts: Vec<String> = t
+                .rows
+                .iter()
+                .map(|r| extract_plain_text_from_body(r.cells[0].text_body.as_ref().unwrap()))
+                .collect();
+            assert_eq!(texts, ["R1", "R2"], "{tbl_pr}");
+        }
+    }
+
+    #[test]
+    fn test_parse_auto_shape_with_text() {
+        let xml = make_slide_xml(
+            r#"<p:sp>
+  <p:nvSpPr>
+    <p:cNvPr id="4" name="Title 1" descr="Alt text"/>
+    <p:cNvSpPr/>
+    <p:nvPr><p:ph type="title"/></p:nvPr>
+  </p:nvSpPr>
+  <p:spPr>
+    <a:xfrm>
+      <a:off x="457200" y="274638"/>
+      <a:ext cx="8229600" cy="1143000"/>
+    </a:xfrm>
+  </p:spPr>
+  <p:txBody>
+    <a:bodyPr/>
+    <a:p>
+      <a:r><a:t>Hello World</a:t></a:r>
+    </a:p>
+  </p:txBody>
+</p:sp>"#,
+        );
+
+        let rels = Relationships::empty();
+        let slide = Slide::parse(
+            &xml,
+            "Slide1".to_string(),
+            &rels,
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
+        )
+        .unwrap();
+
+        assert_eq!(slide.shapes.len(), 1);
+        if let Shape::AutoShape(ref auto) = slide.shapes[0] {
+            assert_eq!(auto.id, 4);
+            assert_eq!(auto.name, "Title 1");
+            assert_eq!(auto.alt_text.as_deref(), Some("Alt text"));
+            assert!(auto.placeholder.is_some());
+            assert_eq!(auto.placeholder.as_ref().unwrap().ph_type.as_deref(), Some("title"));
+            let pos = auto.position.as_ref().unwrap();
+            assert_eq!(pos.x, 457200);
+            assert_eq!(pos.y, 274638);
+            assert_eq!(pos.cx, 8229600);
+            assert_eq!(pos.cy, 1143000);
+            let tb = auto.text_body.as_ref().unwrap();
+            assert_eq!(tb.paragraphs.len(), 1);
+            assert_eq!(tb.paragraphs[0].content.len(), 1);
+            if let TextContent::Run(ref run) = tb.paragraphs[0].content[0] {
+                assert_eq!(run.text, "Hello World");
+            } else {
+                panic!("expected text run");
+            }
+        } else {
+            panic!("expected auto shape");
+        }
+    }
+
+    /// A shape's own click action (`p:cNvPr > a:hlinkClick`)
+    /// used to be discarded entirely (the cNvPr Start branch called
+    /// `skip_element_fast`); an Action Button (drawn as an icon with no
+    /// text, whose entire purpose is the click target) vanished from the
+    /// IR completely. Mirrors the real corpus shape poi_51187.pptx: no
+    /// text, an `action="ppaction://hlinksldjump"` jump resolved via
+    /// `r:id`.
+    #[test]
+    fn test_parse_auto_shape_shape_level_hyperlink() {
+        let xml = make_slide_xml(
+            r#"<p:sp>
+  <p:nvSpPr>
+    <p:cNvPr id="5" name="Icon 1" descr="SRS_Globe_lr2">
+      <a:hlinkClick r:id="rId3" action="ppaction://hlinksldjump"/>
+    </p:cNvPr>
+    <p:cNvSpPr/>
+    <p:nvPr/>
+  </p:nvSpPr>
+  <p:spPr/>
+</p:sp>"#,
+        );
+        let rels_xml = br#"<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId3"
+    Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide"
+    Target="slide2.xml"/>
+</Relationships>"#;
+        let rels = Relationships::parse(rels_xml).unwrap();
+        let slide = Slide::parse(
+            &xml,
+            "Slide1".to_string(),
+            &rels,
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
+        )
+        .unwrap();
+
+        assert_eq!(slide.shapes.len(), 1);
+        let Shape::AutoShape(ref auto) = slide.shapes[0] else {
+            panic!("expected auto shape");
+        };
+        assert_eq!(auto.alt_text.as_deref(), Some("SRS_Globe_lr2"));
+        let hl = auto.hyperlink.as_ref().expect("hyperlink must be captured");
+        match &hl.target {
+            HyperlinkTarget::Internal(target) => assert_eq!(&**target, "slide2.xml"),
+            other => panic!("expected an Internal target, got {other:?}"),
+        }
+    }
+
+    /// A `<a:hlinkClick>` with a non-empty body (e.g. an `<a:snd>` child
+    /// for an Action Button's click sound, as in
+    /// aspose-slides_HyperlinkSound.pptx) must still be captured and must
+    /// not desync the reader — the child content itself has no IR
+    /// representation and is simply skipped.
+    #[test]
+    fn test_parse_auto_shape_hlink_click_with_child_element() {
+        let xml = make_slide_xml(
+            r#"<p:sp>
+  <p:nvSpPr>
+    <p:cNvPr id="6" name="Action Button">
+      <a:hlinkClick r:id="rId4" action="ppaction://noaction">
+        <a:snd r:embed="rId5" name="push.wav"/>
+      </a:hlinkClick>
+    </p:cNvPr>
+    <p:cNvSpPr/>
+    <p:nvPr/>
+  </p:nvSpPr>
+  <p:spPr/>
+</p:sp>"#,
+        );
+        let rels_xml = br#"<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId4"
+    Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide"
+    Target="slide3.xml"/>
+</Relationships>"#;
+        let rels = Relationships::parse(rels_xml).unwrap();
+        let slide = Slide::parse(
+            &xml,
+            "Slide1".to_string(),
+            &rels,
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
+        )
+        .unwrap();
+
+        assert_eq!(slide.shapes.len(), 1);
+        let Shape::AutoShape(ref auto) = slide.shapes[0] else {
+            panic!("expected auto shape");
+        };
+        assert!(
+            auto.hyperlink.is_some(),
+            "hlinkClick with a child element must still be captured"
+        );
+    }
+
+    /// A *present but empty* `r:id=""` (real PowerPoint
+    /// output for an Action Button whose only target is its own
+    /// `action` attribute, e.g. `action="ppaction://noaction"`) used to
+    /// be treated the same as a genuinely unresolvable id and give up
+    /// entirely instead of falling through to `action`, losing the
+    /// shape completely. Mirrors the real corpus file
+    /// aspose-slides_HyperlinkSound.pptx exactly.
+    #[test]
+    fn test_parse_hlink_click_empty_r_id_falls_back_to_action() {
+        let xml = make_slide_xml(
+            r#"<p:sp>
+  <p:nvSpPr>
+    <p:cNvPr id="7" name="Action Button: Sound">
+      <a:hlinkClick r:id="" action="ppaction://noaction">
+        <a:snd r:embed="rId2" name="push.wav"/>
+      </a:hlinkClick>
+    </p:cNvPr>
+    <p:cNvSpPr/>
+    <p:nvPr/>
+  </p:nvSpPr>
+  <p:spPr/>
+</p:sp>"#,
+        );
+        let rels = Relationships::empty();
+        let slide = Slide::parse(
+            &xml,
+            "Slide1".to_string(),
+            &rels,
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
+        )
+        .unwrap();
+
+        assert_eq!(slide.shapes.len(), 1);
+        let Shape::AutoShape(ref auto) = slide.shapes[0] else {
+            panic!("expected auto shape");
+        };
+        let hl = auto
+            .hyperlink
+            .as_ref()
+            .expect("an empty r:id must fall back to the action attribute");
+        match &hl.target {
+            HyperlinkTarget::Internal(action) => assert_eq!(&**action, "ppaction://noaction"),
+            other => panic!("expected an Internal action target, got {other:?}"),
+        }
+    }
+
+    /// A non-empty `r:id` that names no relationship (a dangling id left by
+    /// an editor) discarded the click action outright, even when the
+    /// element's own `action` attribute says what the click does.
+    #[test]
+    fn test_unresolvable_hlink_r_id_falls_back_to_action() {
+        let slide = parse_with_rels(
+            r#"<p:sp><p:nvSpPr>
+                 <p:cNvPr id="7" name="Button"><a:hlinkClick r:id="rId99" action="ppaction://hlinkshowjump?jump=nextslide"/></p:cNvPr>
+                 <p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr/></p:sp>"#,
+            None,
+        );
+        let Shape::AutoShape(ref auto) = slide.shapes[0] else {
+            panic!("expected auto shape");
+        };
+        match auto.hyperlink.as_ref().map(|h| &h.target) {
+            Some(HyperlinkTarget::Internal(a)) => {
+                assert_eq!(&**a, "ppaction://hlinkshowjump?jump=nextslide")
+            },
+            other => panic!("expected the action fallback, got {other:?}"),
+        }
+        // Without an action there is nothing to fall back to.
+        let slide = parse_with_rels(
+            r#"<p:sp><p:nvSpPr>
+                 <p:cNvPr id="7" name="Button"><a:hlinkClick r:id="rId99"/></p:cNvPr>
+                 <p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr/></p:sp>"#,
+            None,
+        );
+        let Shape::AutoShape(ref auto) = slide.shapes[0] else {
+            panic!("expected auto shape");
+        };
+        assert!(auto.hyperlink.is_none());
+    }
+
+    /// The slide XML only ever holds `<c:chart r:id="…"/>` — a reference,
+    /// no text — so `parse_graphic_frame` must resolve it against the
+    /// pre-extracted `charts` map (keyed by that same rId) rather than
+    /// finding nothing via the generic `<a:t>` scan every other
+    /// non-table graphic falls back to. XML shape matches
+    /// a real corpus file (docx4j_pptx-chart.pptx) byte-for-byte on the
+    /// graphicData/c:chart structure.
+    #[test]
+    fn test_parse_graphic_frame_resolves_chart_text_from_the_charts_map() {
+        let xml = make_slide_xml(
+            r#"<p:graphicFrame>
+  <p:nvGraphicFramePr>
+    <p:cNvPr id="5" name="Test Chart"/>
+    <p:cNvGraphicFramePr/>
+    <p:nvPr/>
+  </p:nvGraphicFramePr>
+  <p:xfrm><a:off x="0" y="0"/><a:ext cx="100" cy="100"/></p:xfrm>
+  <a:graphic>
+    <a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart">
+      <c:chart xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"
+               xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+               r:id="rId2"/>
+    </a:graphicData>
+  </a:graphic>
+</p:graphicFrame>"#,
+        );
+        let mut charts = std::collections::HashMap::new();
+        charts.insert(
+            "rId2".to_string(),
+            std::sync::Arc::from(vec![
+                "Title: Dollars per Group".to_string(),
+                "Categories: Group 1, Group 2".to_string(),
+            ]),
+        );
+
+        let slide = Slide::parse(
+            &xml,
+            String::new(),
+            &Relationships::empty(),
+            &std::collections::HashMap::new(),
+            &charts,
+        )
+        .unwrap();
+
+        match &slide.shapes[0] {
+            Shape::GraphicFrame(gf) => match &gf.content {
+                GraphicContent::Text(lines) => {
+                    assert!(lines.contains(&"Title: Dollars per Group".to_string()), "{lines:?}");
+                    assert!(
+                        lines.contains(&"Categories: Group 1, Group 2".to_string()),
+                        "{lines:?}"
+                    );
+                },
+                other => panic!("expected GraphicContent::Text, got {other:?}"),
+            },
+            other => panic!("expected a GraphicFrame shape, got {other:?}"),
+        }
+    }
+
+    /// No relationship in `charts` for the rId (e.g. the chart part failed
+    /// to open) must not panic — just fall through to Unknown, same as any
+    /// other unresolvable graphic.
+    #[test]
+    fn test_parse_graphic_frame_chart_with_no_matching_charts_entry_is_unknown() {
+        let xml = make_slide_xml(
+            r#"<p:graphicFrame>
+  <p:nvGraphicFramePr>
+    <p:cNvPr id="5" name="Test Chart"/>
+    <p:cNvGraphicFramePr/>
+    <p:nvPr/>
+  </p:nvGraphicFramePr>
+  <p:xfrm><a:off x="0" y="0"/><a:ext cx="100" cy="100"/></p:xfrm>
+  <a:graphic>
+    <a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart">
+      <c:chart xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"
+               xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+               r:id="rId2"/>
+    </a:graphicData>
+  </a:graphic>
+</p:graphicFrame>"#,
+        );
+        let slide = Slide::parse(
+            &xml,
+            String::new(),
+            &Relationships::empty(),
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
+        )
+        .unwrap();
+        match &slide.shapes[0] {
+            Shape::GraphicFrame(gf) => {
+                assert!(matches!(gf.content, GraphicContent::Unknown));
+            },
+            other => panic!("expected a GraphicFrame shape, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parse_group_shape() {
+        let xml = make_slide_xml(
+            r#"<p:grpSp>
+  <p:nvGrpSpPr>
+    <p:cNvPr id="10" name="Group 1"/>
+    <p:cNvGrpSpPr/>
+    <p:nvPr/>
+  </p:nvGrpSpPr>
+  <p:grpSpPr>
+    <a:xfrm>
+      <a:off x="100" y="200"/>
+      <a:ext cx="5000" cy="3000"/>
+    </a:xfrm>
+  </p:grpSpPr>
+  <p:sp>
+    <p:nvSpPr>
+      <p:cNvPr id="11" name="Child 1"/>
+      <p:cNvSpPr/>
+      <p:nvPr/>
+    </p:nvSpPr>
+    <p:spPr/>
+    <p:txBody>
+      <a:bodyPr/>
+      <a:p><a:r><a:t>Inside group</a:t></a:r></a:p>
+    </p:txBody>
+  </p:sp>
+</p:grpSp>"#,
+        );
+
+        let rels = Relationships::empty();
+        let slide = Slide::parse(
+            &xml,
+            String::new(),
+            &rels,
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
+        )
+        .unwrap();
+
+        assert_eq!(slide.shapes.len(), 1);
+        if let Shape::Group(ref grp) = slide.shapes[0] {
+            assert_eq!(grp.id, 10);
+            assert_eq!(grp.name, "Group 1");
+            assert_eq!(grp.children.len(), 1);
+            if let Shape::AutoShape(ref child) = grp.children[0] {
+                assert_eq!(child.name, "Child 1");
+                let tb = child.text_body.as_ref().unwrap();
+                if let TextContent::Run(ref run) = tb.paragraphs[0].content[0] {
+                    assert_eq!(run.text, "Inside group");
+                }
+            }
+        } else {
+            panic!("expected group shape");
+        }
+    }
+
+    /// An `<m:oMath>` equation reaches the slide text via the
+    /// `<mc:AlternateContent><mc:Choice Requires="a14"><p:sp>...<a14:m>`
+    /// wrapper real PowerPoint output uses (poi-legacy_stress013.pptx,
+    /// slides 5/9/10), mirroring the real file's structure exactly.
+    #[test]
+    fn test_omml_equation_inside_alternate_content_is_not_dropped() {
+        let xml = make_slide_xml(
+            r#"<mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:a14="http://schemas.microsoft.com/office/drawing/2010/main">
+  <mc:Choice Requires="a14">
+    <p:sp>
+      <p:nvSpPr>
+        <p:cNvPr id="34" name="TextBox 33"/>
+        <p:cNvSpPr txBox="1"/>
+        <p:nvPr/>
+      </p:nvSpPr>
+      <p:spPr/>
+      <p:txBody>
+        <a:bodyPr/>
+        <a:p><a:pPr/><a14:m><m:oMathPara xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math"><m:oMath><m:r><m:t>𝑥</m:t></m:r><m:r><m:t>+1</m:t></m:r></m:oMath></m:oMathPara></a14:m></a:p>
+      </p:txBody>
+    </p:sp>
+  </mc:Choice>
+  <mc:Fallback>
+    <p:pic>
+      <p:nvPicPr>
+        <p:cNvPr id="34" name="fallback pic"/>
+        <p:cNvPicPr/>
+        <p:nvPr/>
+      </p:nvPicPr>
+      <p:blipFill><a:blip r:embed="rId99"/></p:blipFill>
+      <p:spPr/>
+    </p:pic>
+  </mc:Fallback>
+</mc:AlternateContent>"#,
+        );
+
+        let rels = Relationships::empty();
+        let slide = Slide::parse(
+            &xml,
+            String::new(),
+            &rels,
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            slide.shapes.len(),
+            1,
+            "expected the Choice branch's shape, got {:?}",
+            slide.shapes
+        );
+        let Shape::AutoShape(ref shape) = slide.shapes[0] else {
+            panic!("expected an AutoShape from mc:Choice, got {:?}", slide.shapes[0]);
+        };
+        let tb = shape
+            .text_body
+            .as_ref()
+            .expect("equation text box has a body");
+        let TextContent::Run(ref run) = tb.paragraphs[0].content[0] else {
+            panic!("expected a run carrying the equation text");
+        };
+        assert_eq!(run.text, "𝑥+1");
+    }
+
+    /// When `mc:Choice`'s content is entirely made of elements this crate
+    /// doesn't recognize (yielding zero shapes), the `mc:Fallback` branch
+    /// must still be used instead of losing the shape altogether.
+    #[test]
+    fn test_alternate_content_falls_back_to_fallback_branch_when_choice_yields_nothing() {
+        let xml = make_slide_xml(
+            r#"<mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006">
+  <mc:Choice Requires="somethingUnknown">
+    <unknownVendor:thing xmlns:unknownVendor="urn:example:unknown"/>
+  </mc:Choice>
+  <mc:Fallback>
+    <p:sp>
+      <p:nvSpPr>
+        <p:cNvPr id="7" name="Fallback Shape"/>
+        <p:cNvSpPr/>
+        <p:nvPr/>
+      </p:nvSpPr>
+      <p:spPr/>
+      <p:txBody>
+        <a:bodyPr/>
+        <a:p><a:r><a:t>Fallback text</a:t></a:r></a:p>
+      </p:txBody>
+    </p:sp>
+  </mc:Fallback>
+</mc:AlternateContent>"#,
+        );
+
+        let rels = Relationships::empty();
+        let slide = Slide::parse(
+            &xml,
+            String::new(),
+            &rels,
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
+        )
+        .unwrap();
+
+        assert_eq!(slide.shapes.len(), 1);
+        let Shape::AutoShape(ref shape) = slide.shapes[0] else {
+            panic!("expected the fallback AutoShape, got {:?}", slide.shapes[0]);
+        };
+        assert_eq!(shape.name, "Fallback Shape");
+    }
+
+    #[test]
+    fn test_parse_table_shape() {
+        let xml = make_slide_xml(
+            r#"<p:graphicFrame>
+  <p:nvGraphicFramePr>
+    <p:cNvPr id="20" name="Table 1"/>
+    <p:cNvGraphicFramePr/>
+    <p:nvPr/>
+  </p:nvGraphicFramePr>
+  <p:xfrm>
+    <a:off x="0" y="0"/>
+    <a:ext cx="9144000" cy="3000000"/>
+  </p:xfrm>
+  <a:graphic>
+    <a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/table">
+      <a:tbl>
+        <a:tblGrid>
+          <a:gridCol w="3048000"/>
+          <a:gridCol w="3048000"/>
+        </a:tblGrid>
+        <a:tr h="370840">
+          <a:tc>
+            <a:txBody>
+              <a:bodyPr/>
+              <a:p><a:r><a:t>A1</a:t></a:r></a:p>
+            </a:txBody>
+          </a:tc>
+          <a:tc>
+            <a:txBody>
+              <a:bodyPr/>
+              <a:p><a:r><a:t>B1</a:t></a:r></a:p>
+            </a:txBody>
+          </a:tc>
+        </a:tr>
+        <a:tr h="370840">
+          <a:tc>
+            <a:txBody>
+              <a:bodyPr/>
+              <a:p><a:r><a:t>A2</a:t></a:r></a:p>
+            </a:txBody>
+          </a:tc>
+          <a:tc>
+            <a:txBody>
+              <a:bodyPr/>
+              <a:p><a:r><a:t>B2</a:t></a:r></a:p>
+            </a:txBody>
+          </a:tc>
+        </a:tr>
+      </a:tbl>
+    </a:graphicData>
+  </a:graphic>
+</p:graphicFrame>"#,
+        );
+
+        let rels = Relationships::empty();
+        let slide = Slide::parse(
+            &xml,
+            String::new(),
+            &rels,
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
+        )
+        .unwrap();
+
+        assert_eq!(slide.shapes.len(), 1);
+        if let Shape::GraphicFrame(ref gf) = slide.shapes[0] {
+            assert_eq!(gf.name, "Table 1");
+            if let GraphicContent::Table(ref tbl) = gf.content {
+                assert_eq!(tbl.rows.len(), 2);
+                assert_eq!(tbl.rows[0].cells.len(), 2);
+                let cell_text =
+                    extract_plain_text_from_body(tbl.rows[0].cells[0].text_body.as_ref().unwrap());
+                assert_eq!(cell_text, "A1");
+            } else {
+                panic!("expected table content");
+            }
+        } else {
+            panic!("expected graphic frame");
+        }
+    }
+
+    #[test]
+    fn test_parse_picture_shape() {
+        let xml = make_slide_xml(
+            r#"<p:pic>
+  <p:nvPicPr>
+    <p:cNvPr id="30" name="Picture 1" descr="A photo"/>
+    <p:cNvPicPr/>
+    <p:nvPr/>
+  </p:nvPicPr>
+  <p:blipFill>
+    <a:blip r:embed="rId2"/>
+  </p:blipFill>
+  <p:spPr>
+    <a:xfrm>
+      <a:off x="100" y="200"/>
+      <a:ext cx="3000" cy="2000"/>
+    </a:xfrm>
+  </p:spPr>
+</p:pic>"#,
+        );
+
+        let rels = Relationships::empty();
+        let slide = Slide::parse(
+            &xml,
+            String::new(),
+            &rels,
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
+        )
+        .unwrap();
+
+        assert_eq!(slide.shapes.len(), 1);
+        if let Shape::Picture(ref pic) = slide.shapes[0] {
+            assert_eq!(pic.id, 30);
+            assert_eq!(pic.name, "Picture 1");
+            assert_eq!(pic.alt_text.as_deref(), Some("A photo"));
+            let pos = pic.position.as_ref().unwrap();
+            assert_eq!(pos.x, 100);
+            assert_eq!(pos.cx, 3000);
+        } else {
+            panic!("expected picture shape");
+        }
+    }
+
+    #[test]
+    fn test_parse_connector_shape() {
+        let xml = make_slide_xml(
+            r#"<p:cxnSp>
+  <p:nvCxnSpPr>
+    <p:cNvPr id="40" name="Connector 1"/>
+    <p:cNvCxnSpPr/>
+    <p:nvPr/>
+  </p:nvCxnSpPr>
+  <p:spPr>
+    <a:xfrm>
+      <a:off x="500" y="600"/>
+      <a:ext cx="1000" cy="0"/>
+    </a:xfrm>
+  </p:spPr>
+</p:cxnSp>"#,
+        );
+
+        let rels = Relationships::empty();
+        let slide = Slide::parse(
+            &xml,
+            String::new(),
+            &rels,
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
+        )
+        .unwrap();
+
+        assert_eq!(slide.shapes.len(), 1);
+        if let Shape::Connector(ref cxn) = slide.shapes[0] {
+            assert_eq!(cxn.id, 40);
+            assert_eq!(cxn.name, "Connector 1");
+            let pos = cxn.position.as_ref().unwrap();
+            assert_eq!(pos.x, 500);
+        } else {
+            panic!("expected connector shape");
+        }
+    }
+
+    #[test]
+    fn test_parse_text_formatting() {
+        let xml = make_slide_xml(
+            r#"<p:sp>
+  <p:nvSpPr>
+    <p:cNvPr id="5" name="Text 1"/>
+    <p:cNvSpPr/>
+    <p:nvPr/>
+  </p:nvSpPr>
+  <p:spPr/>
+  <p:txBody>
+    <a:bodyPr/>
+    <a:p>
+      <a:r>
+        <a:rPr b="1" i="1" strike="sngStrike"/>
+        <a:t>formatted</a:t>
+      </a:r>
+    </a:p>
+  </p:txBody>
+</p:sp>"#,
+        );
+
+        let rels = Relationships::empty();
+        let slide = Slide::parse(
+            &xml,
+            String::new(),
+            &rels,
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
+        )
+        .unwrap();
+
+        if let Shape::AutoShape(ref auto) = slide.shapes[0] {
+            let tb = auto.text_body.as_ref().unwrap();
+            if let TextContent::Run(ref run) = tb.paragraphs[0].content[0] {
+                assert_eq!(run.bold, Some(true));
+                assert_eq!(run.italic, Some(true));
+                assert!(run.strikethrough);
+                assert_eq!(run.text, "formatted");
+            }
+        }
+    }
+
+    #[test]
+    fn test_parse_text_field() {
+        let xml = make_slide_xml(
+            r#"<p:sp>
+  <p:nvSpPr>
+    <p:cNvPr id="6" name="Slide Number"/>
+    <p:cNvSpPr/>
+    <p:nvPr/>
+  </p:nvSpPr>
+  <p:spPr/>
+  <p:txBody>
+    <a:bodyPr/>
+    <a:p>
+      <a:fld type="slidenum">
+        <a:rPr/>
+        <a:t>3</a:t>
+      </a:fld>
+    </a:p>
+  </p:txBody>
+</p:sp>"#,
+        );
+
+        let rels = Relationships::empty();
+        let slide = Slide::parse(
+            &xml,
+            String::new(),
+            &rels,
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
+        )
+        .unwrap();
+
+        if let Shape::AutoShape(ref auto) = slide.shapes[0] {
+            let tb = auto.text_body.as_ref().unwrap();
+            if let TextContent::Field(ref field) = tb.paragraphs[0].content[0] {
+                assert_eq!(field.field_type.as_deref(), Some("slidenum"));
+                assert_eq!(field.text, "3");
+            } else {
+                panic!("expected field");
+            }
+        }
+    }
+
+    #[test]
+    fn test_parse_notes_text() {
+        let xml = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<p:notes xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
+         xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"
+         xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <p:cSld>
+    <p:spTree>
+      <p:nvGrpSpPr>
+        <p:cNvPr id="1" name=""/>
+        <p:cNvGrpSpPr/>
+        <p:nvPr/>
+      </p:nvGrpSpPr>
+      <p:grpSpPr/>
+      <p:sp>
+        <p:nvSpPr>
+          <p:cNvPr id="2" name="Slide Image"/>
+          <p:cNvSpPr/>
+          <p:nvPr><p:ph type="sldImg"/></p:nvPr>
+        </p:nvSpPr>
+        <p:spPr/>
+      </p:sp>
+      <p:sp>
+        <p:nvSpPr>
+          <p:cNvPr id="3" name="Notes Placeholder"/>
+          <p:cNvSpPr/>
+          <p:nvPr><p:ph type="body" idx="1"/></p:nvPr>
+        </p:nvSpPr>
+        <p:spPr/>
+        <p:txBody>
+          <a:bodyPr/>
+          <a:p><a:r><a:t>Speaker notes here</a:t></a:r></a:p>
+          <a:p><a:r><a:t>Second line</a:t></a:r></a:p>
+        </p:txBody>
+      </p:sp>
+    </p:spTree>
+  </p:cSld>
+</p:notes>"#;
+
+        let body = extract_notes_body(xml, &Relationships::empty())
+            .unwrap()
+            .unwrap();
+        assert_eq!(extract_plain_text_from_body(&body), "Speaker notes here\nSecond line");
+    }
+
+    // ── New: blip rId extraction, font size, alignment, space_before, bg ─
+
+    #[test]
+    fn test_run_carries_font_size_from_sz_attr() {
+        // <a:rPr sz="1800"/> means 18 pt — should land on the run as
+        // 1800 hundredths-of-a-point.
+        let xml = make_slide_xml(
+            r#"<p:sp>
+  <p:nvSpPr><p:cNvPr id="7" name="T"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>
+  <p:spPr/>
+  <p:txBody>
+    <a:bodyPr/>
+    <a:p>
+      <a:r>
+        <a:rPr sz="1800"/>
+        <a:t>sized</a:t>
+      </a:r>
+    </a:p>
+  </p:txBody>
+</p:sp>"#,
+        );
+
+        let rels = Relationships::empty();
+        let slide = Slide::parse(
+            &xml,
+            String::new(),
+            &rels,
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
+        )
+        .unwrap();
+        if let Shape::AutoShape(ref a) = slide.shapes[0] {
+            let tb = a.text_body.as_ref().unwrap();
+            if let TextContent::Run(ref r) = tb.paragraphs[0].content[0] {
+                assert_eq!(r.font_size_hundredths_pt, Some(1800));
+            } else {
+                panic!("expected run");
+            }
+        }
+    }
+
+    #[test]
+    fn test_run_font_size_absent_when_sz_missing() {
+        let xml = make_slide_xml(
+            r#"<p:sp>
+  <p:nvSpPr><p:cNvPr id="8" name="T"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>
+  <p:spPr/>
+  <p:txBody>
+    <a:bodyPr/>
+    <a:p>
+      <a:r><a:t>unsized</a:t></a:r>
+    </a:p>
+  </p:txBody>
+</p:sp>"#,
+        );
+
+        let rels = Relationships::empty();
+        let slide = Slide::parse(
+            &xml,
+            String::new(),
+            &rels,
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
+        )
+        .unwrap();
+        if let Shape::AutoShape(ref a) = slide.shapes[0] {
+            let tb = a.text_body.as_ref().unwrap();
+            if let TextContent::Run(ref r) = tb.paragraphs[0].content[0] {
+                assert!(r.font_size_hundredths_pt.is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn test_paragraph_alignment_parsed_from_algn_attr() {
+        use crate::ir::ParagraphAlignment;
+        let xml = make_slide_xml(
+            r#"<p:sp>
+  <p:nvSpPr><p:cNvPr id="9" name="T"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>
+  <p:spPr/>
+  <p:txBody>
+    <a:bodyPr/>
+    <a:p>
+      <a:pPr algn="ctr"/>
+      <a:r><a:t>centered</a:t></a:r>
+    </a:p>
+  </p:txBody>
+</p:sp>"#,
+        );
+
+        let rels = Relationships::empty();
+        let slide = Slide::parse(
+            &xml,
+            String::new(),
+            &rels,
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
+        )
+        .unwrap();
+        if let Shape::AutoShape(ref a) = slide.shapes[0] {
+            let para = &a.text_body.as_ref().unwrap().paragraphs[0];
+            assert_eq!(para.alignment, Some(ParagraphAlignment::Center));
+        }
+    }
+
+    #[test]
+    fn test_paragraph_alignment_all_variants() {
+        use crate::ir::ParagraphAlignment;
+        let cases = [
+            ("l", ParagraphAlignment::Left),
+            ("ctr", ParagraphAlignment::Center),
+            ("r", ParagraphAlignment::Right),
+            ("just", ParagraphAlignment::Justify),
+            ("dist", ParagraphAlignment::Distribute),
+        ];
+        for (algn, expected) in cases {
+            let xml = make_slide_xml(&format!(
+                r#"<p:sp>
+  <p:nvSpPr><p:cNvPr id="9" name="T"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>
+  <p:spPr/>
+  <p:txBody>
+    <a:bodyPr/>
+    <a:p>
+      <a:pPr algn="{algn}"/>
+      <a:r><a:t>x</a:t></a:r>
+    </a:p>
+  </p:txBody>
+</p:sp>"#
+            ));
+            let slide = Slide::parse(
+                &xml,
+                String::new(),
+                &Relationships::empty(),
+                &std::collections::HashMap::new(),
+                &std::collections::HashMap::new(),
+            )
+            .unwrap();
+            if let Shape::AutoShape(ref a) = slide.shapes[0] {
+                let para = &a.text_body.as_ref().unwrap().paragraphs[0];
+                assert_eq!(para.alignment, Some(expected), "algn={algn}");
+            }
+        }
+    }
+
+    #[test]
+    fn test_paragraph_space_before_parsed_from_spc_bef() {
+        let xml = make_slide_xml(
+            r#"<p:sp>
+  <p:nvSpPr><p:cNvPr id="11" name="T"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>
+  <p:spPr/>
+  <p:txBody>
+    <a:bodyPr/>
+    <a:p>
+      <a:pPr>
+        <a:spcBef><a:spcPts val="1200"/></a:spcBef>
+      </a:pPr>
+      <a:r><a:t>spaced</a:t></a:r>
+    </a:p>
+  </p:txBody>
+</p:sp>"#,
+        );
+
+        let rels = Relationships::empty();
+        let slide = Slide::parse(
+            &xml,
+            String::new(),
+            &rels,
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
+        )
+        .unwrap();
+        if let Shape::AutoShape(ref a) = slide.shapes[0] {
+            let para = &a.text_body.as_ref().unwrap().paragraphs[0];
+            assert_eq!(para.space_before_hundredths_pt, Some(1200));
+        }
+    }
+
+    #[test]
+    fn test_picture_embed_resolves_via_media_map() {
+        // Build a media map keyed by the rId used in the slide xml so
+        // parse_picture can resolve the embed → bytes.
+        let xml = make_slide_xml(
+            r#"<p:pic>
+  <p:nvPicPr>
+    <p:cNvPr id="33" name="Photo"/>
+    <p:cNvPicPr/>
+    <p:nvPr/>
+  </p:nvPicPr>
+  <p:blipFill>
+    <a:blip r:embed="rId7"/>
+  </p:blipFill>
+  <p:spPr>
+    <a:xfrm><a:off x="0" y="0"/><a:ext cx="100" cy="100"/></a:xfrm>
+  </p:spPr>
+</p:pic>"#,
+        );
+
+        let mut media = std::collections::HashMap::new();
+        media.insert(
+            "rId7".to_string(),
+            (vec![0xDEu8, 0xADu8, 0xBEu8, 0xEFu8].into(), "png".to_string()),
+        );
+
+        let slide = Slide::parse(
+            &xml,
+            String::new(),
+            &Relationships::empty(),
+            &media,
+            &std::collections::HashMap::new(),
+        )
+        .unwrap();
+        if let Shape::Picture(ref pic) = slide.shapes[0] {
+            assert_eq!(pic.embed_rid.as_deref(), Some("rId7"));
+            assert_eq!(pic.data.as_deref(), Some(&[0xDEu8, 0xADu8, 0xBEu8, 0xEFu8][..]));
+            assert_eq!(pic.format.as_deref(), Some("png"));
+        } else {
+            panic!("expected picture");
+        }
+    }
+
+    #[test]
+    fn test_picture_embed_without_media_still_carries_rid() {
+        // Empty media map: rId is captured but data/format are None.
+        let xml = make_slide_xml(
+            r#"<p:pic>
+  <p:nvPicPr>
+    <p:cNvPr id="34" name="Photo"/>
+    <p:cNvPicPr/>
+    <p:nvPr/>
+  </p:nvPicPr>
+  <p:blipFill><a:blip r:embed="rId9"/></p:blipFill>
+  <p:spPr>
+    <a:xfrm><a:off x="0" y="0"/><a:ext cx="10" cy="10"/></a:xfrm>
+  </p:spPr>
+</p:pic>"#,
+        );
+
+        let slide = Slide::parse(
+            &xml,
+            String::new(),
+            &Relationships::empty(),
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
+        )
+        .unwrap();
+        if let Shape::Picture(ref pic) = slide.shapes[0] {
+            assert_eq!(pic.embed_rid.as_deref(), Some("rId9"));
+            assert!(pic.data.is_none());
+            assert!(pic.format.is_none());
+        }
+    }
+
+    #[test]
+    fn test_slide_background_solid_rgb() {
+        // <p:bg><p:bgPr><a:solidFill><a:srgbClr val="FF8800"/>…
+        let xml = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
+       xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"
+       xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <p:cSld>
+    <p:bg>
+      <p:bgPr>
+        <a:solidFill><a:srgbClr val="FF8800"/></a:solidFill>
+      </p:bgPr>
+    </p:bg>
+    <p:spTree>
+      <p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr>
+      <p:grpSpPr/>
+    </p:spTree>
+  </p:cSld>
+</p:sld>"#;
+        let slide = Slide::parse(
+            xml,
+            String::new(),
+            &Relationships::empty(),
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
+        )
+        .unwrap();
+        assert_eq!(slide.background_rgb, Some([0xFF, 0x88, 0x00]));
+    }
+
+    #[test]
+    fn test_slide_no_background_returns_none() {
+        let xml = make_slide_xml("");
+        let slide = Slide::parse(
+            &xml,
+            String::new(),
+            &Relationships::empty(),
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
+        )
+        .unwrap();
+        assert!(slide.background_rgb.is_none());
+    }
+
+    #[test]
+    fn test_parse_hex_rgb_valid() {
+        assert_eq!(parse_hex_rgb("FF8800"), Some([0xFF, 0x88, 0x00]));
+        assert_eq!(parse_hex_rgb("000000"), Some([0, 0, 0]));
+        assert_eq!(parse_hex_rgb("ffffff"), Some([0xFF, 0xFF, 0xFF]));
+    }
+
+    #[test]
+    fn test_parse_hex_rgb_invalid() {
+        assert_eq!(parse_hex_rgb("FF88"), None); // too short
+        assert_eq!(parse_hex_rgb("ZZZZZZ"), None); // not hex
+        assert_eq!(parse_hex_rgb(""), None);
+    }
+
+    // ── read_blip_embed_attr ────────────────────────────────────────────
+
+    fn first_start_elem(xml: &[u8]) -> quick_xml::events::BytesStart<'static> {
+        let mut reader = xml::make_fast_reader(xml);
+        loop {
+            match reader.read_event().unwrap() {
+                Event::Start(e) | Event::Empty(e) => return e.into_owned(),
+                Event::Eof => panic!("no start"),
+                _ => {},
+            }
+        }
+    }
+
+    #[test]
+    fn test_blip_embed_attr_with_r_prefix() {
+        let e = first_start_elem(
+            br#"<a:blip xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
+                       xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+                       r:embed="rId5"/>"#,
+        );
+        let rid = read_blip_embed_attr(&e).unwrap();
+        assert_eq!(rid.as_deref(), Some("rId5"));
+    }
+
+    #[test]
+    fn test_blip_embed_attr_arbitrary_prefix() {
+        // Some writers use an unrelated prefix bound to the rels namespace.
+        let e = first_start_elem(
+            br#"<a:blip xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
+                       xmlns:foo="http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+                       foo:embed="rId99"/>"#,
+        );
+        let rid = read_blip_embed_attr(&e).unwrap();
+        assert_eq!(rid.as_deref(), Some("rId99"));
+    }
+
+    #[test]
+    fn test_blip_embed_attr_absent() {
+        let e = first_start_elem(
+            br#"<a:blip xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"/>"#,
+        );
+        let rid = read_blip_embed_attr(&e).unwrap();
+        assert!(rid.is_none());
+    }
+}

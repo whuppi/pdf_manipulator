@@ -1,0 +1,116 @@
+use crate::core::units::Emu;
+
+/// Information about a drawing/image reference within a run.
+///
+/// Carries enough data for both bitmap pictures (`<a:blip r:embed=…/>`)
+/// and DrawingML preset shapes (`<wps:wsp>` with `<a:prstGeom>`). Only
+/// one of `relationship_id` or `shape` is populated for any given
+/// drawing — the consumer (`convert_docx`) uses whichever is set to
+/// decide what kind of IR `Element` to emit.
+#[derive(Debug, Clone)]
+pub struct DrawingInfo {
+    /// A linked (not embedded) picture's relationship id (`a:blip/@r:link`).
+    pub linked_image_rid: Option<String>,
+    /// That picture's target, once resolved through the relationships of
+    /// the part the drawing is in.
+    pub linked_image: Option<std::sync::Arc<str>>,
+    /// Marked decorative (`wp:docPr` extension `adec:decorative`
+    /// `val="1"`): the picture carries no meaning, so assistive
+    /// technology skips it.
+    pub decorative: bool,
+    /// Relationship ID pointing to the image part. Empty when the
+    /// drawing is a vector shape rather than a raster picture.
+    pub relationship_id: String,
+    /// Alt-text description from `wp:docPr/@descr`.
+    pub description: Option<String>,
+    /// Image / shape width in EMUs.
+    pub width: Emu,
+    /// Image / shape height in EMUs.
+    pub height: Emu,
+    /// `true` = inline, `false` = anchor (floating).
+    pub inline: bool,
+    /// Floating-anchor position (only set when `inline == false`).
+    pub anchor_position: Option<AnchorPosition>,
+    /// Vector shape data when the drawing is a `<wps:wsp>` rather
+    /// than an embedded picture.
+    pub shape: Option<ShapeInfo>,
+    /// Relationship id from `<c:chart r:id="…"/>` when the drawing is a
+    /// native DrawingML chart (`word/charts/chartN.xml`) rather than a
+    /// picture or a vector shape.
+    pub chart_rel_id: Option<String>,
+    /// Readable text of the referenced chart part — chart and axis titles,
+    /// category labels, series names and cached data values — one line each.
+    ///
+    /// The chart part lives outside the document part, so this is filled in
+    /// by `DocxDocument::from_opc` after the body has been parsed; a
+    /// standalone `<w:drawing>` parse leaves it empty.
+    ///
+    /// Shared: a chart part named by many drawings is read once.
+    pub chart_text: std::sync::Arc<[String]>,
+    /// Relationship id from `<dgm:relIds r:dm="…"/>` when the graphic is a
+    /// SmartArt diagram, pointing at its data part
+    /// (`word/diagrams/dataN.xml`) rather than a picture or a shape.
+    pub dgm_data_rel_id: Option<String>,
+    /// Readable text of the referenced SmartArt data part — every `<a:t>`
+    /// text node in reading order, one per line.
+    ///
+    /// Like `chart_text`, the diagram data part lives outside the document
+    /// part, so this is filled in by `DocxDocument::from_opc` after the
+    /// body has been parsed.
+    ///
+    /// Shared like `chart_text`.
+    pub dgm_text: std::sync::Arc<[String]>,
+}
+
+/// Absolute coordinates extracted from a `<wp:anchor>` wrapper.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct AnchorPosition {
+    /// Horizontal offset in EMUs.
+    pub x_emu: i64,
+    /// Vertical offset in EMUs.
+    pub y_emu: i64,
+    /// What the horizontal offset is anchored to (page / margin / column).
+    pub h_relative_from: AnchorFrame,
+    /// What the vertical offset is anchored to (page / margin / paragraph).
+    pub v_relative_from: AnchorFrame,
+}
+
+/// Reference frame for a floating-object anchor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AnchorFrame {
+    /// Position relative to the page.
+    #[default]
+    Page,
+    /// Position relative to the page margin.
+    Margin,
+    /// Position relative to the column.
+    Column,
+    /// Position relative to the paragraph (for vertical anchor).
+    Paragraph,
+    /// Position relative to the page line (for vertical anchor).
+    Line,
+    /// Position relative to the character (for horizontal anchor).
+    Character,
+}
+
+/// Vector-shape data parsed from `<wps:wsp>`.
+#[derive(Debug, Clone)]
+pub struct ShapeInfo {
+    /// Geometry preset from `<a:prstGeom prst="…">`.
+    pub kind: ShapeKind,
+    /// Stroke colour (`<a:ln><a:solidFill><a:srgbClr val="…"/>`).
+    pub stroke_rgb: Option<(u8, u8, u8)>,
+    /// Fill colour (`<wps:spPr><a:solidFill><a:srgbClr val="…"/>`).
+    pub fill_rgb: Option<(u8, u8, u8)>,
+    /// Stroke width in EMUs (`<a:ln w="…">`).
+    pub stroke_w_emu: Option<i64>,
+}
+
+/// Subset of DrawingML preset shape kinds we currently round-trip.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShapeKind {
+    /// Straight line (`prst="line"`).
+    Line,
+    /// Rectangle (`prst="rect"`).
+    Rect,
+}

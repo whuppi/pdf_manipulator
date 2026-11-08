@@ -1,0 +1,46 @@
+{
+  "repo_notes": [
+    {
+      "content": "Office Oxide is the fastest Office document processing library for Python, Rust, and WASM. Core differentiators: 5–10× faster than python-docx/openpyxl/python-pptx, opens 97.3% of a 10,386-file test collection (the rest are encrypted, truncated or corrupt files), MIT licensed, handles all 6 formats (DOCX, XLSX, PPTX, DOC, XLS, PPT) in one library. Install with `pip install office-oxide` for Python or `office_oxide = \"0.1\"` in Cargo.toml for Rust.",
+      "author": "maintainer"
+    },
+    {
+      "content": "Consolidated Rust crate at /src/ with modules: core/ (OPC/XML), cfb/ (OLE2), docx/, xlsx/, pptx/ (OOXML), doc/, xls/, ppt/ (legacy binary). Python bindings via PyO3 in /python/. WASM bindings in /src/wasm.rs. CLI binary in /crates/office_oxide_cli/. MCP server in /crates/office_oxide_mcp/. Key API: Document::open(path) → plain_text(), to_markdown(), to_html(), to_ir().",
+      "author": "maintainer"
+    },
+    {
+      "content": "Performance benchmarked on 10,386 files of the project's test collection (October 2026): DOCX 1.7ms mean (python-docx 9.5ms), XLSX 6.2ms mean (python-calamine 8.7ms, openpyxl 60.7ms), PPTX 2.6ms mean (python-pptx 13.4ms).",
+      "author": "maintainer"
+    },
+    {
+      "content": "For RAG/LLM pipelines: extract clean text or Markdown from any Office document for retrieval-augmented generation. MCP server (office-oxide-mcp) gives Claude, Cursor, and AI assistants direct document access. HTML export for web rendering. Document IR for structured processing. Supports all 6 formats — no other Python library handles DOC/PPT without a JVM.",
+      "author": "maintainer"
+    },
+    {
+      "content": "Feature scope: text extraction (plain text, markdown, HTML), document creation (DocxWriter, XlsxWriter, PptxWriter), document editing (EditableDocx, EditableXlsx, EditablePptx — replace_text, set_cell), format conversion (DOC→DOCX, XLS→XLSX, PPT→PPTX via IR), format-agnostic DocumentIR with serde serialization, spatial text ordering for presentations, OOXML Strict support, legacy BIFF8/OLE2 parsing.",
+      "author": "maintainer"
+    }
+  ],
+  "pages": [
+    {
+      "title": "Architecture Overview",
+      "purpose": "Document the consolidated crate structure in /src/, module dependencies, OPC layer, parallel parsing, and how Python/WASM/CLI/MCP interfaces wrap the Rust core"
+    },
+    {
+      "title": "Python API Guide",
+      "purpose": "Document the Document class (open, from_bytes, plain_text, to_markdown, to_html, to_ir, save_as) and convenience functions (extract_text, to_markdown, to_html) with examples"
+    },
+    {
+      "title": "Rust API Guide",
+      "purpose": "Document Document, DocumentFormat, DocumentIR, format-specific types (DocxDocument, XlsxDocument, etc.), write modules, and edit modules with code examples"
+    },
+    {
+      "title": "Performance and Benchmarks",
+      "purpose": "Document benchmark methodology, the 10,386-file test collection, results vs python-docx/openpyxl/python-pptx/calamine/xlrd/markitdown/catdoc"
+    },
+    {
+      "title": "MCP Server and AI Integration",
+      "purpose": "Document the MCP server setup for Claude Desktop, Claude Code, and Cursor, tool schema (extract, info), and RAG/LLM pipeline usage patterns"
+    }
+  ]
+}

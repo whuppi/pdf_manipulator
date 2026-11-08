@@ -1,0 +1,47 @@
+/// Errors when reading legacy XLS files.
+#[derive(Debug, thiserror::Error)]
+pub enum XlsError {
+    /// Error from the underlying CFB container reader.
+    #[error("CFB error: {0}")]
+    Cfb(#[from] crate::cfb::CfbError),
+
+    /// A BIFF record has an unexpected length or content.
+    #[error("invalid BIFF record: {0}")]
+    InvalidRecord(String),
+
+    /// The file is encrypted or password-protected. Extraction cannot
+    /// proceed, and returning an empty string with `Ok` told the caller the
+    /// file simply had no text.
+    #[error("file is encrypted or password-protected")]
+    Encrypted,
+
+    /// The file is encrypted with a scheme or parameter this reader does not
+    /// implement (the `default-password` feature opens the ones Office's
+    /// default password protects); the text says which.
+    #[error("file is encrypted with a scheme this reader does not support: {0}")]
+    EncryptionNotSupported(String),
+
+    /// The file uses a BIFF version that is not supported.
+    ///
+    /// Carries a description of the detected format rather than a bare
+    /// number, so the caller can tell a recognised-but-unsupported legacy
+    /// file from genuine corruption — the same shape as
+    /// `DocError::UnsupportedVersion` for Word 6.0/95.
+    #[error("unsupported BIFF version: {0}")]
+    UnsupportedVersion(String),
+
+    /// A required CFB stream is absent from the file.
+    #[error("missing stream: {0}")]
+    MissingStream(String),
+
+    /// The data is internally inconsistent or truncated.
+    #[error("corrupted data: {0}")]
+    Corrupted(String),
+
+    /// Underlying I/O error.
+    #[error("I/O error: {0}")]
+    Io(#[from] std::io::Error),
+}
+
+/// Convenience `Result` alias using `XlsError`.
+pub type Result<T> = std::result::Result<T, XlsError>;

@@ -1,0 +1,395 @@
+/// A shape in a PPTX slide.
+#[derive(Debug, Clone)]
+pub enum Shape {
+    /// Standard auto-shape (text box, rectangle, etc.).
+    AutoShape(AutoShape),
+    /// An image or picture shape.
+    Picture(PictureShape),
+    /// A group of child shapes.
+    Group(GroupShape),
+    /// A graphic frame (contains a table or chart).
+    GraphicFrame(GraphicFrame),
+    /// A connector line between shapes.
+    Connector(ConnectorShape),
+}
+
+/// A standard auto-shape (text boxes, rectangles, callouts, etc.).
+#[derive(Debug, Clone)]
+pub struct AutoShape {
+    /// Shape numeric identifier.
+    pub id: u32,
+    /// Shape name from `cNvPr`.
+    pub name: String,
+    /// Accessibility description text.
+    pub alt_text: Option<String>,
+    /// Bounding box position and size in EMU.
+    pub position: Option<ShapePosition>,
+    /// Text body content, if any.
+    pub text_body: Option<TextBody>,
+    /// Placeholder role, if this shape is a slide placeholder.
+    pub placeholder: Option<PlaceholderInfo>,
+    /// Click-action hyperlink from `p:cNvPr > a:hlinkClick` — the
+    /// shape's own navigation target, separate from any hyperlink on
+    /// text inside it.
+    pub hyperlink: Option<HyperlinkInfo>,
+}
+
+/// An image or picture shape (`<p:pic>`).
+#[derive(Debug, Clone)]
+pub struct PictureShape {
+    /// Shape numeric identifier.
+    pub id: u32,
+    /// Shape name.
+    pub name: String,
+    /// Accessibility description text.
+    pub alt_text: Option<String>,
+    /// Bounding box position and size in EMU.
+    pub position: Option<ShapePosition>,
+    /// Relationship ID (`r:embed`) of the underlying media part, if any.
+    pub embed_rid: Option<String>,
+    /// Raw image bytes resolved via `embed_rid`, if the slide carried a
+    /// resolvable IMAGE relationship at parse time. Shared (`Arc`): every
+    /// picture that embeds one media part holds the same bytes.
+    pub data: Option<std::sync::Arc<[u8]>>,
+    /// Image format inferred from the relationship target extension or
+    /// byte signature (e.g. `"png"`, `"jpeg"`, `"gif"`, `"emf"`).
+    pub format: Option<String>,
+    /// Click-action hyperlink from `p:cNvPr > a:hlinkClick`.
+    pub hyperlink: Option<HyperlinkInfo>,
+    /// Target of a *linked* picture — `<a:blip r:link="rIdN"/>`, whose
+    /// relationship points outside the package (usually a URL). The image
+    /// bytes are not in the file; this is where they live.
+    pub link_target: Option<std::sync::Arc<str>>,
+    /// The audio or video clip this picture stands for, when the picture is
+    /// the poster frame of a media shape.
+    pub media: Option<MediaReference>,
+}
+
+/// An audio or video clip referenced from a picture shape's `<p:nvPr>`
+/// (`a:videoFile`/`a:audioFile`/… ECMA-376 Part 1 §20.1.3, or the embedded
+/// `p14:media` extension).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MediaReference {
+    /// Audio or video.
+    pub kind: MediaKind,
+    /// The clip's location: a URL when `external`, otherwise the resolved
+    /// part name inside the package (e.g. `/ppt/media/media1.mp4`).
+    pub target: std::sync::Arc<str>,
+    /// Whether the clip lives outside the package.
+    pub external: bool,
+}
+
+/// Kind of a [`MediaReference`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MediaKind {
+    /// `a:audioFile`, `a:wavAudioFile`, `a:audioCd`.
+    Audio,
+    /// `a:videoFile`, `a:quickTimeFile`.
+    Video,
+    /// `p14:media` without a declared audio/video element.
+    Unknown,
+}
+
+/// An embedded or linked OLE object (`<p:oleObj>`, ECMA-376 Part 1
+/// §19.3.2.4) — a spreadsheet, document or other object PowerPoint shows
+/// as a preview picture.
+#[derive(Debug, Clone)]
+pub struct OleObject {
+    /// The object's ProgID, e.g. `Excel.Sheet.12`.
+    pub prog_id: Option<String>,
+    /// The object's display name (`name` attribute).
+    pub name: Option<String>,
+    /// Relationship id of the embedded object part (or link).
+    pub rel_id: Option<String>,
+    /// Bytes of the preview picture PowerPoint draws in place of the
+    /// object, when the file carries one.
+    pub preview_data: Option<std::sync::Arc<[u8]>>,
+    /// Format of `preview_data` (e.g. `"png"`, `"emf"`).
+    pub preview_format: Option<String>,
+}
+
+/// A group of child shapes (`<p:grpSp>`).
+#[derive(Debug, Clone)]
+pub struct GroupShape {
+    /// Shape numeric identifier.
+    pub id: u32,
+    /// Shape name.
+    pub name: String,
+    /// Bounding box position and size in EMU.
+    pub position: Option<ShapePosition>,
+    /// Member shapes of this group.
+    pub children: Vec<Shape>,
+}
+
+/// A graphic frame that wraps a table, chart, or other graphic (`<p:graphicFrame>`).
+#[derive(Debug, Clone)]
+pub struct GraphicFrame {
+    /// Shape numeric identifier.
+    pub id: u32,
+    /// Shape name.
+    pub name: String,
+    /// Bounding box position and size in EMU.
+    pub position: Option<ShapePosition>,
+    /// The graphic content inside this frame.
+    pub content: GraphicContent,
+}
+
+/// Content held by a `GraphicFrame`.
+#[derive(Debug, Clone)]
+pub enum GraphicContent {
+    /// A DrawingML table.
+    Table(Table),
+    /// Flattened text from a graphic whose structure we do not model: a
+    /// SmartArt diagram (one line per node paragraph, read from its
+    /// `ppt/diagrams/dataN.xml` data part), an embedded chart (read from
+    /// its `ppt/charts/chartN.xml` part), or the inline `<a:t>` text of an
+    /// unrecognised graphic. The graphic is not drawn, but its words are
+    /// real document content.
+    Text(std::sync::Arc<[String]>),
+    /// An embedded or linked OLE object and its preview picture.
+    OleObject(OleObject),
+    /// Unsupported or unrecognised graphic type.
+    Unknown,
+}
+
+/// The characters a copy of `lines` costs the text budget: each line's bytes,
+/// plus `per_line` for what a copy adds around it (a separator in joined
+/// text, an IR paragraph). Saturating, so a hostile length cannot wrap.
+pub(crate) fn lines_cost(lines: &[String], per_line: usize) -> usize {
+    lines
+        .iter()
+        .fold(0usize, |sum, l| sum.saturating_add(l.len()).saturating_add(per_line))
+}
+
+/// A connector line (`<p:cxnSp>`).
+#[derive(Debug, Clone)]
+pub struct ConnectorShape {
+    /// Shape numeric identifier.
+    pub id: u32,
+    /// Shape name.
+    pub name: String,
+    /// Bounding box position and size in EMU.
+    pub position: Option<ShapePosition>,
+}
+
+/// Bounding box for a shape, all values in EMU (English Metric Units).
+#[derive(Debug, Clone)]
+pub struct ShapePosition {
+    /// Left edge offset from slide origin.
+    pub x: i64,
+    /// Top edge offset from slide origin.
+    pub y: i64,
+    /// Width of the bounding box.
+    pub cx: i64,
+    /// Height of the bounding box.
+    pub cy: i64,
+}
+
+/// Placeholder role information from `<p:ph>`.
+#[derive(Debug, Clone)]
+pub struct PlaceholderInfo {
+    /// Placeholder type string, e.g. `"title"`, `"body"`, `"dt"`.
+    pub ph_type: Option<String>,
+    /// Placeholder index (for body/content placeholders).
+    pub idx: Option<u32>,
+}
+
+// ---------------------------------------------------------------------------
+// Text body types
+// ---------------------------------------------------------------------------
+
+/// The text body of a shape (`<p:txBody>`).
+#[derive(Debug, Clone)]
+pub struct TextBody {
+    /// Ordered list of paragraphs in this text body.
+    pub paragraphs: Vec<TextParagraph>,
+}
+
+/// A single paragraph within a text body (`<a:p>`).
+#[derive(Debug, Clone, Default)]
+pub struct TextParagraph {
+    /// Outline level (0 = top level).
+    pub level: u32,
+    /// Bullet style declared by `<a:pPr>`: `buNone`, `buChar` or
+    /// `buAutoNum`. `None` means the paragraph inherits from the
+    /// placeholder, which for a body placeholder means "bulleted".
+    pub bullet: Option<BulletStyle>,
+    /// Paragraph alignment from `<a:pPr algn="…"/>`. None when the
+    /// attribute is absent (renderer-default left alignment).
+    pub alignment: Option<crate::ir::ParagraphAlignment>,
+    /// Space before the paragraph, in 100ths of a point — read from
+    /// `<a:pPr><a:spcBef><a:spcPts val="…"/></a:spcBef></a:pPr>`. The
+    /// percent form is in [`Self::space_before`].
+    pub space_before_hundredths_pt: Option<u32>,
+    /// Space before the paragraph in either form (`<a:spcBef>`).
+    pub space_before: Option<TextSpacing>,
+    /// Space after the paragraph (`<a:spcAft>`).
+    pub space_after: Option<TextSpacing>,
+    /// Line spacing (`<a:lnSpc>`).
+    pub line_spacing: Option<TextSpacing>,
+    /// Left margin in EMU (`<a:pPr marL>`).
+    pub margin_left_emu: Option<i64>,
+    /// Right margin in EMU (`<a:pPr marR>`).
+    pub margin_right_emu: Option<i64>,
+    /// First-line indent in EMU, negative for a hanging indent
+    /// (`<a:pPr indent>`).
+    pub indent_emu: Option<i64>,
+    /// Custom tab stops (`<a:tabLst>`).
+    pub tab_stops: Vec<TabStop>,
+    /// Inline content items in this paragraph.
+    pub content: Vec<TextContent>,
+}
+
+/// A DrawingML spacing value (`CT_TextSpacing`, ECMA-376 Part 1
+/// §21.1.2.2.10/.11/.12/.18).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextSpacing {
+    /// `<a:spcPts val>` — hundredths of a point.
+    Points(u32),
+    /// `<a:spcPct val>` — thousandths of a percent of the line
+    /// (`100000` = single spacing).
+    Percent(u32),
+}
+
+/// A custom tab stop (`<a:tab pos algn>`, ECMA-376 Part 1 §21.1.2.2.13).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TabStop {
+    /// Position in EMU from the text box's left edge.
+    pub position_emu: i64,
+    /// `l`, `ctr`, `r` or `dec` (`None` = left).
+    pub alignment: Option<String>,
+}
+
+/// How a paragraph's bullet marker is produced.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BulletStyle {
+    /// `<a:buNone/>` — explicitly not a list item.
+    None,
+    /// `<a:buChar char="•"/>` — an unordered marker.
+    Char(String),
+    /// `<a:buAutoNum type="arabicPeriod" startAt="3"/>` — an ordered list.
+    AutoNum {
+        /// The `type` attribute, e.g. `arabicPeriod`, `alphaLcParenR`.
+        scheme: String,
+        /// `startAt`, when the numbering does not begin at 1.
+        start_at: Option<u32>,
+    },
+    /// `<a:buBlip><a:blip r:embed="rIdN"/></a:buBlip>` — an unordered
+    /// marker drawn as a picture (ECMA-376 Part 1 §21.1.2.4.2).
+    Picture {
+        /// Relationship id of the marker image.
+        rel_id: Option<String>,
+    },
+}
+
+/// An inline content item inside a paragraph.
+#[derive(Debug, Clone)]
+pub enum TextContent {
+    /// A text run with optional formatting.
+    Run(TextRun),
+    /// An explicit line break (`<a:br>`).
+    LineBreak,
+    /// An auto-updated field (slide number, date, etc.).
+    Field(TextField),
+}
+
+/// A text run with optional character formatting (`<a:r>`).
+#[derive(Debug, Clone, Default)]
+pub struct TextRun {
+    /// The text content of this run.
+    pub text: String,
+    /// Bold toggle (`None` = inherit).
+    pub bold: Option<bool>,
+    /// Italic toggle (`None` = inherit).
+    pub italic: Option<bool>,
+    /// Whether strikethrough is applied.
+    pub strikethrough: bool,
+    /// Hyperlink attached to this run, if any.
+    pub hyperlink: Option<HyperlinkInfo>,
+    /// Font size in hundredths of a point (`<a:rPr sz="1800"/>` → `Some(1800)` = 18 pt).
+    /// `None` when the run inherits its size from the placeholder/master.
+    pub font_size_hundredths_pt: Option<u32>,
+    /// Explicit run colour from `<a:rPr><a:solidFill><a:srgbClr val="…"/></a:solidFill></a:rPr>`.
+    /// `None` when the run inherits its colour from the placeholder /
+    /// theme, or when the fill is non-sRGB (gradient, scheme colour).
+    pub color_rgb: Option<[u8; 3]>,
+    /// Underline style from `<a:rPr u="sng"/>`. `None` = inherit,
+    /// `Some("none")` = explicitly off.
+    pub underline: Option<String>,
+    /// Font face from `<a:rPr><a:latin typeface="…"/></a:rPr>`.
+    pub font_name: Option<String>,
+    /// Baseline shift in thousandths of a percent (`baseline="30000"` is
+    /// superscript, a negative value is subscript).
+    pub baseline: Option<i32>,
+    /// Capitalisation from `<a:rPr cap="all"|"small"/>`.
+    pub caps: Option<String>,
+    /// Character spacing in hundredths of a point (`spc="-50"`).
+    pub char_spacing_hundredths_pt: Option<i32>,
+}
+
+/// An auto-updated field inside a paragraph (`<a:fld>`).
+#[derive(Debug, Clone)]
+pub struct TextField {
+    /// Field type string, e.g. `"slidenum"`, `"datetime"`.
+    pub field_type: Option<String>,
+    /// Cached display text of the field.
+    pub text: String,
+}
+
+/// Hyperlink associated with a text run.
+#[derive(Debug, Clone)]
+pub struct HyperlinkInfo {
+    /// The hyperlink destination.
+    pub target: HyperlinkTarget,
+    /// Optional tooltip displayed on hover.
+    pub tooltip: Option<String>,
+}
+
+/// Hyperlink destination type.
+#[derive(Debug, Clone)]
+pub enum HyperlinkTarget {
+    /// External URL (resolved from the slide relationship). Runs that name
+    /// the same relationship share one allocation.
+    External(std::sync::Arc<str>),
+    /// Internal slide/anchor reference.
+    Internal(std::sync::Arc<str>),
+}
+
+// ---------------------------------------------------------------------------
+// Table types
+// ---------------------------------------------------------------------------
+
+/// A DrawingML table inside a graphic frame.
+#[derive(Debug, Clone)]
+pub struct Table {
+    /// Ordered rows of the table.
+    pub rows: Vec<TableRow>,
+    /// `<a:tblPr firstRow="1">` — the first row is a header row. Absent
+    /// means the table declares no header, which is not the same as the
+    /// first row being one.
+    pub first_row_header: bool,
+    /// `<a:tblPr lastRow="1">` — the last row is a totals row.
+    pub last_row_header: bool,
+}
+
+/// A single row within a `Table`.
+#[derive(Debug, Clone)]
+pub struct TableRow {
+    /// Cells in this row.
+    pub cells: Vec<TableCell>,
+}
+
+/// A single cell within a `TableRow`.
+#[derive(Debug, Clone)]
+pub struct TableCell {
+    /// Text content of the cell, if any.
+    pub text_body: Option<TextBody>,
+    /// Number of columns this cell spans horizontally.
+    pub grid_span: u32,
+    /// Number of rows this cell spans vertically.
+    pub row_span: u32,
+    /// True when this cell is a horizontal merge continuation.
+    pub h_merge: bool,
+    /// True when this cell is a vertical merge continuation.
+    pub v_merge: bool,
+}

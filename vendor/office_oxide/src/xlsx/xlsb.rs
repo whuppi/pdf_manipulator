@@ -1,0 +1,843 @@
+//! Excel Binary Workbook (`.xlsb`, [MS-XLSB]).
+//!
+//! The same OPC package as `.xlsx` — the relationships are still XML —
+//! but every SpreadsheetML part is a BIFF12 record stream instead of XML:
+//! `xl/workbook.bin` (the sheet list, `BrtBundleSh`), `xl/sharedStrings.bin`
+//! (`BrtSSTItem`) and `xl/worksheets/sheetN.bin` (`BrtRowHdr` and the
+//! `BrtCell*`/`BrtFmla*` records, `BrtMergeCell`). Each record is a
+//! variable-length id (one or two 7-bit bytes) and a variable-length size
+//! (up to four 7-bit bytes), then the body; strings are `XLWideString`,
+//! a 32-bit character count and UTF-16LE.
+//!
+//! Decoded into the [`XlsxDocument`] model, so every converter and
+//! renderer downstream is the `.xlsx` one. Formulas are not decoded to
+//! text (their cached values are), and styles are not read, which is
+//! what calamine's `xlsb` reader offers as well.
+
+use std::io::{Read, Seek};
+
+use zip::read::ZipArchive;
+
+use std::collections::HashMap;
+
+use super::cell::{Cell, CellRef, CellValue};
+use super::shared_strings::{SharedString, SharedStringTable};
+use super::styles::{CellFormat, StyleSheet};
+use super::workbook::{SheetInfo, SheetState, WorkbookInfo};
+use super::worksheet::{Row, Worksheet};
+use super::{Result, XlsxDocument};
+use crate::core::opc::{self, ZipEntryIndex};
+use crate::ir::SheetKind;
+
+// Record ids ([MS-XLSB] §2.3, decimal as the specification lists them).
+const BRT_ROW_HDR: u32 = 0;
+const BRT_CELL_BLANK: u32 = 1;
+const BRT_CELL_RK: u32 = 2;
+const BRT_CELL_ERROR: u32 = 3;
+const BRT_CELL_BOOL: u32 = 4;
+const BRT_CELL_REAL: u32 = 5;
+const BRT_CELL_ST: u32 = 6;
+const BRT_CELL_ISST: u32 = 7;
+const BRT_FMLA_STRING: u32 = 8;
+const BRT_FMLA_NUM: u32 = 9;
+const BRT_FMLA_BOOL: u32 = 10;
+const BRT_FMLA_ERROR: u32 = 11;
+const BRT_SST_ITEM: u32 = 19;
+/// `BrtFmt`: a number format id and its code.
+const BRT_FMT: u32 = 44;
+/// `BrtXF`: one cell format; the ones between `BrtBeginCellXFs` and
+/// `BrtEndCellXFs` are what a cell's style reference indexes.
+const BRT_XF: u32 = 47;
+const BRT_BEGIN_CELL_XFS: u32 = 617;
+const BRT_END_CELL_XFS: u32 = 618;
+const BRT_WB_PROP: u32 = 153;
+const BRT_BUNDLE_SH: u32 = 156;
+const BRT_MERGE_CELL: u32 = 176;
+
+/// The sheet list lives in `workbook.bin`; its relationships are XML.
+const WORKBOOK: &str = "xl/workbook.bin";
+const WORKBOOK_RELS: &str = "xl/_rels/workbook.bin.rels";
+const SHARED_STRINGS: &str = "xl/sharedStrings.bin";
+const STYLES: &str = "xl/styles.bin";
+
+/// Whether the package is an `.xlsb` (a binary workbook part, no XML one).
+pub(super) fn is_xlsb<R: Read + Seek>(archive: &ZipArchive<R>, entries: &ZipEntryIndex) -> bool {
+    let has = |n: &str| archive.index_for_name(n).is_some() || entries.lookup(n).is_some();
+    has(WORKBOOK) && !has("xl/workbook.xml")
+}
+
+pub(super) fn from_zip<R: Read + Seek>(
+    archive: &mut ZipArchive<R>,
+    entries: &ZipEntryIndex,
+) -> Result<XlsxDocument> {
+    let wb = opc::read_zip_entry(archive, entries, WORKBOOK)?;
+    let mut shared = super::shared_parts::SharedParts::default();
+    let rels = super::read_rels_reporting(archive, entries, WORKBOOK_RELS, &mut shared.unreadable);
+    let (sheets, date1904) = parse_workbook(&wb);
+    // A workbook without a part simply lacks what it holds; one whose part
+    // is there and cannot be read has it damaged, which is reported.
+    let mut read_optional = |path: &str| match opc::read_zip_entry(archive, entries, path) {
+        Ok(data) => Some(data),
+        Err(crate::core::Error::MissingPart(_)) => None,
+        Err(e) => {
+            log::warn!("xlsb: part {path} unreadable: {e}");
+            shared.unreadable.record(entries, path, &e.to_string());
+            None
+        },
+    };
+    let shared_strings = match read_optional(SHARED_STRINGS) {
+        Some(d) => parse_shared_strings(&d),
+        None => SharedStringTable {
+            strings: Vec::new(),
+        },
+    };
+    let styles = read_optional(STYLES).map(|d| parse_styles(&d));
+    let mut worksheets = Vec::with_capacity(sheets.len());
+    let mut unreadable_sheets = super::shared_parts::ReportList::default();
+    let mut sheet_parts = super::SheetPartClaims::default();
+    for (i, info) in sheets.iter().enumerate() {
+        let rel = rels.get_by_id(&info.rel_id);
+        // A macro sheet has the same cell records as a worksheet (its part
+        // holds a cell table like a worksheet part); a chartsheet or dialog
+        // sheet has no cells, only its tab and, for a chartsheet, the text
+        // of the chart its drawing references.
+        let Some(kind) = super::sheet_kind_of(rel) else {
+            continue;
+        };
+        let path = rel
+            .map(|r| super::resolve_relative_zip_path("xl/workbook.bin", &r.target))
+            .unwrap_or_else(|| format!("xl/worksheets/sheet{}.bin", i + 1));
+        if let Err(reason) = sheet_parts.claim(entries, &path, &info.name) {
+            log::warn!("xlsb: sheet {:?}: {reason}", info.name);
+            unreadable_sheets.record_item(&info.name, &reason);
+            continue;
+        }
+        if matches!(kind, SheetKind::Chart | SheetKind::Dialog) {
+            let mut ws = Worksheet::without_cells(info.name.clone(), kind);
+            ws.state = info.state;
+            if kind == SheetKind::Chart {
+                for chart in shared.chartsheet_chart_parts(archive, entries, &path) {
+                    ws.chart_text
+                        .extend(shared.chart_text(archive, entries, &chart));
+                }
+            }
+            worksheets.push(ws);
+            continue;
+        }
+        let data = match opc::read_zip_entry(archive, entries, &path) {
+            Ok(data) => data,
+            Err(crate::core::Error::MissingPart(_)) => {
+                unreadable_sheets
+                    .record_item(&info.name, &format!("worksheet part {path} not found"));
+                continue;
+            },
+            Err(e) => {
+                unreadable_sheets.record_item(&info.name, &format!("worksheet part {path}: {e}"));
+                continue;
+            },
+        };
+        let mut ws = parse_sheet(&data, info.name.clone());
+        ws.state = info.state;
+        ws.kind = kind;
+        worksheets.push(ws);
+    }
+    let crate::core::properties::PackageMetadata {
+        core: core_properties,
+        app: app_properties,
+        package: mut package_properties,
+    } = XlsxDocument::read_package_metadata(archive, entries);
+    package_properties.crc_mismatched_parts = entries.crc_mismatched_parts();
+    let has_macros = rels.has_vba_project();
+    let (unreadable_sheets, unreadable_sheets_omitted, _) = unreadable_sheets.finish();
+    let (unreadable_parts, unreadable_parts_omitted, cosmetic_parts) = shared.unreadable.finish();
+    Ok(XlsxDocument {
+        input_bytes: 0,
+        workbook: WorkbookInfo {
+            sheets,
+            defined_names: Vec::new(),
+            date1904,
+        },
+        worksheets,
+        shared_strings,
+        styles,
+        theme: None,
+        chart_text: Vec::new(),
+        embedded_fonts: Vec::new(),
+        core_properties,
+        app_properties,
+        package_properties,
+        has_macros,
+        unreadable_sheets,
+        unreadable_sheets_omitted,
+        unreadable_parts,
+        unreadable_parts_omitted,
+        cosmetic_parts,
+        styles_data: None,
+        theme_data: None,
+        render_cache: Default::default(),
+    })
+}
+
+/// One BIFF12 record: id and body.
+struct Record<'a> {
+    id: u32,
+    data: &'a [u8],
+}
+
+/// Iterate the records of a BIFF12 stream. A truncated header or body
+/// ends the iteration; nothing is read past the stream.
+struct Records<'a> {
+    data: &'a [u8],
+    pos: usize,
+}
+
+impl<'a> Iterator for Records<'a> {
+    type Item = Record<'a>;
+
+    fn next(&mut self) -> Option<Record<'a>> {
+        let d = self.data;
+        let mut p = self.pos;
+        // Id: one byte, or two when bit 7 of the first is set.
+        let b0 = *d.get(p)?;
+        p += 1;
+        let mut id = (b0 & 0x7F) as u32;
+        if b0 & 0x80 != 0 {
+            let b1 = *d.get(p)?;
+            p += 1;
+            id |= ((b1 & 0x7F) as u32) << 7;
+        }
+        // Size: up to four 7-bit bytes.
+        let mut size = 0usize;
+        for i in 0..4 {
+            let b = *d.get(p)?;
+            p += 1;
+            size |= ((b & 0x7F) as usize) << (7 * i);
+            if b & 0x80 == 0 {
+                break;
+            }
+        }
+        let end = p.checked_add(size)?;
+        if end > d.len() {
+            return None;
+        }
+        self.pos = end;
+        Some(Record {
+            id,
+            data: &d[p..end],
+        })
+    }
+}
+
+fn records(data: &[u8]) -> Records<'_> {
+    Records { data, pos: 0 }
+}
+
+fn u32_at(d: &[u8], o: usize) -> Option<u32> {
+    d.get(o..o + 4)
+        .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+}
+
+/// `XLWideString` at `o`: character count then UTF-16LE. Returns the text
+/// and the offset just past it; a count of `0xFFFFFFFF` is the nullable
+/// form's "no string".
+fn wide_string(d: &[u8], o: usize) -> Option<(String, usize)> {
+    let cch = u32_at(d, o)?;
+    if cch == 0xFFFF_FFFF {
+        return Some((String::new(), o + 4));
+    }
+    let bytes = (cch as usize).checked_mul(2)?;
+    let start = o + 4;
+    let end = start.checked_add(bytes)?;
+    let raw = d.get(start..end)?;
+    let units: Vec<u16> = raw
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|c| u16::from_le_bytes(*c))
+        .collect();
+    Some((String::from_utf16_lossy(&units), end))
+}
+
+/// The sheet list and the 1904 flag from `workbook.bin`.
+fn parse_workbook(data: &[u8]) -> (Vec<SheetInfo>, bool) {
+    let mut sheets = Vec::new();
+    let mut date1904 = false;
+    for rec in records(data) {
+        match rec.id {
+            BRT_WB_PROP => {
+                // BrtWbProp flags: bit 0 is f1904.
+                if let Some(flags) = u32_at(rec.data, 0) {
+                    date1904 = flags & 1 != 0;
+                }
+            },
+            BRT_BUNDLE_SH => {
+                // hsState, iTabID, strRelID (nullable), strName. Excel 2007
+                // Beta 2 wrote one more dword before the strings; a record
+                // whose strings do not parse at the released offset is
+                // read at that one.
+                let Some(hs_state) = u32_at(rec.data, 0) else {
+                    continue;
+                };
+                let Some(sheet_id) = u32_at(rec.data, 4) else {
+                    continue;
+                };
+                let strings_at = |o: usize| {
+                    let (rel_id, next) = wide_string(rec.data, o)?;
+                    let (name, _) = wide_string(rec.data, next)?;
+                    (!rel_id.chars().any(char::is_control) && !name.is_empty())
+                        .then_some((rel_id, name))
+                };
+                let Some((rel_id, name)) = strings_at(8).or_else(|| strings_at(12)) else {
+                    continue;
+                };
+                sheets.push(SheetInfo {
+                    name,
+                    sheet_id,
+                    rel_id,
+                    state: match hs_state {
+                        1 => SheetState::Hidden,
+                        2 => SheetState::VeryHidden,
+                        _ => SheetState::Visible,
+                    },
+                });
+            },
+            _ => {},
+        }
+    }
+    (sheets, date1904)
+}
+
+/// `sharedStrings.bin`: one `BrtSSTItem` per entry — a flags byte, the
+/// text, then the rich runs and phonetic data the flags announce, which
+/// this reader does not need.
+fn parse_shared_strings(data: &[u8]) -> SharedStringTable {
+    let mut strings = Vec::new();
+    for rec in records(data) {
+        if rec.id == BRT_SST_ITEM {
+            if let Some((text, _)) = wide_string(rec.data, 1) {
+                strings.push(SharedString {
+                    text,
+                    rich_text: None,
+                });
+            }
+        }
+    }
+    SharedStringTable { strings }
+}
+
+/// `styles.bin`: the number-format codes and the `cellXfs` array, which
+/// is what turns a serial into a date downstream — the same fields the
+/// `.xlsx` stylesheet supplies; fonts, fills and borders are not read.
+fn parse_styles(data: &[u8]) -> StyleSheet {
+    let mut number_formats = HashMap::new();
+    let mut cell_formats = Vec::new();
+    let mut in_cell_xfs = false;
+    for rec in records(data) {
+        let d = rec.data;
+        match rec.id {
+            BRT_FMT => {
+                // ifmt (u16), stFmtCode.
+                if let (Some(b), Some((code, _))) = (d.get(0..2), wide_string(d, 2)) {
+                    number_formats.insert(u16::from_le_bytes([b[0], b[1]]) as u32, code);
+                }
+            },
+            BRT_BEGIN_CELL_XFS => in_cell_xfs = true,
+            BRT_END_CELL_XFS => in_cell_xfs = false,
+            BRT_XF if in_cell_xfs => {
+                // ixfeParent, iFmt, iFont, iFill, ixBorder (u16 each).
+                if let Some(b) = d.get(0..10) {
+                    cell_formats.push(CellFormat {
+                        number_format_id: u16::from_le_bytes([b[2], b[3]]) as u32,
+                        font_index: Some(u16::from_le_bytes([b[4], b[5]]) as u32),
+                        fill_index: Some(u16::from_le_bytes([b[6], b[7]]) as u32),
+                        border_index: Some(u16::from_le_bytes([b[8], b[9]]) as u32),
+                        apply_number_format: true,
+                        xf_id: Some(u16::from_le_bytes([b[0], b[1]]) as u32),
+                        alignment: None,
+                    });
+                }
+            },
+            _ => {},
+        }
+    }
+    StyleSheet {
+        number_formats,
+        fonts: Vec::new(),
+        fills: Vec::new(),
+        borders: Vec::new(),
+        cell_formats,
+        cell_style_formats: Vec::new(),
+    }
+}
+
+/// The `Cell` structure every cell record starts with: the column, then
+/// the style reference (24 bits) and flags.
+fn cell_head(d: &[u8]) -> Option<(u32, u32)> {
+    Some((u32_at(d, 0)?, u32_at(d, 4)? & 0x00FF_FFFF))
+}
+
+fn error_text(code: u8) -> String {
+    match code {
+        0x00 => "#NULL!",
+        0x07 => "#DIV/0!",
+        0x0F => "#VALUE!",
+        0x17 => "#REF!",
+        0x1D => "#NAME?",
+        0x24 => "#NUM!",
+        0x2A => "#N/A",
+        0x2B => "#GETTING_DATA",
+        _ => "#ERR",
+    }
+    .to_string()
+}
+
+fn parse_sheet(data: &[u8], name: String) -> Worksheet {
+    let mut rows: Vec<Row> = Vec::new();
+    let mut merged_cells = Vec::new();
+    let mut current: Option<Row> = None;
+    let mut row_index: u32 = 0;
+    let push = |rows: &mut Vec<Row>,
+                current: &mut Option<Row>,
+                row: u32,
+                col: u32,
+                style: u32,
+                value: CellValue| {
+        // Past XFD1048576 is not a cell (a corrupted index would size
+        // the table's rows to it downstream).
+        if col > super::cell::MAX_COL || row >= super::cell::MAX_ROWS {
+            return;
+        }
+        if current.as_ref().is_some_and(|r| r.index != row + 1) {
+            if let Some(r) = current.take() {
+                rows.push(r);
+            }
+        }
+        let r = current.get_or_insert_with(|| Row {
+            index: row + 1,
+            cells: Vec::new(),
+        });
+        r.cells
+            .push(Cell::new(CellRef { col, row }, value, Some(style)));
+    };
+    for rec in records(data) {
+        let d = rec.data;
+        match rec.id {
+            BRT_ROW_HDR => {
+                if let Some(rw) = u32_at(d, 0) {
+                    row_index = rw;
+                }
+            },
+            BRT_CELL_BLANK => {},
+            BRT_CELL_RK => {
+                if let (Some((col, style)), Some(rk)) = (cell_head(d), u32_at(d, 8)) {
+                    let n = crate::xls::decode_rk(rk);
+                    push(&mut rows, &mut current, row_index, col, style, CellValue::Number(n));
+                }
+            },
+            BRT_CELL_ERROR | BRT_FMLA_ERROR => {
+                if let (Some((col, style)), Some(&code)) = (cell_head(d), d.get(8)) {
+                    push(
+                        &mut rows,
+                        &mut current,
+                        row_index,
+                        col,
+                        style,
+                        CellValue::Error(error_text(code)),
+                    );
+                }
+            },
+            BRT_CELL_BOOL | BRT_FMLA_BOOL => {
+                if let (Some((col, style)), Some(&b)) = (cell_head(d), d.get(8)) {
+                    push(
+                        &mut rows,
+                        &mut current,
+                        row_index,
+                        col,
+                        style,
+                        CellValue::Boolean(b != 0),
+                    );
+                }
+            },
+            BRT_CELL_REAL | BRT_FMLA_NUM => {
+                if let (Some((col, style)), Some(b)) = (cell_head(d), d.get(8..16)) {
+                    let n = f64::from_le_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]);
+                    push(&mut rows, &mut current, row_index, col, style, CellValue::Number(n));
+                }
+            },
+            BRT_CELL_ST | BRT_FMLA_STRING => {
+                if let (Some((col, style)), Some((text, _))) = (cell_head(d), wide_string(d, 8)) {
+                    push(&mut rows, &mut current, row_index, col, style, CellValue::String(text));
+                }
+            },
+            BRT_CELL_ISST => {
+                if let (Some((col, style)), Some(isst)) = (cell_head(d), u32_at(d, 8)) {
+                    push(
+                        &mut rows,
+                        &mut current,
+                        row_index,
+                        col,
+                        style,
+                        CellValue::SharedString(isst),
+                    );
+                }
+            },
+            BRT_MERGE_CELL => {
+                if let (Some(r1), Some(r2), Some(c1), Some(c2)) =
+                    (u32_at(d, 0), u32_at(d, 4), u32_at(d, 8), u32_at(d, 12))
+                {
+                    merged_cells.push(format!(
+                        "{}{}:{}{}",
+                        CellRef::col_name(c1),
+                        r1 + 1,
+                        CellRef::col_name(c2),
+                        r2 + 1
+                    ));
+                }
+            },
+            _ => {},
+        }
+    }
+    if let Some(r) = current.take() {
+        rows.push(r);
+    }
+    Worksheet {
+        rows,
+        merged_cells,
+        ..Worksheet::without_cells(name, crate::ir::SheetKind::Worksheet)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A record: id in the one- or two-byte form, size in 7-bit bytes.
+    fn rec(id: u32, body: &[u8]) -> Vec<u8> {
+        let mut v = Vec::new();
+        if id < 0x80 {
+            v.push(id as u8);
+        } else {
+            v.push((id & 0x7F) as u8 | 0x80);
+            v.push((id >> 7) as u8);
+        }
+        let mut size = body.len();
+        loop {
+            let b = (size & 0x7F) as u8;
+            size >>= 7;
+            if size == 0 {
+                v.push(b);
+                break;
+            }
+            v.push(b | 0x80);
+        }
+        v.extend_from_slice(body);
+        v
+    }
+
+    fn wide(s: &str) -> Vec<u8> {
+        let mut v = (s.encode_utf16().count() as u32).to_le_bytes().to_vec();
+        v.extend(s.encode_utf16().flat_map(u16::to_le_bytes));
+        v
+    }
+
+    fn cell(col: u32, style: u32, value: &[u8]) -> Vec<u8> {
+        let mut v = col.to_le_bytes().to_vec();
+        v.extend_from_slice(&style.to_le_bytes());
+        v.extend_from_slice(value);
+        v
+    }
+
+    #[test]
+    fn test_records_decode_one_and_two_byte_ids_and_multibyte_sizes() {
+        let mut s = rec(5, &[1, 2, 3]);
+        s.extend(rec(156, &vec![7u8; 300]));
+        let got: Vec<(u32, usize)> = records(&s).map(|r| (r.id, r.data.len())).collect();
+        assert_eq!(got, vec![(5, 3), (156, 300)]);
+        // A truncated body ends the stream.
+        let mut t = rec(5, &[1, 2, 3]);
+        t.truncate(t.len() - 1);
+        assert_eq!(records(&t).count(), 0);
+    }
+
+    #[test]
+    fn test_workbook_sheet_list_and_1904_flag() {
+        let mut wb = rec(BRT_WB_PROP, &1u32.to_le_bytes());
+        let mut sh = 1u32.to_le_bytes().to_vec(); // hidden
+        sh.extend_from_slice(&7u32.to_le_bytes());
+        sh.extend(wide("rId3"));
+        sh.extend(wide("Data"));
+        wb.extend(rec(BRT_BUNDLE_SH, &sh));
+        let (sheets, date1904) = parse_workbook(&wb);
+        assert!(date1904);
+        assert_eq!(sheets.len(), 1);
+        assert_eq!(sheets[0].name, "Data");
+        assert_eq!(sheets[0].rel_id, "rId3");
+        assert_eq!(sheets[0].sheet_id, 7);
+        assert_eq!(sheets[0].state, SheetState::Hidden);
+    }
+
+    /// Excel 2007 Beta 2 wrote one more dword before the sheet's strings.
+    #[test]
+    fn test_beta_bundle_sheet_layout_is_read_at_the_second_offset() {
+        let mut sh = 0u32.to_le_bytes().to_vec();
+        sh.extend_from_slice(&0u32.to_le_bytes());
+        sh.extend_from_slice(&1u32.to_le_bytes());
+        sh.extend(wide("rId1"));
+        sh.extend(wide("Sheet1"));
+        let wb = rec(BRT_BUNDLE_SH, &sh);
+        let (sheets, _) = parse_workbook(&wb);
+        assert_eq!(sheets.len(), 1);
+        assert_eq!((sheets[0].rel_id.as_str(), sheets[0].name.as_str()), ("rId1", "Sheet1"));
+    }
+
+    #[test]
+    fn test_sheet_cells_of_every_kind_land_in_their_rows() {
+        let mut s = rec(BRT_ROW_HDR, &[0u8; 17]);
+        s.extend(rec(BRT_CELL_ISST, &cell(0, 3, &2u32.to_le_bytes())));
+        s.extend(rec(BRT_CELL_RK, &cell(1, 0, &(100u32 << 2 | 2).to_le_bytes())));
+        s.extend(rec(BRT_CELL_REAL, &cell(2, 0, &2.5f64.to_le_bytes())));
+        let mut row2 = 4u32.to_le_bytes().to_vec();
+        row2.extend_from_slice(&[0u8; 13]);
+        s.extend(rec(BRT_ROW_HDR, &row2));
+        s.extend(rec(BRT_CELL_ST, &cell(0, 0, &wide("inline"))));
+        s.extend(rec(BRT_CELL_BOOL, &cell(1, 0, &[1])));
+        s.extend(rec(BRT_CELL_ERROR, &cell(2, 0, &[0x07])));
+        let mut f = cell(3, 0, &wide("cached"));
+        f.extend_from_slice(&[0, 0, 0, 0, 0, 0]);
+        s.extend(rec(BRT_FMLA_STRING, &f));
+        let mut m = 0u32.to_le_bytes().to_vec();
+        m.extend_from_slice(&4u32.to_le_bytes());
+        m.extend_from_slice(&0u32.to_le_bytes());
+        m.extend_from_slice(&1u32.to_le_bytes());
+        s.extend(rec(BRT_MERGE_CELL, &m));
+        let ws = parse_sheet(&s, "S".into());
+        assert_eq!(ws.rows.len(), 2);
+        assert_eq!(ws.rows[0].index, 1);
+        assert_eq!(ws.rows[1].index, 5);
+        let r0 = &ws.rows[0].cells;
+        assert!(matches!(r0[0].value, CellValue::SharedString(2)));
+        assert_eq!(r0[0].style_index, Some(3));
+        assert!(matches!(r0[1].value, CellValue::Number(n) if n == 100.0));
+        assert!(matches!(r0[2].value, CellValue::Number(n) if n == 2.5));
+        let r1 = &ws.rows[1].cells;
+        assert!(matches!(&r1[0].value, CellValue::String(s) if s == "inline"));
+        assert!(matches!(r1[1].value, CellValue::Boolean(true)));
+        assert!(matches!(&r1[2].value, CellValue::Error(e) if e == "#DIV/0!"));
+        assert!(matches!(&r1[3].value, CellValue::String(s) if s == "cached"));
+        assert_eq!(ws.merged_cells, vec!["A1:B5"]);
+    }
+
+    #[test]
+    fn test_styles_map_cell_formats_to_number_format_codes() {
+        let mut st = Vec::new();
+        let mut fmt = 164u16.to_le_bytes().to_vec();
+        fmt.extend(wide("yyyy-mm-dd"));
+        st.extend(rec(BRT_FMT, &fmt));
+        st.extend(rec(BRT_BEGIN_CELL_XFS, &1u32.to_le_bytes()));
+        let mut xf = 0u16.to_le_bytes().to_vec(); // ixfeParent
+        xf.extend_from_slice(&164u16.to_le_bytes()); // iFmt
+        xf.extend_from_slice(&[0u8; 12]);
+        st.extend(rec(BRT_XF, &xf));
+        st.extend(rec(BRT_END_CELL_XFS, &[]));
+        let sheet = parse_styles(&st);
+        assert_eq!(sheet.number_format_for(0), Some("yyyy-mm-dd"));
+    }
+
+    #[test]
+    fn test_shared_strings_take_the_text_and_skip_rich_runs() {
+        let mut sst = Vec::new();
+        let mut plain = vec![0u8];
+        plain.extend(wide("plain"));
+        sst.extend(rec(BRT_SST_ITEM, &plain));
+        let mut rich = vec![1u8];
+        rich.extend(wide("rich"));
+        rich.extend_from_slice(&1u32.to_le_bytes());
+        rich.extend_from_slice(&[0u8; 4]);
+        sst.extend(rec(BRT_SST_ITEM, &rich));
+        let table = parse_shared_strings(&sst);
+        let texts: Vec<&str> = table.strings.iter().map(|s| s.text.as_str()).collect();
+        assert_eq!(texts, ["plain", "rich"]);
+    }
+
+    /// A `BrtBundleSh` for sheet `name` behind relationship `rel_id`.
+    fn bundle_sheet(state: u32, id: u32, rel_id: &str, name: &str) -> Vec<u8> {
+        let mut sh = state.to_le_bytes().to_vec();
+        sh.extend_from_slice(&id.to_le_bytes());
+        sh.extend(wide(rel_id));
+        sh.extend(wide(name));
+        rec(BRT_BUNDLE_SH, &sh)
+    }
+
+    /// One row holding one inline-string cell and one Boolean cell.
+    fn string_and_bool_sheet(text: &str) -> Vec<u8> {
+        let mut s = rec(BRT_ROW_HDR, &[0u8; 17]);
+        s.extend(rec(BRT_CELL_ST, &cell(0, 0, &wide(text))));
+        s.extend(rec(BRT_CELL_BOOL, &cell(1, 0, &[1])));
+        s
+    }
+
+    /// Sheets that name one part are not read and parsed once each: the first
+    /// owns the part, the others are reported as unreadable.
+    #[test]
+    fn test_xlsb_sheets_naming_one_part_are_read_once() {
+        use crate::core::relationships::rel_types;
+        let mut wb = Vec::new();
+        for i in 1..=20 {
+            wb.extend(bundle_sheet(0, i, "rId1", &format!("S{i}")));
+        }
+        let rels = format!(
+            r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="{}" Target="worksheets/sheet1.bin"/></Relationships>"#,
+            rel_types::WORKSHEET
+        );
+        let data = string_and_bool_sheet("only cell");
+        let bytes = super::super::test_support::zip_parts(&[
+            (WORKBOOK, &wb),
+            (WORKBOOK_RELS, rels.as_bytes()),
+            ("xl/worksheets/sheet1.bin", &data),
+        ]);
+        let doc = super::super::test_support::open_bytes(bytes);
+        assert_eq!(doc.worksheets.len(), 1);
+        assert_eq!(doc.unreadable_sheets.len(), 19);
+    }
+
+    /// A shared-strings or styles part the zip cannot decode (compression
+    /// method 99, APPNOTE 4.4.5) is reported; one the package lacks is not.
+    #[test]
+    fn test_xlsb_part_that_cannot_be_decoded_is_reported_not_taken_for_absent() {
+        use crate::core::relationships::rel_types;
+        let wb = bundle_sheet(0, 1, "rId1", "S");
+        let rels = format!(
+            r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="{}" Target="worksheets/sheet1.bin"/></Relationships>"#,
+            rel_types::WORKSHEET
+        );
+        let data = string_and_bool_sheet("cell");
+        let parts: &[(&str, &[u8])] = &[
+            (WORKBOOK, &wb),
+            (WORKBOOK_RELS, rels.as_bytes()),
+            ("xl/worksheets/sheet1.bin", &data),
+            (SHARED_STRINGS, b"sst"),
+            (STYLES, b"xfs"),
+        ];
+        let intact =
+            super::super::test_support::open_bytes(super::super::test_support::zip_parts(parts));
+        assert!(intact.unreadable_parts.is_empty(), "{:?}", intact.unreadable_parts);
+        for part in [SHARED_STRINGS, STYLES] {
+            let mut bytes = super::super::test_support::zip_parts(parts);
+            let mut patched = 0;
+            for at in 0..bytes.len() - 46 {
+                // Local header: method at 8, name at 30; central: method at
+                // 10, name at 46 (APPNOTE 4.3.7, 4.3.12).
+                let (method, name_at, len_at) = match &bytes[at..at + 4] {
+                    [0x50, 0x4b, 0x03, 0x04] => (at + 8, at + 30, at + 26),
+                    [0x50, 0x4b, 0x01, 0x02] => (at + 10, at + 46, at + 28),
+                    _ => continue,
+                };
+                let len = u16::from_le_bytes([bytes[len_at], bytes[len_at + 1]]) as usize;
+                if bytes.get(name_at..name_at + len) == Some(part.as_bytes()) {
+                    bytes[method..method + 2].copy_from_slice(&99u16.to_le_bytes());
+                    patched += 1;
+                }
+            }
+            assert_eq!(patched, 2);
+            let doc = super::super::test_support::open_bytes(bytes);
+            assert!(
+                doc.unreadable_parts
+                    .iter()
+                    .any(|(p, why)| p.contains(part) && !why.contains("missing")),
+                "{part}: {:?}",
+                doc.unreadable_parts
+            );
+        }
+        // Absent parts are not damaged ones.
+        let bare = super::super::test_support::open_bytes(super::super::test_support::zip_parts(
+            &parts[..3],
+        ));
+        assert!(bare.unreadable_parts.is_empty(), "{:?}", bare.unreadable_parts);
+    }
+
+    /// The `.xlsb` reader dropped macro sheets, chartsheets and dialog
+    /// sheets whole, as the `.xlsx` one did. A macro sheet's cells are
+    /// the worksheet records; a chartsheet is its tab and its chart's text.
+    #[test]
+    fn test_xlsb_macro_and_chart_sheets_surface_with_their_kind() {
+        use crate::core::relationships::rel_types;
+        let mut wb = bundle_sheet(0, 1, "rId1", "Data");
+        wb.extend(bundle_sheet(2, 2, "rId2", "Macro1"));
+        wb.extend(bundle_sheet(1, 3, "rId3", "Profile"));
+        wb.extend(bundle_sheet(0, 4, "rId4", "Tail"));
+        let rels = format!(
+            r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="{}" Target="worksheets/sheet1.bin"/><Relationship Id="rId2" Type="{}" Target="macrosheets/sheet1.bin"/><Relationship Id="rId3" Type="{}" Target="chartsheets/sheet1.bin"/><Relationship Id="rId4" Type="{}" Target="worksheets/sheet2.bin"/></Relationships>"#,
+            rel_types::WORKSHEET,
+            rel_types::MACROSHEET,
+            rel_types::CHARTSHEET,
+            rel_types::WORKSHEET
+        );
+        let cs_rels = format!(
+            r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="{}" Target="../drawings/drawing1.xml"/></Relationships>"#,
+            rel_types::DRAWING
+        );
+        let dr_rels = format!(
+            r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="{}" Target="../charts/chart1.xml"/></Relationships>"#,
+            rel_types::CHART
+        );
+        let chart = r#"<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><c:chart><c:title><c:tx><c:rich><a:p><a:r><a:t>Profile Title</a:t></a:r></a:p></c:rich></c:tx></c:title></c:chart></c:chartSpace>"#;
+        let data = string_and_bool_sheet("data cell");
+        let macro_sheet = string_and_bool_sheet("Auto_Open");
+        let tail = string_and_bool_sheet("tail cell");
+        let bytes = super::super::test_support::zip_parts(&[
+            (WORKBOOK, &wb),
+            (WORKBOOK_RELS, rels.as_bytes()),
+            ("xl/worksheets/sheet1.bin", &data),
+            ("xl/macrosheets/sheet1.bin", &macro_sheet),
+            ("xl/chartsheets/sheet1.bin", &[]),
+            ("xl/chartsheets/_rels/sheet1.bin.rels", cs_rels.as_bytes()),
+            ("xl/drawings/drawing1.xml", b"<xdr:wsDr xmlns:xdr=\"http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing\"/>"),
+            ("xl/drawings/_rels/drawing1.xml.rels", dr_rels.as_bytes()),
+            ("xl/charts/chart1.xml", chart.as_bytes()),
+            ("xl/worksheets/sheet2.bin", &tail),
+        ]);
+        let doc = super::super::test_support::open_bytes(bytes);
+        let got: Vec<_> = doc
+            .worksheets
+            .iter()
+            .map(|w| (w.name.as_str(), w.kind, w.state))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("Data", SheetKind::Worksheet, SheetState::Visible),
+                ("Macro1", SheetKind::Macro, SheetState::VeryHidden),
+                ("Profile", SheetKind::Chart, SheetState::Hidden),
+                ("Tail", SheetKind::Worksheet, SheetState::Visible),
+            ]
+        );
+        let profile = &doc.worksheets[2];
+        assert!(profile.rows.is_empty());
+        assert!(
+            profile
+                .chart_text
+                .iter()
+                .any(|t| t.contains("Profile Title"))
+        );
+        let ir = crate::convert_xlsx::xlsx_to_ir(&doc);
+        for (what, out) in [
+            ("plain_text", doc.plain_text()),
+            ("to_markdown", doc.to_markdown()),
+            ("ir text", ir.plain_text()),
+            ("to_html", ir.to_html()),
+        ] {
+            for want in [
+                "data cell",
+                "Auto_Open",
+                "TRUE",
+                "Profile",
+                "Profile Title",
+                "tail cell",
+            ] {
+                assert!(out.contains(want), "{what} lost {want:?}: {out}");
+            }
+        }
+        assert_eq!(ir.sections[1].sheet_kind, Some(SheetKind::Macro));
+        assert_eq!(ir.sections[2].sheet_kind, Some(SheetKind::Chart));
+    }
+}

@@ -1,0 +1,3325 @@
+//! XLSX creation (write) module.
+//!
+//! Provides a builder API for creating XLSX files from scratch.
+//!
+//! # Example
+//!
+//! ```rust,no_run
+//! use office_oxide::xlsx::write::{XlsxWriter, CellData, CellStyle, NumberFormat, HAlign};
+//!
+//! let mut wb = XlsxWriter::new();
+//! let mut sheet = wb.add_sheet("Sales");
+//!
+//! // Bold header row
+//! let header_style = CellStyle::new().bold();
+//! sheet.set_cell_styled(0, 0, CellData::String("Item".into()),  header_style.clone());
+//! sheet.set_cell_styled(0, 1, CellData::String("Amount".into()), header_style);
+//!
+//! // Data rows
+//! sheet.set_cell(1, 0, CellData::String("Widget".into()));
+//! sheet.set_cell(1, 1, CellData::Number(1500.0));
+//! sheet.set_cell(2, 0, CellData::String("Gadget".into()));
+//! sheet.set_cell(2, 1, CellData::Number(2400.0));
+//!
+//! // SUM formula with currency formatting
+//! let currency = CellStyle::new().number_format(NumberFormat::Currency);
+//! sheet.set_cell_styled(3, 1, CellData::Formula("SUM(B2:B3)".into()), currency);
+//!
+//! sheet.set_column_width(0, 20.0);
+//! sheet.set_column_width(1, 15.0);
+//!
+//! wb.save("sales.xlsx").unwrap();
+//! ```
+
+use std::collections::HashMap;
+use std::io::Write;
+use std::path::Path;
+
+use quick_xml::Writer;
+use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, BytesText, Event};
+
+use crate::core::opc::{OpcWriter, PartName};
+use crate::core::relationships::rel_types;
+
+use super::Result;
+
+// ---------------------------------------------------------------------------
+// SML namespace constants
+// ---------------------------------------------------------------------------
+
+use crate::core::xml::ns::{R_STR as NS_REL, SML_STR as NS_SML};
+
+// ---------------------------------------------------------------------------
+// Content type constants
+// ---------------------------------------------------------------------------
+
+const CT_WORKBOOK: &str =
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml";
+const CT_WORKSHEET: &str =
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml";
+const CT_STYLES: &str = "application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml";
+
+// ---------------------------------------------------------------------------
+// Public: CellStyle
+// ---------------------------------------------------------------------------
+
+/// Horizontal alignment inside a cell.
+#[derive(Debug, Clone, PartialEq)]
+pub enum HAlign {
+    /// Align content to the left edge.
+    Left,
+    /// Center content horizontally.
+    Center,
+    /// Align content to the right edge.
+    Right,
+}
+
+/// Pre-defined number formats.  Custom format strings can be set via
+/// `CellStyle::custom_format`.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub enum NumberFormat {
+    /// General text (default).
+    #[default]
+    General,
+    /// Integer: `0`
+    Integer,
+    /// Two decimal places: `0.00`
+    Decimal2,
+    /// Currency: `#,##0.00`
+    Currency,
+    /// Percentage: `0%`
+    Percent,
+    /// Percentage with two decimals: `0.00%`
+    Percent2,
+    /// Short date: `yyyy-mm-dd`
+    Date,
+    /// Short datetime: `yyyy-mm-dd hh:mm`
+    DateTime,
+}
+
+impl NumberFormat {
+    /// Return the OOXML built-in `numFmtId` (0 = general) or `None` if a
+    /// custom format string must be emitted.
+    fn builtin_id(&self) -> Option<u32> {
+        match self {
+            Self::General => Some(0),
+            Self::Integer => Some(1),
+            Self::Decimal2 => Some(2),
+            Self::Currency => Some(7), // #,##0.00
+            Self::Percent => Some(9),
+            Self::Percent2 => Some(10),
+            Self::Date => Some(14),
+            Self::DateTime => Some(22),
+        }
+    }
+}
+
+/// Style applied to a single cell.
+#[derive(Debug, Clone, Default)]
+pub struct CellStyle {
+    /// Apply bold font weight.
+    pub bold: bool,
+    /// Apply italic style.
+    pub italic: bool,
+    /// Apply single underline.
+    pub underline: bool,
+    /// RGB hex color for the font, e.g. `"FF0000"` for red. No leading `#`.
+    pub font_color: Option<String>,
+    /// Font size in points.
+    pub font_size_pt: Option<f32>,
+    /// Font family name, e.g. `"Arial"`.
+    pub font_name: Option<String>,
+    /// Background fill color (RGB hex, no `#`).
+    pub background_color: Option<String>,
+    /// Number format to apply to the cell value.
+    pub number_format: NumberFormat,
+    /// An explicit format code, e.g. `"$#,##0.00"`. Takes precedence over
+    /// `number_format`, and is how a format read from a source document is
+    /// carried through instead of being flattened to `General`.
+    pub number_format_code: Option<String>,
+    /// Horizontal alignment override.
+    pub h_align: Option<HAlign>,
+    /// Wrap text within the cell.
+    pub wrap_text: bool,
+}
+
+impl CellStyle {
+    /// Create a new default (unstyled) `CellStyle`.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Enable bold. Builder-style: returns `Self`.
+    pub fn bold(mut self) -> Self {
+        self.bold = true;
+        self
+    }
+
+    /// Enable italic.
+    pub fn italic(mut self) -> Self {
+        self.italic = true;
+        self
+    }
+
+    /// Enable underline.
+    pub fn underline(mut self) -> Self {
+        self.underline = true;
+        self
+    }
+
+    /// Set font color (RGB hex without `#`, e.g. `"FF0000"`).
+    pub fn font_color(mut self, color: impl Into<String>) -> Self {
+        self.font_color = Some(color.into());
+        self
+    }
+
+    /// Set font size in points.
+    pub fn font_size(mut self, pt: f32) -> Self {
+        self.font_size_pt = Some(pt);
+        self
+    }
+
+    /// Set font family.
+    pub fn font_name(mut self, name: impl Into<String>) -> Self {
+        self.font_name = Some(name.into());
+        self
+    }
+
+    /// Set background fill color (RGB hex without `#`).
+    pub fn background(mut self, color: impl Into<String>) -> Self {
+        self.background_color = Some(color.into());
+        self
+    }
+
+    /// Set a number format.
+    /// Apply an explicit number format code (e.g. `"$#,##0.00"`).
+    #[must_use]
+    pub fn number_format_code(mut self, code: impl Into<String>) -> Self {
+        self.number_format_code = Some(code.into());
+        self
+    }
+
+    /// Set the number format applied to the cell value.
+    pub fn number_format(mut self, fmt: NumberFormat) -> Self {
+        self.number_format = fmt;
+        self
+    }
+
+    /// Set horizontal alignment.
+    pub fn align(mut self, align: HAlign) -> Self {
+        self.h_align = Some(align);
+        self
+    }
+
+    /// Enable text wrapping.
+    pub fn wrap(mut self) -> Self {
+        self.wrap_text = true;
+        self
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Public: CellData
+// ---------------------------------------------------------------------------
+
+/// A value to write into a cell.
+#[derive(Debug, Clone)]
+pub enum CellData {
+    /// An empty cell.
+    Empty,
+    /// A string value (written as an inline string).
+    String(String),
+    /// A string made of multiple differently-formatted runs (written as
+    /// an inline rich string, one `<r>` per run) — closes the write
+    /// side of the read-only gap the rich-text reader left: a cell with several
+    /// runs of distinct bold/italic/color/font formatting used to have
+    /// nowhere to go but a single flattened `CellData::String`, silently
+    /// dropping every run's own formatting.
+    RichString(Vec<RichRun>),
+    /// A numeric value.
+    Number(f64),
+    /// A boolean value.
+    Boolean(bool),
+    /// A formula, e.g. `"SUM(A1:A10)"`. Do not include the leading `=`.
+    Formula(String),
+    /// A formula together with its last computed value, written as
+    /// `<f>` plus the cached `<v>` — what Excel itself saves, so a reader
+    /// that does not evaluate formulas (every extractor, including this
+    /// crate) still sees the number or text the cell showed. `cached`
+    /// is the value's own variant; a nested formula is written as its
+    /// text.
+    FormulaWithValue {
+        /// Formula text without the leading `=`.
+        formula: String,
+        /// The value the formula last produced.
+        cached: Box<CellData>,
+    },
+}
+
+/// One run of a multi-run cell's inline rich text — the
+/// write-side mirror of `shared_strings::RichTextRun` (read). Fields
+/// intentionally simpler than the read side's (a plain hex color
+/// string, not a theme-resolving `ColorRef`) since a caller building a
+/// cell to write always already has concrete values, never a theme
+/// index to resolve.
+#[derive(Debug, Clone, Default)]
+pub struct RichRun {
+    /// The run's text.
+    pub text: String,
+    /// Bold toggle.
+    pub bold: bool,
+    /// Italic toggle.
+    pub italic: bool,
+    /// Underline toggle.
+    pub underline: bool,
+    /// Font color (RGB hex without `#`, e.g. `"FF0000"`).
+    pub font_color: Option<String>,
+    /// Font size in points.
+    pub font_size_pt: Option<f32>,
+    /// Font family.
+    pub font_name: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
+// XlsxWriter
+// ---------------------------------------------------------------------------
+
+/// Builder for creating XLSX files.
+pub struct XlsxWriter {
+    sheets: Vec<SheetDataInner>,
+    /// Embedded font programs to ship inside the package under `xl/fonts/`.
+    /// Same layout as DOCX `word/fonts/` and PPTX `ppt/fonts/`. Excel
+    /// itself doesn't honor these without `<workbookView>` / theme
+    /// plumbing, but the in-process reader scans the directory so
+    /// PDF↔XLSX round-trips can preserve typefaces.
+    embedded_fonts: Vec<(String, Vec<u8>)>,
+    /// Document metadata for `docProps/core.xml`. `None` means no
+    /// core-properties part is written.
+    metadata: Option<crate::ir::Metadata>,
+    /// Workbook `<definedNames>` ([ECMA-376] §18.2.5).
+    defined_names: Vec<crate::ir::DefinedName>,
+    /// The names of `sheets`, for making the next one unique.
+    names: SheetNames,
+    /// Where the cells of a sheet past `max_write_sheets` go
+    /// (the handle `add_sheet` must return); never written out.
+    refused_sheet: Option<SheetDataInner>,
+    /// How many sheets were refused; writing the workbook is an error then.
+    refused_sheets: usize,
+}
+
+/// Per-worksheet page geometry.
+///
+/// Maps roughly 1-to-1 onto OOXML's `<pageMargins>` and `<pageSetup>` —
+/// margins are stored in inches per ECMA-376 (§18.3.1.62), the page size
+/// is emitted as `paperWidth`/`paperHeight` in millimetres so arbitrary
+/// PDF MediaBox dimensions round-trip without snapping to the nearest
+/// `paperSize` enum.  All inputs are twips for parity with the rest of
+/// the IR (`width_twips`, `margin_top_twips`, …).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PageSetup {
+    /// Page width in twips (1/1440 inch).
+    pub width_twips: u32,
+    /// Page height in twips.
+    pub height_twips: u32,
+    /// Top margin in twips.
+    pub margin_top_twips: u32,
+    /// Bottom margin in twips.
+    pub margin_bottom_twips: u32,
+    /// Left margin in twips.
+    pub margin_left_twips: u32,
+    /// Right margin in twips.
+    pub margin_right_twips: u32,
+    /// Header distance from top edge in twips.
+    pub header_distance_twips: u32,
+    /// Footer distance from bottom edge in twips.
+    pub footer_distance_twips: u32,
+    /// Whether the page is in landscape orientation.
+    pub landscape: bool,
+}
+
+/// A cell comment to write back as a real legacy Excel comment
+/// (`xl/comments*.xml` + a companion VML shape), not the plain-text row
+/// dump the writer used to fall back to for `Element::Endnote` content
+/// with nowhere else to go.
+#[derive(Debug, Clone)]
+pub struct SheetCommentOut {
+    /// 0-based row.
+    pub row: usize,
+    /// 0-based column.
+    pub col: usize,
+    /// Comment author, when known.
+    pub author: Option<String>,
+    /// Comment body text.
+    pub text: String,
+}
+
+/// A picture anchored on a worksheet via a DrawingML drawing part.
+///
+/// Anchor coordinates are in EMU and absolute relative to the sheet
+/// origin (top-left). Round-trips render via `<xdr:absoluteAnchor>` in
+/// `xl/drawings/drawingN.xml`. The writer emits the bytes verbatim; the
+/// reader resolves them back through the worksheet → drawing → image
+/// relationship chain.
+#[derive(Debug, Clone)]
+pub struct SheetImage {
+    /// Raw image bytes (PNG / JPEG / etc., as produced by the source).
+    pub data: Vec<u8>,
+    /// Lowercase file extension (`"png"`, `"jpeg"`, ...).
+    pub format: String,
+    /// X anchor in EMU, from sheet origin.
+    pub x_emu: i64,
+    /// Y anchor in EMU.
+    pub y_emu: i64,
+    /// Rendered width in EMU.
+    pub cx_emu: i64,
+    /// Rendered height in EMU.
+    pub cy_emu: i64,
+    /// Alternative text, written as `xdr:cNvPr/@descr`. The reader
+    /// surfaces it as `Image::alt_text`, so a workbook that goes through
+    /// the IR keeps the description every other reader shows.
+    pub alt_text: Option<String>,
+}
+
+/// A text shape anchored on a worksheet via a DrawingML drawing part.
+///
+/// Used by the layout-preserving PDF→XLSX path to emit each PDF text
+/// span at its exact source EMU coordinates as an `<xdr:sp>` shape
+/// inside `xl/drawings/drawingN.xml`. The shape carries a single run
+/// with the span's text, font, size, weight, italic, and colour.
+#[derive(Debug, Clone)]
+pub struct SheetTextShape {
+    /// Text content of the shape (single run).
+    pub text: String,
+    /// Font face name (e.g. `"Times New Roman"`).
+    pub font_name: String,
+    /// Font size in points (full-pt scale, not half-pt).
+    pub font_size_pt: f32,
+    /// Bold weight.
+    pub bold: bool,
+    /// Italic style.
+    pub italic: bool,
+    /// Optional 6-char hex colour like `"FF0000"`. `None` ⇒ pure black.
+    pub color_hex: Option<String>,
+    /// X anchor in EMU.
+    pub x_emu: i64,
+    /// Y anchor in EMU.
+    pub y_emu: i64,
+    /// Width in EMU.
+    pub cx_emu: i64,
+    /// Height in EMU.
+    pub cy_emu: i64,
+}
+
+/// Full internal sheet representation.
+struct SheetDataInner {
+    pub name: String,
+    pub rows: Vec<Vec<Option<StoredCellInner>>>,
+    pub col_widths: HashMap<usize, f64>,
+    pub cell_styles: HashMap<(usize, usize), CellStyle>,
+    /// Merged cell regions: (row, col, row_span, col_span).
+    pub merge_regions: Vec<(usize, usize, usize, usize)>,
+    /// Per-sheet page geometry (`<pageMargins>` + `<pageSetup>`).
+    pub page_setup: Option<PageSetup>,
+    /// Pictures anchored on this sheet via a DrawingML drawing part.
+    pub images: Vec<SheetImage>,
+    /// Text shapes anchored on this sheet via a DrawingML drawing part.
+    /// Used by the layout-preserving PDF→XLSX path.
+    pub text_shapes: Vec<SheetTextShape>,
+    /// Per-cell external hyperlink targets (this writer had
+    /// no hyperlink concept at all, so a cell's URL was silently dropped
+    /// on every write, unconditionally).
+    pub hyperlinks: HashMap<(usize, usize), String>,
+    /// Hover text for the hyperlinks above (`hyperlink/@tooltip`).
+    pub hyperlink_tooltips: HashMap<(usize, usize), String>,
+    /// Cell comments to write as real `xl/comments*.xml` + VML entries
+    /// (these used to have nowhere to go and fell through
+    /// to being dumped as plain extra rows below the table).
+    pub comments: Vec<SheetCommentOut>,
+    /// Written as `<sheet state="hidden">`.
+    pub hidden: bool,
+}
+
+impl SheetDataInner {
+    fn new(name: &str) -> Self {
+        Self {
+            name: name.to_string(),
+            rows: Vec::new(),
+            col_widths: HashMap::new(),
+            cell_styles: HashMap::new(),
+            merge_regions: Vec::new(),
+            page_setup: None,
+            images: Vec::new(),
+            text_shapes: Vec::new(),
+            hyperlinks: HashMap::new(),
+            hyperlink_tooltips: HashMap::new(),
+            comments: Vec::new(),
+            hidden: false,
+        }
+    }
+
+    fn ensure_cell(&mut self, row: usize, col: usize) {
+        if self.rows.len() <= row {
+            self.rows.resize_with(row + 1, Vec::new);
+        }
+        if self.rows[row].len() <= col {
+            self.rows[row].resize_with(col + 1, || None);
+        }
+    }
+
+    pub fn add_row(&mut self, cells: Vec<CellData>) -> &mut Self {
+        // set_cell gates on the grid; add_row must too, or a long row emits
+        // cells past column XFD, which do not exist and make Excel repair.
+        if !in_grid(self.rows.len(), 0) {
+            return self;
+        }
+        let stored: Vec<Option<StoredCellInner>> = cells
+            .into_iter()
+            .take(MAX_COLS)
+            .map(|v| Some(StoredCellInner { value: v }))
+            .collect();
+        self.rows.push(stored);
+        self
+    }
+
+    pub fn set_cell(&mut self, row: usize, col: usize, value: CellData) -> &mut Self {
+        if !in_grid(row, col) {
+            return self;
+        }
+        self.ensure_cell(row, col);
+        self.rows[row][col] = Some(StoredCellInner { value });
+        self
+    }
+
+    pub fn set_cell_styled(
+        &mut self,
+        row: usize,
+        col: usize,
+        value: CellData,
+        style: CellStyle,
+    ) -> &mut Self {
+        if !in_grid(row, col) {
+            return self;
+        }
+        self.ensure_cell(row, col);
+        self.rows[row][col] = Some(StoredCellInner { value });
+        self.cell_styles.insert((row, col), style);
+        self
+    }
+
+    /// Set (or overwrite) the external hyperlink target for a cell
+    ///. Silently ignored outside the sheet grid, matching
+    /// `set_cell`/`set_cell_styled`.
+    pub fn set_cell_hyperlink(
+        &mut self,
+        row: usize,
+        col: usize,
+        url: impl Into<String>,
+    ) -> &mut Self {
+        if !in_grid(row, col) {
+            return self;
+        }
+        self.hyperlinks.insert((row, col), url.into());
+        self
+    }
+
+    /// Set the hover text of a cell's hyperlink (see `set_cell_hyperlink`).
+    pub fn set_cell_hyperlink_tooltip(
+        &mut self,
+        row: usize,
+        col: usize,
+        tooltip: impl Into<String>,
+    ) -> &mut Self {
+        if !in_grid(row, col) {
+            return self;
+        }
+        self.hyperlink_tooltips.insert((row, col), tooltip.into());
+        self
+    }
+
+    /// Add a real cell comment. Silently ignored outside
+    /// the sheet grid, matching `set_cell`/`set_cell_styled`.
+    pub fn set_cell_comment(
+        &mut self,
+        row: usize,
+        col: usize,
+        author: Option<String>,
+        text: impl Into<String>,
+    ) -> &mut Self {
+        if !in_grid(row, col) {
+            return self;
+        }
+        self.comments.push(SheetCommentOut {
+            row,
+            col,
+            author,
+            text: text.into(),
+        });
+        self
+    }
+
+    pub fn set_column_width(&mut self, col: usize, width: f64) -> &mut Self {
+        // `inf` is not a valid xsd:double lexical form and Excel caps width
+        // at 255; a non-finite or out-of-range value is dropped rather than
+        // written through.
+        if !in_grid(0, col) || !width.is_finite() || !(0.0..=MAX_COL_WIDTH).contains(&width) {
+            return self;
+        }
+        self.col_widths.insert(col, width);
+        self
+    }
+
+    pub fn merge_cells(
+        &mut self,
+        row: usize,
+        col: usize,
+        row_span: usize,
+        col_span: usize,
+    ) -> &mut Self {
+        if row_span == 0 || col_span == 0 || !in_grid(row, col) {
+            return self;
+        }
+        // Saturate against the grid rather than adding: `col + col_span` with
+        // a caller-supplied usize overflows, which panicked in debug and wrote
+        // a garbage reference in release.
+        let row_span = row_span.min(MAX_ROWS - row);
+        let col_span = col_span.min(MAX_COLS - col);
+        if row_span > 1 || col_span > 1 {
+            self.merge_regions.push((row, col, row_span, col_span));
+        }
+        self
+    }
+}
+
+struct StoredCellInner {
+    value: CellData,
+}
+
+/// Excel's grid is 1,048,576 rows by 16,384 columns; the last addressable
+/// cell is `XFD1048576`.
+const MAX_ROWS: usize = 1_048_576;
+const MAX_COLS: usize = 16_384;
+/// Excel's maximum column width, in characters.
+const MAX_COL_WIDTH: f64 = 255.0;
+/// Excel's maximum characters in a single cell.
+const MAX_CELL_CHARS: usize = 32_767;
+
+/// `ST_UnsignedIntHex` is exactly four bytes of hex — `AARRGGBB`. The public
+/// API documents a six-character RGB string but enforced nothing, so `#FF0000`
+/// (the CSS form), a three-digit shorthand, or an already-ARGB eight-character
+/// value all produced an invalid `styles.xml`.
+fn argb_from_rgb(hex: &str) -> Option<String> {
+    let t = hex.strip_prefix('#').unwrap_or(hex);
+    if !t.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    match t.len() {
+        6 => Some(format!("FF{}", t.to_ascii_uppercase())),
+        8 => Some(t.to_ascii_uppercase()),
+        _ => None,
+    }
+}
+
+/// Whether a 0-based (row, col) is addressable in Excel. Writing outside it
+/// emitted references like `XFE1048577` that name a cell which does not
+/// exist, so Excel repairs (i.e. discards) the sheet on open.
+fn in_grid(row: usize, col: usize) -> bool {
+    if row < MAX_ROWS && col < MAX_COLS {
+        return true;
+    }
+    log::warn!(
+        "xlsx: cell ({row}, {col}) is outside Excel's {MAX_ROWS}x{MAX_COLS} grid; \
+         the value was not written"
+    );
+    false
+}
+
+/// Restrict an image extension to `[A-Za-z0-9]{1,10}` before it reaches a
+/// ZIP entry name, a relationship target, or a `<Default Extension="..">`.
+///
+/// `add_image`'s `format` was spliced in verbatim: `"a/b/c"` produced a
+/// bogus-but-contained part name, and control characters — a raw NUL in
+/// particular — reached the ZIP filename (a path-truncation vector for
+/// any C-based extractor) plus `[Content_Types].xml` and the drawing's
+/// `.rels` unescapably, making both non-well-formed XML while `save()`
+/// still returned `Ok(())`. Falls back to `"bin"` when nothing in the
+/// input survives filtering.
+fn sanitize_image_extension(format: &str) -> String {
+    let cleaned: String = format
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .take(10)
+        .collect();
+    if cleaned.is_empty() {
+        "bin".to_string()
+    } else {
+        cleaned
+    }
+}
+
+/// The worksheet names of one workbook, kept so that making the next name
+/// unique costs time in the length of that name, not in the number of sheets.
+///
+/// Names are compared ASCII case-insensitively (`used` holds them
+/// lower-cased), as Excel does. `next_suffix` remembers, for
+/// each cut prefix and suffix width the first `" (n)"` not yet known to
+/// be taken: the set only grows, so every smaller suffix stays taken and need
+/// not be probed again.
+#[derive(Default)]
+struct SheetNames {
+    used: std::collections::HashSet<String>,
+    next_suffix: HashMap<(String, usize), usize>,
+    /// Suffix candidates tried, for the tests that bound the probing.
+    #[cfg(test)]
+    probes: usize,
+}
+
+impl SheetNames {
+    /// Make a worksheet name Excel will accept: 1-31 characters, none of
+    /// `[ ] : * ? / \`, and unique within the workbook, then record it.
+    ///
+    /// Names were previously written verbatim, so a 40-character name or one
+    /// containing `/` produced a workbook Excel refuses to open. Sanitising
+    /// is preferred to failing: the caller's data still reaches the file.
+    fn claim(&mut self, name: &str) -> String {
+        let cleaned: String = name
+            .chars()
+            .map(|c| {
+                if matches!(c, '[' | ']' | ':' | '*' | '?' | '/' | '\\') {
+                    '_'
+                } else {
+                    c
+                }
+            })
+            .collect();
+        // Excel also rejects a leading or trailing apostrophe. Trim AFTER
+        // truncating as well: cutting a 40-character name at 31 can put an
+        // apostrophe back on the end.
+        let cleaned = cleaned.trim_matches('\'');
+        let mut base: String = cleaned.chars().take(31).collect();
+        base = base.trim_matches('\'').to_string();
+        if base.trim().is_empty() || base.eq_ignore_ascii_case("History") {
+            // "History" is reserved by Excel outright.
+            base = format!("Sheet{}", self.used.len() + 1);
+        }
+        let chosen = if !self.used.contains(&base.to_ascii_lowercase()) {
+            base
+        } else {
+            // Disambiguate with a numeric suffix, keeping within the 31-char
+            // limit. The candidate is the base cut to `keep` characters plus
+            // `" (n)"`, so bases that share that cut share their candidates:
+            // progress is remembered per cut prefix and suffix width.
+            let mut digits = 1usize;
+            loop {
+                let keep = 31usize.saturating_sub(digits + 3);
+                let prefix: String = base.chars().take(keep).collect();
+                let key = (prefix.to_ascii_lowercase(), digits);
+                // The numbers with `digits` digits, from 2 for one digit.
+                let lo = if digits == 1 {
+                    2
+                } else {
+                    10usize.pow(digits as u32 - 1)
+                };
+                let hi = 10usize.saturating_pow(digits as u32) - 1;
+                let hint = self.next_suffix.entry(key).or_insert(lo);
+                let mut n = *hint;
+                while n <= hi {
+                    #[cfg(test)]
+                    {
+                        self.probes += 1;
+                    }
+                    let candidate = format!("{prefix} ({n})");
+                    if !self.used.contains(&candidate.to_ascii_lowercase()) {
+                        *hint = n + 1;
+                        break;
+                    }
+                    n += 1;
+                }
+                if n <= hi {
+                    break format!("{prefix} ({n})");
+                }
+                *hint = hi.saturating_add(1);
+                digits += 1;
+            }
+        };
+        self.used.insert(chosen.to_ascii_lowercase());
+        chosen
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Public SheetData — wraps SheetDataInner via &mut reference returned by
+// XlsxWriter::add_sheet so callers get a single ergonomic type.
+// We expose SheetData as a thin newtype.
+// ---------------------------------------------------------------------------
+
+/// Data for a single worksheet — returned by `XlsxWriter::add_sheet`.
+pub struct SheetData<'a>(&'a mut SheetDataInner);
+
+impl<'a> SheetData<'a> {
+    /// Append a row of `CellData` values.
+    pub fn add_row(&mut self, cells: Vec<CellData>) -> &mut Self {
+        self.0.add_row(cells);
+        self
+    }
+
+    /// Set a cell value (0-based row and column).
+    pub fn set_cell(&mut self, row: usize, col: usize, value: CellData) -> &mut Self {
+        self.0.set_cell(row, col, value);
+        self
+    }
+
+    /// Set a cell value with explicit formatting.
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// # use office_oxide::xlsx::write::*;
+    /// # let mut wb = XlsxWriter::new();
+    /// # let mut sheet = wb.add_sheet("S");
+    /// sheet.set_cell_styled(0, 0, CellData::String("Total".into()),
+    ///     CellStyle::new().bold().align(HAlign::Right));
+    /// sheet.set_cell_styled(0, 1, CellData::Formula("SUM(B2:B100)".into()),
+    ///     CellStyle::new().bold().number_format(NumberFormat::Currency));
+    /// ```
+    pub fn set_cell_styled(
+        &mut self,
+        row: usize,
+        col: usize,
+        value: CellData,
+        style: CellStyle,
+    ) -> &mut Self {
+        self.0.set_cell_styled(row, col, value, style);
+        self
+    }
+
+    /// Set (or overwrite) the external hyperlink target for a cell.
+    pub fn set_cell_hyperlink(
+        &mut self,
+        row: usize,
+        col: usize,
+        url: impl Into<String>,
+    ) -> &mut Self {
+        self.0.set_cell_hyperlink(row, col, url);
+        self
+    }
+
+    /// Set the hover text of a cell's hyperlink, written as
+    /// `hyperlink/@tooltip` (ECMA-376 §18.3.1). Has no effect on a
+    /// cell without a hyperlink.
+    pub fn set_cell_hyperlink_tooltip(
+        &mut self,
+        row: usize,
+        col: usize,
+        tooltip: impl Into<String>,
+    ) -> &mut Self {
+        self.0.set_cell_hyperlink_tooltip(row, col, tooltip);
+        self
+    }
+
+    /// Add a real cell comment.
+    pub fn set_cell_comment(
+        &mut self,
+        row: usize,
+        col: usize,
+        author: Option<String>,
+        text: impl Into<String>,
+    ) -> &mut Self {
+        self.0.set_cell_comment(row, col, author, text);
+        self
+    }
+
+    /// Set the width of a column in character units.
+    pub fn set_column_width(&mut self, col: usize, width: f64) -> &mut Self {
+        self.0.set_column_width(col, width);
+        self
+    }
+
+    /// Merge a rectangular range of cells.
+    ///
+    /// The top-left cell retains its value; the rest are blanked by the reader.
+    /// A span of 1×1 is a no-op.
+    pub fn merge_cells(
+        &mut self,
+        row: usize,
+        col: usize,
+        row_span: usize,
+        col_span: usize,
+    ) -> &mut Self {
+        self.0.merge_cells(row, col, row_span, col_span);
+        self
+    }
+
+    /// Set per-sheet page geometry. Emits `<pageMargins>` and `<pageSetup>`
+    /// inside the worksheet XML so PDF→XLSX→PDF round-trips preserve the
+    /// source MediaBox and margins instead of snapping back to default
+    /// Letter-portrait. Pass `None` (the default) to omit both elements.
+    pub fn set_page_setup(&mut self, ps: PageSetup) -> &mut Self {
+        self.0.page_setup = Some(ps);
+        self
+    }
+
+    /// Mark this sheet hidden (`<sheet state="hidden">`, [ECMA-376]
+    /// §18.2.19).
+    pub fn set_hidden(&mut self, hidden: bool) -> &mut Self {
+        self.0.hidden = hidden;
+        self
+    }
+
+    /// Anchor a styled text run on this worksheet at absolute EMU
+    /// coordinates. Used by the PDF→XLSX layout-preserving path: each
+    /// PDF text span becomes one `<xdr:sp>` shape with a single run.
+    #[allow(clippy::too_many_arguments)]
+    pub fn add_text_shape(
+        &mut self,
+        text: impl Into<String>,
+        font_name: impl Into<String>,
+        font_size_pt: f32,
+        bold: bool,
+        italic: bool,
+        color_hex: Option<String>,
+        x_emu: i64,
+        y_emu: i64,
+        cx_emu: i64,
+        cy_emu: i64,
+    ) -> &mut Self {
+        self.0.text_shapes.push(SheetTextShape {
+            text: text.into(),
+            font_name: font_name.into(),
+            font_size_pt,
+            bold,
+            italic,
+            color_hex,
+            x_emu,
+            y_emu,
+            cx_emu,
+            cy_emu,
+        });
+        self
+    }
+
+    /// Anchor a picture on this worksheet at absolute EMU coordinates.
+    ///
+    /// On write the writer materialises a `xl/drawings/drawingN.xml`
+    /// part for this sheet, registers an IMAGE relationship per
+    /// picture, and writes the bytes under `xl/media/image_<sheet>_<n>.<ext>`.
+    /// `format` is the lowercase file extension (`"png"`, `"jpeg"`, ...).
+    pub fn add_image(
+        &mut self,
+        data: Vec<u8>,
+        format: impl Into<String>,
+        x_emu: i64,
+        y_emu: i64,
+        cx_emu: i64,
+        cy_emu: i64,
+    ) -> &mut Self {
+        self.add_image_with_alt(data, format, x_emu, y_emu, cx_emu, cy_emu, None)
+    }
+
+    /// As [`add_image`](Self::add_image), with the picture's alternative
+    /// text.
+    #[allow(clippy::too_many_arguments)]
+    pub fn add_image_with_alt(
+        &mut self,
+        data: Vec<u8>,
+        format: impl Into<String>,
+        x_emu: i64,
+        y_emu: i64,
+        cx_emu: i64,
+        cy_emu: i64,
+        alt_text: Option<String>,
+    ) -> &mut Self {
+        self.0.images.push(SheetImage {
+            data,
+            format: sanitize_image_extension(&format.into()),
+            x_emu,
+            y_emu,
+            cx_emu,
+            cy_emu,
+            alt_text,
+        });
+        self
+    }
+}
+
+// ---------------------------------------------------------------------------
+// XlsxWriter impl
+// ---------------------------------------------------------------------------
+
+/// A `<t>` start tag, with `xml:space="preserve"` (XML 1.0 §2.10) when the
+/// text has leading or trailing whitespace a normalising consumer would
+/// otherwise strip — when Excel and openpyxl write it.
+fn t_start(text: &str) -> BytesStart<'static> {
+    let mut t = BytesStart::new("t");
+    if text.trim() != text {
+        t.push_attribute(("xml:space", "preserve"));
+    }
+    t
+}
+
+impl Default for XlsxWriter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl XlsxWriter {
+    /// Create a new, empty XLSX writer.
+    pub fn new() -> Self {
+        Self {
+            sheets: Vec::new(),
+            embedded_fonts: Vec::new(),
+            metadata: None,
+            defined_names: Vec::new(),
+            names: SheetNames::default(),
+            refused_sheet: None,
+            refused_sheets: 0,
+        }
+    }
+
+    /// Add a workbook-level defined name ([ECMA-376] §18.2.5): `value` is
+    /// its formula text (`Sheet1!$A$1:$B$10`), `local_sheet_id` the 0-based
+    /// index of the sheet it is scoped to, if any.
+    pub fn add_defined_name(&mut self, name: crate::ir::DefinedName) -> &mut Self {
+        self.defined_names.push(name);
+        self
+    }
+
+    /// Mark a sheet hidden (`<sheet state="hidden">`) by index. Returns
+    /// `false` when `sheet` names no sheet.
+    pub fn sheet_set_hidden(&mut self, sheet: usize, hidden: bool) -> bool {
+        match self.sheets.get_mut(sheet) {
+            Some(s) => {
+                s.hidden = hidden;
+                true
+            },
+            None => false,
+        }
+    }
+
+    /// Set document metadata (written to `docProps/core.xml`).
+    pub fn set_metadata(&mut self, meta: &crate::ir::Metadata) -> &mut Self {
+        self.metadata = Some(meta.clone());
+        self
+    }
+
+    /// Embed a font program (TrueType / OpenType bytes) under `xl/fonts/`.
+    /// `name` is used for the file name and as the human-readable font name.
+    /// Subsequent calls with the same name are deduplicated.
+    pub fn embed_font(&mut self, name: impl Into<String>, data: Vec<u8>) -> &mut Self {
+        let name = name.into();
+        if !self.embedded_fonts.iter().any(|(n, _)| n == &name) {
+            self.embedded_fonts.push((name, data));
+        }
+        self
+    }
+
+    /// Add a worksheet and return a mutable handle to it.
+    ///
+    /// The name is normalised to what Excel accepts — at most 31 characters,
+    /// no `[ ] : * ? / \\`, non-empty and unique in the workbook. A name that
+    /// collides with an existing sheet gains a numeric suffix rather than
+    /// silently replacing it.
+    ///
+    /// A workbook holds at most `max_write_sheets` sheets.
+    /// The sheet that would exceed it is not added: the returned handle
+    /// writes into a scratch sheet that is discarded, and
+    /// [`save`](Self::save) / [`write_to`](Self::write_to) return an error
+    /// naming the limit.
+    pub fn add_sheet(&mut self, name: &str) -> SheetData<'_> {
+        if self.sheet_limit_reached() {
+            // A fresh scratch sheet each time: what a caller wrote into the
+            // last one is dropped, so a loop of refused sheets does not pile
+            // cells up in one (the workbook is an error to write anyway).
+            return SheetData(self.refused_sheet.insert(SheetDataInner::new("-")));
+        }
+        let name = self.names.claim(name);
+        self.sheets.push(SheetDataInner::new(&name));
+        SheetData(self.sheets.last_mut().unwrap())
+    }
+
+    /// Add a sheet and return its 0-based index (for use with index-based API).
+    ///
+    /// Past `max_write_sheets` no sheet is added and the
+    /// returned index is out of range (the index-based setters then return
+    /// `false`); writing the workbook is an error. See [`Self::add_sheet`].
+    pub fn add_sheet_get_index(&mut self, name: &str) -> usize {
+        if self.sheet_limit_reached() {
+            return self.sheets.len();
+        }
+        let name = self.names.claim(name);
+        self.sheets.push(SheetDataInner::new(&name));
+        self.sheets.len() - 1
+    }
+
+    /// Whether one more sheet would exceed the limit; counts the refusal.
+    fn sheet_limit_reached(&mut self) -> bool {
+        if self.sheets.len() < crate::limits::max_write_sheets() {
+            return false;
+        }
+        if self.refused_sheets == 0 {
+            log::warn!("xlsx: the workbook is at its sheet limit; further sheets are not added");
+        }
+        self.refused_sheets += 1;
+        true
+    }
+
+    /// Set a cell value by sheet index.
+    ///
+    /// Returns `false` — and logs a warning — when `sheet` names no sheet or
+    /// the coordinates fall outside Excel's grid, so a loop with an
+    /// off-by-one sheet index no longer writes a whole column into nothing
+    /// while reporting success.
+    pub fn sheet_set_cell(
+        &mut self,
+        sheet: usize,
+        row: usize,
+        col: usize,
+        value: CellData,
+    ) -> bool {
+        if !in_grid(row, col) {
+            return false;
+        }
+        match self.sheets.get_mut(sheet) {
+            Some(s) => {
+                s.set_cell(row, col, value);
+                true
+            },
+            None => {
+                log::warn!("xlsx: sheet index out of range; the value was not written");
+                false
+            },
+        }
+    }
+
+    /// Set a cell value with styling by sheet index. See [`Self::sheet_set_cell`]
+    /// for the return value.
+    pub fn sheet_set_cell_styled(
+        &mut self,
+        sheet: usize,
+        row: usize,
+        col: usize,
+        value: CellData,
+        style: CellStyle,
+    ) -> bool {
+        if !in_grid(row, col) {
+            return false;
+        }
+        match self.sheets.get_mut(sheet) {
+            Some(s) => {
+                s.set_cell_styled(row, col, value, style);
+                true
+            },
+            None => {
+                log::warn!("xlsx: sheet index out of range; the value was not written");
+                false
+            },
+        }
+    }
+
+    /// Merge a rectangular range of cells by sheet index.
+    pub fn sheet_merge_cells(
+        &mut self,
+        sheet: usize,
+        row: usize,
+        col: usize,
+        row_span: usize,
+        col_span: usize,
+    ) {
+        if let Some(s) = self.sheets.get_mut(sheet) {
+            s.merge_cells(row, col, row_span, col_span);
+        }
+    }
+
+    /// Set column width by sheet index.
+    pub fn sheet_set_column_width(&mut self, sheet: usize, col: usize, width: f64) {
+        if let Some(s) = self.sheets.get_mut(sheet) {
+            s.set_column_width(col, width);
+        }
+    }
+
+    /// Set per-sheet page geometry by sheet index. See `SheetData::set_page_setup`.
+    pub fn sheet_set_page_setup(&mut self, sheet: usize, ps: PageSetup) {
+        if let Some(s) = self.sheets.get_mut(sheet) {
+            s.page_setup = Some(ps);
+        }
+    }
+
+    /// Save the workbook to a file.
+    pub fn save(&self, path: impl AsRef<Path>) -> Result<()> {
+        let mut opc = OpcWriter::create(path)?;
+        self.write_parts(&mut opc)?;
+        opc.finish()?;
+        Ok(())
+    }
+
+    /// Write the workbook to any `Write` destination.
+    // office_kit patch: Write+Seek → Write (streaming ZIP)
+    pub fn write_to<W: Write>(&self, writer: W) -> Result<()> {
+        let mut opc = OpcWriter::new(writer)?;
+        self.write_parts(&mut opc)?;
+        opc.finish()?;
+        Ok(())
+    }
+
+    // -----------------------------------------------------------------------
+    // Internal
+    // -----------------------------------------------------------------------
+
+    fn write_parts<W: Write>(&self, opc: &mut OpcWriter<W>) -> Result<()> {
+        if self.refused_sheets > 0 {
+            return Err(crate::core::Error::PackageLimit(format!(
+                "{} sheets were added beyond the {} a workbook may be written with (Excel's own limit)",
+                self.refused_sheets,
+                crate::limits::max_write_sheets()
+            ))
+            .into());
+        }
+        let cells: u64 = self
+            .sheets
+            .iter()
+            .map(|sheet| {
+                let width = sheet.rows.iter().map(Vec::len).max().unwrap_or(0);
+                (sheet.rows.len() as u64).saturating_mul(width as u64)
+            })
+            .fold(0, u64::saturating_add);
+        crate::create::check_write_cells(cells, crate::format::DocumentFormat::Xlsx)?;
+        // CT_Sheets requires at least one sheet. Writing <sheets/> produced a
+        // workbook no reader accepts, and save() still returned Ok, so add a
+        // blank sheet rather than emitting an invalid file.
+        let default_sheet;
+        let sheets: &[SheetDataInner] = if self.sheets.is_empty() {
+            default_sheet = [SheetDataInner::new("Sheet1")];
+            &default_sheet
+        } else {
+            &self.sheets
+        };
+
+        let wb_part = PartName::new("/xl/workbook.xml")?;
+
+        opc.add_package_rel(rel_types::OFFICE_DOCUMENT, "xl/workbook.xml");
+
+        // Package properties: core.xml only when the caller supplied
+        // metadata via `set_metadata` (it surfaces /Title /Author etc. in
+        // Excel's "Properties" dialog), app.xml (the producer) always,
+        // custom.xml when the metadata carries custom properties.
+        crate::core::core_properties::add_property_parts(opc, self.metadata.as_ref())?;
+
+        let mut sheet_rids = Vec::with_capacity(sheets.len());
+        for (i, _) in sheets.iter().enumerate() {
+            let target = format!("worksheets/sheet{}.xml", i + 1);
+            let rid = opc.add_part_rel(&wb_part, rel_types::WORKSHEET, &target);
+            sheet_rids.push(rid);
+        }
+        opc.add_part_rel(&wb_part, rel_types::STYLES, "styles.xml");
+
+        let wb_xml = Self::build_workbook_xml(sheets, &sheet_rids, &self.defined_names)?;
+        opc.add_part(&wb_part, CT_WORKBOOK, &wb_xml)?;
+
+        // Collect all unique styles across all sheets, assign indices.
+        let style_table = StyleTable::build(sheets);
+
+        for (i, sheet) in sheets.iter().enumerate() {
+            let part_name_str = format!("/xl/worksheets/sheet{}.xml", i + 1);
+            let part_name = PartName::new(&part_name_str)?;
+
+            // Emit drawing + media parts up-front so we have the rId
+            // for the `<drawing r:id="…"/>` element inside the
+            // worksheet XML below. Sheets without pictures or text
+            // shapes get no drawing part at all.
+            let drawing_rid = if !sheet.images.is_empty() || !sheet.text_shapes.is_empty() {
+                Some(Self::write_drawing_for_sheet(
+                    opc,
+                    &part_name,
+                    i + 1,
+                    &sheet.images,
+                    &sheet.text_shapes,
+                )?)
+            } else {
+                None
+            };
+
+            // One external relationship per cell hyperlink, scoped to
+            // this sheet's own `_rels` file (each worksheet part has
+            // its own relationships part; an r:id registered against
+            // one sheet doesn't resolve inside another's XML).
+            let mut hyperlink_rids: HashMap<(usize, usize), String> = HashMap::new();
+            for (&(row, col), url) in &sheet.hyperlinks {
+                let rid = opc.add_part_rel_with_mode(
+                    &part_name,
+                    rel_types::HYPERLINK,
+                    url,
+                    crate::core::relationships::TargetMode::External,
+                );
+                hyperlink_rids.insert((row, col), rid);
+            }
+
+            // Real legacy Excel comments: xl/comments<n>.xml (the
+            // content) plus xl/drawings/vmlDrawing<n>.vml (the popup
+            // shape Excel needs to render an indicator at all) — sheets
+            // with no comments get neither part.
+            let legacy_drawing_rid = if !sheet.comments.is_empty() {
+                Some(Self::write_comments_for_sheet(opc, &part_name, i + 1, &sheet.comments)?)
+            } else {
+                None
+            };
+
+            let ws_xml = Self::build_worksheet_xml(
+                sheet,
+                &style_table,
+                drawing_rid.as_deref(),
+                &hyperlink_rids,
+                legacy_drawing_rid.as_deref(),
+            )?;
+            opc.add_part(&part_name, CT_WORKSHEET, &ws_xml)?;
+        }
+
+        let styles_part = PartName::new("/xl/styles.xml")?;
+        let styles_xml = style_table.build_styles_xml()?;
+        opc.add_part(&styles_part, CT_STYLES, &styles_xml)?;
+
+        // Embed fonts under `xl/fonts/font_<n>_<safe_name>.ttf`. Same
+        // layout as DOCX/PPTX. Excel itself doesn't auto-discover the
+        // fonts without `<workbookView>` plumbing, but the in-process
+        // reader scans the directory so PDF↔XLSX round-trips can reuse
+        // the source typeface.
+        crate::core::embedded_fonts::write_embedded_fonts(opc, "/xl/fonts/", &self.embedded_fonts)?;
+
+        Ok(())
+    }
+
+    fn build_workbook_xml(
+        sheets: &[SheetDataInner],
+        sheet_rids: &[String],
+        defined_names: &[crate::ir::DefinedName],
+    ) -> crate::core::Result<Vec<u8>> {
+        let mut w = Writer::new(Vec::new());
+
+        w.write_event(Event::Decl(BytesDecl::new("1.0", Some("UTF-8"), Some("yes"))))?;
+
+        let mut root = BytesStart::new("workbook");
+        root.push_attribute(("xmlns", NS_SML));
+        root.push_attribute(("xmlns:r", NS_REL));
+        w.write_event(Event::Start(root))?;
+
+        // CT_Sheets requires at least one sheet; an empty <sheets/> is invalid
+        // and Excel will not open the workbook.
+        w.write_event(Event::Start(BytesStart::new("sheets")))?;
+
+        // Excel refuses a workbook with no visible sheet; if every sheet is
+        // marked hidden the first stays visible, and that is logged.
+        let all_hidden = sheets.iter().all(|s| s.hidden);
+        if all_hidden {
+            log::warn!("xlsx: every sheet is hidden; the first is written visible");
+        }
+        for (i, sheet) in sheets.iter().enumerate() {
+            let mut elem = BytesStart::new("sheet");
+            // sanitize_xml_text is applied to element text everywhere but was
+            // never applied to an attribute: a control character in a sheet
+            // name made workbook.xml unparseable.
+            let safe_name = crate::core::xml::sanitize_xml_text(&sheet.name);
+            elem.push_attribute(("name", safe_name.as_ref()));
+            let sheet_id = (i + 1).to_string();
+            elem.push_attribute(("sheetId", sheet_id.as_str()));
+            elem.push_attribute(("r:id", sheet_rids[i].as_str()));
+            if sheet.hidden && !(all_hidden && i == 0) {
+                elem.push_attribute(("state", "hidden"));
+            }
+            w.write_event(Event::Empty(elem))?;
+        }
+
+        w.write_event(Event::End(BytesEnd::new("sheets")))?;
+
+        // [ECMA-376] §18.2.5/§18.2.6. A name scoped to a sheet this
+        // workbook does not have would make the file invalid; it is
+        // dropped with a warning.
+        let names: Vec<&crate::ir::DefinedName> = defined_names
+            .iter()
+            .filter(|n| {
+                let ok = !n.name.is_empty()
+                    && n.local_sheet_id
+                        .is_none_or(|id| (id as usize) < sheets.len());
+                if !ok {
+                    log::warn!("xlsx: defined name {:?} not written: no such sheet", n.name);
+                }
+                ok
+            })
+            .collect();
+        if !names.is_empty() {
+            w.write_event(Event::Start(BytesStart::new("definedNames")))?;
+            for n in names {
+                let mut elem = BytesStart::new("definedName");
+                let safe_name = crate::core::xml::sanitize_xml_text(&n.name);
+                elem.push_attribute(("name", safe_name.as_ref()));
+                let local = n.local_sheet_id.map(|id| id.to_string());
+                if let Some(id) = local.as_deref() {
+                    elem.push_attribute(("localSheetId", id));
+                }
+                if n.hidden {
+                    elem.push_attribute(("hidden", "1"));
+                }
+                w.write_event(Event::Start(elem))?;
+                let value = crate::core::xml::sanitize_xml_text(&n.value);
+                w.write_event(Event::Text(BytesText::new(&value)))?;
+                w.write_event(Event::End(BytesEnd::new("definedName")))?;
+            }
+            w.write_event(Event::End(BytesEnd::new("definedNames")))?;
+        }
+        w.write_event(Event::End(BytesEnd::new("workbook")))?;
+
+        Ok(w.into_inner())
+    }
+
+    fn build_worksheet_xml(
+        sheet: &SheetDataInner,
+        style_table: &StyleTable,
+        drawing_rid: Option<&str>,
+        hyperlink_rids: &HashMap<(usize, usize), String>,
+        legacy_drawing_rid: Option<&str>,
+    ) -> crate::core::Result<Vec<u8>> {
+        let mut w = Writer::new(Vec::new());
+
+        w.write_event(Event::Decl(BytesDecl::new("1.0", Some("UTF-8"), Some("yes"))))?;
+
+        let mut root = BytesStart::new("worksheet");
+        root.push_attribute(("xmlns", NS_SML));
+        // Worksheets that anchor drawings need the relationship
+        // namespace so the `<drawing r:id="…"/>` element below
+        // resolves. Declaring it unconditionally is harmless for
+        // plain-data sheets and keeps the writer code simple.
+        root.push_attribute(("xmlns:r", NS_REL));
+        w.write_event(Event::Start(root))?;
+
+        // Column widths
+        if !sheet.col_widths.is_empty() {
+            let mut sorted_cols: Vec<usize> = sheet.col_widths.keys().copied().collect();
+            sorted_cols.sort_unstable();
+
+            w.write_event(Event::Start(BytesStart::new("cols")))?;
+            for col_idx in &sorted_cols {
+                let width = sheet.col_widths[col_idx];
+                let col_num = (*col_idx + 1).to_string();
+                let width_str = format!("{width:.2}");
+
+                let mut col_elem = BytesStart::new("col");
+                col_elem.push_attribute(("min", col_num.as_str()));
+                col_elem.push_attribute(("max", col_num.as_str()));
+                col_elem.push_attribute(("width", width_str.as_str()));
+                col_elem.push_attribute(("customWidth", "1"));
+                w.write_event(Event::Empty(col_elem))?;
+            }
+            w.write_event(Event::End(BytesEnd::new("cols")))?;
+        }
+
+        w.write_event(Event::Start(BytesStart::new("sheetData")))?;
+
+        for (row_idx, row) in sheet.rows.iter().enumerate() {
+            if row.is_empty() || row.iter().all(|c| c.is_none()) {
+                continue;
+            }
+
+            let row_num = (row_idx + 1).to_string();
+            let mut row_elem = BytesStart::new("row");
+            row_elem.push_attribute(("r", row_num.as_str()));
+            w.write_event(Event::Start(row_elem))?;
+
+            for (col_idx, cell) in row.iter().enumerate() {
+                if let Some(stored) = cell {
+                    let style_idx = style_table.get_idx(sheet, row_idx, col_idx);
+                    Self::write_cell(&mut w, row_idx, col_idx, &stored.value, style_idx)?;
+                }
+            }
+
+            w.write_event(Event::End(BytesEnd::new("row")))?;
+        }
+
+        w.write_event(Event::End(BytesEnd::new("sheetData")))?;
+
+        if !sheet.merge_regions.is_empty() {
+            let count_str = sheet.merge_regions.len().to_string();
+            let mut mc_elem = BytesStart::new("mergeCells");
+            mc_elem.push_attribute(("count", count_str.as_str()));
+            w.write_event(Event::Start(mc_elem))?;
+            for &(row, col, row_span, col_span) in &sheet.merge_regions {
+                let tl = format!("{}{}", col_name(col as u32), row + 1);
+                let br = format!("{}{}", col_name((col + col_span - 1) as u32), row + row_span);
+                let ref_str = format!("{tl}:{br}");
+                let mut mc = BytesStart::new("mergeCell");
+                mc.push_attribute(("ref", ref_str.as_str()));
+                w.write_event(Event::Empty(mc))?;
+            }
+            w.write_event(Event::End(BytesEnd::new("mergeCells")))?;
+        }
+
+        // `<hyperlinks>` (CT_Worksheet, ECMA-376 §18.3.1.48) MUST appear
+        // after `mergeCells` and before `pageMargins`/`pageSetup`/
+        // `printOptions` per the worksheet child-order schema — same
+        // constraint as `<drawing>` below.
+        if !sheet.hyperlinks.is_empty() {
+            let mut sorted: Vec<(&(usize, usize), &String)> = hyperlink_rids.iter().collect();
+            sorted.sort_unstable_by_key(|&(&(r, c), _)| (r, c));
+            if !sorted.is_empty() {
+                w.write_event(Event::Start(BytesStart::new("hyperlinks")))?;
+                for (&(row, col), rid) in sorted {
+                    let cell_ref = format!("{}{}", col_name(col as u32), row + 1);
+                    let mut hl = BytesStart::new("hyperlink");
+                    hl.push_attribute(("ref", cell_ref.as_str()));
+                    hl.push_attribute(("r:id", rid.as_str()));
+                    if let Some(tip) = sheet.hyperlink_tooltips.get(&(row, col)) {
+                        hl.push_attribute((
+                            "tooltip",
+                            crate::core::xml::sanitize_xml_text(tip).as_ref(),
+                        ));
+                    }
+                    w.write_event(Event::Empty(hl))?;
+                }
+                w.write_event(Event::End(BytesEnd::new("hyperlinks")))?;
+            }
+        }
+
+        // <pageMargins> + <pageSetup>. ECMA-376 §18.3.1.62 / §18.3.1.63 —
+        // pageMargins values are in inches (f64), pageSetup carries the
+        // physical paper dimensions and orientation. We emit `paperWidth`
+        // and `paperHeight` in mm so arbitrary PDF MediaBoxes round-trip
+        // verbatim instead of snapping to the closest `paperSize` enum
+        // (which only covers a fixed set of standard sizes — Letter,
+        // Legal, A4, A3, …).
+        if let Some(ps) = sheet.page_setup {
+            // twips → inches, twips → mm (1 inch = 1440 twips = 25.4 mm).
+            let to_in = |t: u32| t as f64 / 1440.0;
+            let to_mm = |t: u32| t as f64 / 1440.0 * 25.4;
+
+            let left = format!("{:.4}", to_in(ps.margin_left_twips));
+            let right = format!("{:.4}", to_in(ps.margin_right_twips));
+            let top = format!("{:.4}", to_in(ps.margin_top_twips));
+            let bottom = format!("{:.4}", to_in(ps.margin_bottom_twips));
+            let header = format!("{:.4}", to_in(ps.header_distance_twips));
+            let footer = format!("{:.4}", to_in(ps.footer_distance_twips));
+
+            let mut pm = BytesStart::new("pageMargins");
+            pm.push_attribute(("left", left.as_str()));
+            pm.push_attribute(("right", right.as_str()));
+            pm.push_attribute(("top", top.as_str()));
+            pm.push_attribute(("bottom", bottom.as_str()));
+            pm.push_attribute(("header", header.as_str()));
+            pm.push_attribute(("footer", footer.as_str()));
+            w.write_event(Event::Empty(pm))?;
+
+            let pw_mm = format!("{:.2}mm", to_mm(ps.width_twips));
+            let ph_mm = format!("{:.2}mm", to_mm(ps.height_twips));
+            let orientation = if ps.landscape {
+                "landscape"
+            } else {
+                "portrait"
+            };
+            let mut psu = BytesStart::new("pageSetup");
+            psu.push_attribute(("paperWidth", pw_mm.as_str()));
+            psu.push_attribute(("paperHeight", ph_mm.as_str()));
+            psu.push_attribute(("orientation", orientation));
+            w.write_event(Event::Empty(psu))?;
+        }
+
+        // `<drawing>` MUST appear after `<pageSetup>` per the
+        // worksheet child-order schema (CT_Worksheet, ECMA-376
+        // §18.3.1.99). Excel rejects the file with "We found a problem
+        // with some content" otherwise.
+        if let Some(rid) = drawing_rid {
+            let mut d = BytesStart::new("drawing");
+            d.push_attribute(("r:id", rid));
+            w.write_event(Event::Empty(d))?;
+        }
+
+        // `<legacyDrawing>` (the VML part carrying comment popup shapes)
+        // comes after `<drawing>`, the last child CT_Worksheet allows
+        // before `</worksheet>` for what this writer emits.
+        if let Some(rid) = legacy_drawing_rid {
+            let mut ld = BytesStart::new("legacyDrawing");
+            ld.push_attribute(("r:id", rid));
+            w.write_event(Event::Empty(ld))?;
+        }
+
+        w.write_event(Event::End(BytesEnd::new("worksheet")))?;
+
+        Ok(w.into_inner())
+    }
+
+    /// Write `xl/comments<sheet_n>.xml` (the comment text, per
+    /// [MS-XLS]... no — ECMA-376 §18.7.3 `CT_Comments`) and the
+    /// companion `xl/drawings/vmlDrawing<sheet_n>.vml` (the legacy VML
+    /// popup shape Excel requires to actually display a comment
+    /// indicator on the cell), wiring both relationships off the
+    /// worksheet part.
+    ///
+    /// Returns the relationship ID for `<legacyDrawing r:id="…"/>` —
+    /// note this points at the *VML* part, not the comments part; the
+    /// comments part itself is found purely by relationship type, with
+    /// no reference inside the worksheet body at all.
+    // office_kit patch: Write+Seek → Write (streaming ZIP)
+    fn write_comments_for_sheet<W: Write>(
+        opc: &mut OpcWriter<W>,
+        worksheet_part: &PartName,
+        sheet_n: usize,
+        comments: &[SheetCommentOut],
+    ) -> Result<String> {
+        let comments_target = format!("../comments{}.xml", sheet_n);
+        opc.add_part_rel(worksheet_part, rel_types::COMMENTS, &comments_target);
+        let comments_part = PartName::new(&format!("/xl/comments{}.xml", sheet_n))?;
+        const CT_COMMENTS: &str =
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.comments+xml";
+        let comments_xml = build_comments_xml(comments);
+        opc.add_part(&comments_part, CT_COMMENTS, &comments_xml)?;
+
+        let vml_target = format!("../drawings/vmlDrawing{}.vml", sheet_n);
+        let vml_rid = opc.add_part_rel(worksheet_part, rel_types::VML_DRAWING, &vml_target);
+        let vml_part = PartName::new(&format!("/xl/drawings/vmlDrawing{}.vml", sheet_n))?;
+        const CT_VML: &str = "application/vnd.openxmlformats-officedocument.vmlDrawing";
+        let vml_xml = build_vml_comments_xml(comments);
+        opc.add_part(&vml_part, CT_VML, &vml_xml)?;
+
+        Ok(vml_rid)
+    }
+
+    /// Materialise `xl/drawings/drawing<sheet_n>.xml`, write each
+    /// picture's bytes under `xl/media/image_<sheet_n>_<pic_n>.<ext>`,
+    /// wire the worksheet→drawing and drawing→image relationships, and
+    /// register PNG/JPEG default content types.
+    ///
+    /// Returns the relationship ID added to the worksheet — the caller
+    /// places it on the `<drawing r:id="…"/>` element inside the
+    /// worksheet XML.
+    fn write_drawing_for_sheet<W: Write>(
+        opc: &mut OpcWriter<W>,
+        worksheet_part: &PartName,
+        sheet_n: usize,
+        images: &[SheetImage],
+        text_shapes: &[SheetTextShape],
+    ) -> Result<String> {
+        let drawing_target = format!("../drawings/drawing{}.xml", sheet_n);
+        let drawing_rid = opc.add_part_rel(worksheet_part, rel_types::DRAWING, &drawing_target);
+
+        let drawing_part_str = format!("/xl/drawings/drawing{}.xml", sheet_n);
+        let drawing_part = PartName::new(&drawing_part_str)?;
+
+        // Add IMAGE rels off the drawing part. Targets are relative to
+        // the drawing part itself (`../media/imageX.ext`). Track the
+        // rIds so each `<xdr:pic>` in the drawing XML can reference
+        // them via `<a:blip r:embed="rIdN"/>`.
+        let mut blip_rids: Vec<String> = Vec::with_capacity(images.len());
+        for (i, img) in images.iter().enumerate() {
+            let ext = if img.format.is_empty() {
+                "png"
+            } else {
+                img.format.as_str()
+            };
+            let media_path_str = format!("/xl/media/image_{}_{}.{}", sheet_n, i + 1, ext);
+            let media_part = PartName::new(&media_path_str)?;
+
+            // Default Content-Type by extension (Default Extension="png")
+            // satisfies SDK validators that flag overrides without a
+            // matching Default. Re-registering the same default is a
+            // no-op inside ContentTypesBuilder.
+            let mime = match ext {
+                "jpg" | "jpeg" => "image/jpeg",
+                "gif" => "image/gif",
+                "tiff" | "tif" => "image/tiff",
+                "bmp" => "image/bmp",
+                "emf" => "image/x-emf",
+                "wmf" => "image/x-wmf",
+                _ => "image/png",
+            };
+            opc.register_default_content_type(ext, mime);
+
+            // Write image bytes raw (no Content-Type override needed
+            // since we registered the Default above; passing the same
+            // mime to add_part is harmless).
+            opc.add_part(&media_part, mime, &img.data)?;
+
+            // Drawing-relative target: `../media/image_..._N.ext`.
+            let rel_target = format!("../media/image_{}_{}.{}", sheet_n, i + 1, ext);
+            let rid = opc.add_part_rel(&drawing_part, rel_types::IMAGE, &rel_target);
+            blip_rids.push(rid);
+        }
+
+        // Now the drawing XML itself. One `<xdr:absoluteAnchor>` per
+        // picture and per text shape; anchor in EMU from the sheet
+        // origin, with the picture's `<a:blip r:embed="rIdN"/>`
+        // referring back to the image rels we just added.
+        let drawing_xml = build_drawing_xml(images, &blip_rids, text_shapes)?;
+        const CT_DRAWING: &str = "application/vnd.openxmlformats-officedocument.drawing+xml";
+        opc.add_part(&drawing_part, CT_DRAWING, &drawing_xml)?;
+
+        Ok(drawing_rid)
+    }
+
+    fn write_cell(
+        w: &mut Writer<Vec<u8>>,
+        row: usize,
+        col: usize,
+        cell: &CellData,
+        style_idx: Option<u32>,
+    ) -> crate::core::Result<()> {
+        let cell_ref = format!("{}{}", col_name(col as u32), row + 1);
+        let s_attr = style_idx.map(|i| i.to_string());
+
+        match cell {
+            // An empty cell with a style must still be written, or formatting
+            // a blank cell silently does nothing.
+            CellData::Empty => {
+                if let Some(ref s_val) = s_attr {
+                    let mut c = BytesStart::new("c");
+                    c.push_attribute(("r", cell_ref.as_str()));
+                    c.push_attribute(("s", s_val.as_str()));
+                    w.write_event(Event::Empty(c))?;
+                }
+            },
+            CellData::String(s) => {
+                let s: &str = if s.chars().count() > MAX_CELL_CHARS {
+                    let end = s
+                        .char_indices()
+                        .nth(MAX_CELL_CHARS)
+                        .map_or(s.len(), |(i, _)| i);
+                    log::warn!(
+                        "xlsx: cell text exceeds Excel's {MAX_CELL_CHARS}-character limit; \
+                         truncated"
+                    );
+                    &s[..end]
+                } else {
+                    s
+                };
+                let mut c = BytesStart::new("c");
+                c.push_attribute(("r", cell_ref.as_str()));
+                c.push_attribute(("t", "inlineStr"));
+                if let Some(ref s_val) = s_attr {
+                    c.push_attribute(("s", s_val.as_str()));
+                }
+                w.write_event(Event::Start(c))?;
+                w.write_event(Event::Start(BytesStart::new("is")))?;
+                let text = crate::core::xml::sanitize_xml_text(s);
+                w.write_event(Event::Start(t_start(&text)))?;
+                w.write_event(Event::Text(BytesText::new(&text)))?;
+                w.write_event(Event::End(BytesEnd::new("t")))?;
+                w.write_event(Event::End(BytesEnd::new("is")))?;
+                w.write_event(Event::End(BytesEnd::new("c")))?;
+            },
+            CellData::RichString(runs) => {
+                let mut c = BytesStart::new("c");
+                c.push_attribute(("r", cell_ref.as_str()));
+                c.push_attribute(("t", "inlineStr"));
+                if let Some(ref s_val) = s_attr {
+                    c.push_attribute(("s", s_val.as_str()));
+                }
+                w.write_event(Event::Start(c))?;
+                w.write_event(Event::Start(BytesStart::new("is")))?;
+                for run in runs {
+                    if run.text.is_empty() {
+                        continue;
+                    }
+                    w.write_event(Event::Start(BytesStart::new("r")))?;
+                    let argb = run.font_color.as_deref().and_then(argb_from_rgb);
+                    let has_rpr = run.bold
+                        || run.italic
+                        || run.underline
+                        || argb.is_some()
+                        || run.font_size_pt.is_some()
+                        || run.font_name.is_some();
+                    if has_rpr {
+                        w.write_event(Event::Start(BytesStart::new("rPr")))?;
+                        if run.bold {
+                            w.write_event(Event::Empty(BytesStart::new("b")))?;
+                        }
+                        if run.italic {
+                            w.write_event(Event::Empty(BytesStart::new("i")))?;
+                        }
+                        if run.underline {
+                            w.write_event(Event::Empty(BytesStart::new("u")))?;
+                        }
+                        if let Some(ref name) = run.font_name {
+                            let mut rfont = BytesStart::new("rFont");
+                            rfont.push_attribute(("val", name.as_str()));
+                            w.write_event(Event::Empty(rfont))?;
+                        }
+                        if let Some(size) = run.font_size_pt {
+                            let mut sz = BytesStart::new("sz");
+                            let size_str = size.to_string();
+                            sz.push_attribute(("val", size_str.as_str()));
+                            w.write_event(Event::Empty(sz))?;
+                        }
+                        if let Some(ref argb) = argb {
+                            let mut clr = BytesStart::new("color");
+                            clr.push_attribute(("rgb", argb.as_str()));
+                            w.write_event(Event::Empty(clr))?;
+                        }
+                        w.write_event(Event::End(BytesEnd::new("rPr")))?;
+                    }
+                    let text = crate::core::xml::sanitize_xml_text(&run.text);
+                    w.write_event(Event::Start(t_start(&text)))?;
+                    w.write_event(Event::Text(BytesText::new(&text)))?;
+                    w.write_event(Event::End(BytesEnd::new("t")))?;
+                    w.write_event(Event::End(BytesEnd::new("r")))?;
+                }
+                w.write_event(Event::End(BytesEnd::new("is")))?;
+                w.write_event(Event::End(BytesEnd::new("c")))?;
+            },
+            CellData::Number(n) => {
+                let mut c = BytesStart::new("c");
+                c.push_attribute(("r", cell_ref.as_str()));
+                // SpreadsheetML's cell value is an `xsd:double`, which has
+                // no lexical form for NaN or infinity — `<v>inf</v>` and
+                // `<v>NaN</v>` are schema-invalid and Excel refuses to open
+                // the workbook. Write the error value Excel itself produces
+                // for an undefined result instead.
+                if !n.is_finite() {
+                    c.push_attribute(("t", "e"));
+                    if let Some(ref s_val) = s_attr {
+                        c.push_attribute(("s", s_val.as_str()));
+                    }
+                    w.write_event(Event::Start(c))?;
+                    w.write_event(Event::Start(BytesStart::new("v")))?;
+                    w.write_event(Event::Text(BytesText::new("#NUM!")))?;
+                    w.write_event(Event::End(BytesEnd::new("v")))?;
+                    w.write_event(Event::End(BytesEnd::new("c")))?;
+                    return Ok(());
+                }
+                if let Some(ref s_val) = s_attr {
+                    c.push_attribute(("s", s_val.as_str()));
+                }
+                w.write_event(Event::Start(c))?;
+                w.write_event(Event::Start(BytesStart::new("v")))?;
+                w.write_event(Event::Text(BytesText::new(&crate::core::xml::sanitize_xml_text(
+                    &format_number(*n),
+                ))))?;
+                w.write_event(Event::End(BytesEnd::new("v")))?;
+                w.write_event(Event::End(BytesEnd::new("c")))?;
+            },
+            CellData::Boolean(b) => {
+                let mut c = BytesStart::new("c");
+                c.push_attribute(("r", cell_ref.as_str()));
+                c.push_attribute(("t", "b"));
+                if let Some(ref s_val) = s_attr {
+                    c.push_attribute(("s", s_val.as_str()));
+                }
+                w.write_event(Event::Start(c))?;
+                w.write_event(Event::Start(BytesStart::new("v")))?;
+                w.write_event(Event::Text(BytesText::new(&crate::core::xml::sanitize_xml_text(
+                    if *b { "1" } else { "0" },
+                ))))?;
+                w.write_event(Event::End(BytesEnd::new("v")))?;
+                w.write_event(Event::End(BytesEnd::new("c")))?;
+            },
+            CellData::Formula(f) => {
+                let mut c = BytesStart::new("c");
+                c.push_attribute(("r", cell_ref.as_str()));
+                if let Some(ref s_val) = s_attr {
+                    c.push_attribute(("s", s_val.as_str()));
+                }
+                w.write_event(Event::Start(c))?;
+                w.write_event(Event::Start(BytesStart::new("f")))?;
+                // [ECMA-376] §18.3.1.40: <f> content excludes the leading '='.
+                // The variant is named Formula, so callers type it by habit.
+                let body = f.strip_prefix('=').unwrap_or(f);
+                w.write_event(Event::Text(BytesText::new(&crate::core::xml::sanitize_xml_text(
+                    body,
+                ))))?;
+                w.write_event(Event::End(BytesEnd::new("f")))?;
+                w.write_event(Event::End(BytesEnd::new("c")))?;
+            },
+            CellData::FormulaWithValue { formula, cached } => {
+                let body = formula.strip_prefix('=').unwrap_or(formula);
+                let mut c = BytesStart::new("c");
+                c.push_attribute(("r", cell_ref.as_str()));
+                // ECMA-376 §18.18.11 ST_CellType: a cached string result
+                // is `t="str"`, a boolean `t="b"`; numbers are the default.
+                let cached_text: Option<String> = match cached.as_ref() {
+                    CellData::Number(n) => Some(n.to_string()),
+                    CellData::Boolean(b) => {
+                        c.push_attribute(("t", "b"));
+                        Some(if *b { "1".into() } else { "0".into() })
+                    },
+                    CellData::String(t) => {
+                        c.push_attribute(("t", "str"));
+                        Some(t.clone())
+                    },
+                    CellData::RichString(runs) => {
+                        c.push_attribute(("t", "str"));
+                        Some(runs.iter().map(|r| r.text.as_str()).collect())
+                    },
+                    CellData::Formula(_) | CellData::FormulaWithValue { .. } | CellData::Empty => {
+                        None
+                    },
+                };
+                if let Some(ref s_val) = s_attr {
+                    c.push_attribute(("s", s_val.as_str()));
+                }
+                w.write_event(Event::Start(c))?;
+                w.write_event(Event::Start(BytesStart::new("f")))?;
+                w.write_event(Event::Text(BytesText::new(&crate::core::xml::sanitize_xml_text(
+                    body,
+                ))))?;
+                w.write_event(Event::End(BytesEnd::new("f")))?;
+                if let Some(v) = cached_text {
+                    w.write_event(Event::Start(BytesStart::new("v")))?;
+                    w.write_event(Event::Text(BytesText::new(
+                        &crate::core::xml::sanitize_xml_text(&v),
+                    )))?;
+                    w.write_event(Event::End(BytesEnd::new("v")))?;
+                }
+                w.write_event(Event::End(BytesEnd::new("c")))?;
+            },
+        }
+
+        Ok(())
+    }
+}
+
+/// Escape the handful of characters that matter inside XML text content
+/// and attribute values (`&`, `<`, `>`) — the writer's own `quick_xml`
+/// `Writer` handles this automatically for `Event::Text`/attribute
+/// values via its own API, but the VML builder below writes some
+/// content as raw string interpolation, so text needs escaping by hand.
+///
+/// Characters XML 1.0 cannot represent at all (C0 controls other than tab,
+/// LF, CR) are dropped first, as everywhere else in the writers
+/// (`sanitize_xml_text`); left in, they made the part non-well-formed
+/// while `save()` returned Ok.
+fn xml_escape(s: &str) -> String {
+    crate::core::xml::sanitize_xml_text(s)
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+/// Generate `xl/comments<n>.xml` (ECMA-376 §18.7 `CT_Comments`): one
+/// `<author>` per distinct comment author (falling back to an empty
+/// author for comments with none, matching what Excel itself writes),
+/// then one `<comment>` per entry referencing its author by index.
+fn build_comments_xml(comments: &[SheetCommentOut]) -> Vec<u8> {
+    let mut authors: Vec<String> = Vec::new();
+    let mut author_idx: Vec<usize> = Vec::with_capacity(comments.len());
+    for c in comments {
+        let name = c.author.clone().unwrap_or_default();
+        let idx = match authors.iter().position(|a| a == &name) {
+            Some(i) => i,
+            None => {
+                authors.push(name);
+                authors.len() - 1
+            },
+        };
+        author_idx.push(idx);
+    }
+
+    let mut xml = String::new();
+    xml.push_str(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#);
+    xml.push_str(r#"<comments xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">"#);
+    xml.push_str("<authors>");
+    for a in &authors {
+        xml.push_str(&format!("<author>{}</author>", xml_escape(a)));
+    }
+    xml.push_str("</authors><commentList>");
+    for (i, c) in comments.iter().enumerate() {
+        let ref_ = format!("{}{}", col_name(c.col as u32), c.row + 1);
+        xml.push_str(&format!(
+            r#"<comment ref="{}" authorId="{}"><text><r><t xml:space="preserve">{}</t></r></text></comment>"#,
+            ref_,
+            author_idx[i],
+            xml_escape(&c.text)
+        ));
+    }
+    xml.push_str("</commentList></comments>");
+    xml.into_bytes()
+}
+
+/// Generate `xl/drawings/vmlDrawing<n>.vml`: the legacy comment popup
+/// shapes Excel needs to show a comment indicator at all — a sheet
+/// whose `xl/comments*.xml` exists but has no matching VML shape can
+/// make Excel offer to "repair" the file, or simply not show the
+/// indicator. One `<v:shape>` per comment, referencing the shared
+/// `_x0000_t202` shapetype and anchored to its cell via `<x:Row>`/
+/// `<x:Column>` (0-based) inside `<x:ClientData ObjectType="Note">`.
+/// The exact `style` position is a reasonable default near the cell,
+/// not pixel-perfect — Excel repositions the popup itself based on
+/// `Row`/`Column`, matching the convention other real-world XLSX
+/// writers (PhpSpreadsheet, openpyxl) use for this same template.
+fn build_vml_comments_xml(comments: &[SheetCommentOut]) -> Vec<u8> {
+    let mut xml = String::new();
+    xml.push_str(r#"<xml xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel">"#);
+    xml.push_str(r#"<o:shapelayout v:ext="edit"><o:idmap v:ext="edit" data="1"/></o:shapelayout>"#);
+    xml.push_str(
+        r#"<v:shapetype id="_x0000_t202" coordsize="21600,21600" o:spt="202" path="m,l,21600r21600,l21600,xe"><v:stroke joinstyle="miter"/><v:path gradientshapeok="t" o:connecttype="rect"/></v:shapetype>"#,
+    );
+    for (i, c) in comments.iter().enumerate() {
+        let id = i + 1;
+        let left_pt = 60.0 + (c.col as f64) * 2.0;
+        let top_pt = 1.5 + (c.row as f64) * 2.0;
+        xml.push_str(&format!(
+            r##"<v:shape id="_x0000_s{id}" type="#_x0000_t202" style="position:absolute;margin-left:{left_pt}pt;margin-top:{top_pt}pt;width:108pt;height:59.25pt;z-index:{id};visibility:hidden" fillcolor="#ffffe1" o:insetmode="auto"><v:fill color2="#ffffe1"/><v:shadow on="t" color="black" obscured="t"/><v:path o:connecttype="none"/><v:textbox style="mso-direction-alt:auto"><div style="text-align:left"/></v:textbox><x:ClientData ObjectType="Note"><x:MoveWithCells/><x:SizeWithCells/><x:AutoFill>False</x:AutoFill><x:Row>{row}</x:Row><x:Column>{col}</x:Column></x:ClientData></v:shape>"##,
+            row = c.row,
+            col = c.col,
+        ));
+    }
+    xml.push_str("</xml>");
+    xml.into_bytes()
+}
+
+/// Generate `xl/drawings/drawing<n>.xml` for a sheet's pictures.
+///
+/// Each picture becomes one `<xdr:absoluteAnchor>` containing an
+/// `<xdr:pic>` with an `<a:blip r:embed="…"/>` referring back to the
+/// IMAGE rel registered on the drawing part. EMU coordinates flow
+/// through verbatim from the caller's `SheetImage`, which preserves
+/// source-PDF anchor positions on a PDF→XLSX→PDF round-trip when the
+/// upstream IR carries them.
+fn build_drawing_xml(
+    images: &[SheetImage],
+    blip_rids: &[String],
+    text_shapes: &[SheetTextShape],
+) -> crate::core::Result<Vec<u8>> {
+    const NS_XDR: &str = "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing";
+    const NS_A: &str = "http://schemas.openxmlformats.org/drawingml/2006/main";
+
+    let mut w = Writer::new(Vec::new());
+    w.write_event(Event::Decl(BytesDecl::new("1.0", Some("UTF-8"), Some("yes"))))?;
+
+    let mut root = BytesStart::new("xdr:wsDr");
+    root.push_attribute(("xmlns:xdr", NS_XDR));
+    root.push_attribute(("xmlns:a", NS_A));
+    root.push_attribute(("xmlns:r", NS_REL));
+    w.write_event(Event::Start(root))?;
+
+    for (i, img) in images.iter().enumerate() {
+        let rid = blip_rids.get(i).map(String::as_str).unwrap_or("rId1");
+
+        // <xdr:absoluteAnchor>
+        w.write_event(Event::Start(BytesStart::new("xdr:absoluteAnchor")))?;
+
+        // <xdr:pos x=".." y=".."/>
+        let pos_x = img.x_emu.to_string();
+        let pos_y = img.y_emu.to_string();
+        let mut pos = BytesStart::new("xdr:pos");
+        pos.push_attribute(("x", pos_x.as_str()));
+        pos.push_attribute(("y", pos_y.as_str()));
+        w.write_event(Event::Empty(pos))?;
+
+        // <xdr:ext cx=".." cy=".."/>
+        let ext_cx = img.cx_emu.max(1).to_string();
+        let ext_cy = img.cy_emu.max(1).to_string();
+        let mut ext = BytesStart::new("xdr:ext");
+        ext.push_attribute(("cx", ext_cx.as_str()));
+        ext.push_attribute(("cy", ext_cy.as_str()));
+        w.write_event(Event::Empty(ext))?;
+
+        // <xdr:pic>
+        w.write_event(Event::Start(BytesStart::new("xdr:pic")))?;
+
+        // <xdr:nvPicPr>
+        w.write_event(Event::Start(BytesStart::new("xdr:nvPicPr")))?;
+        let pic_id = (i + 1).to_string();
+        let pic_name = format!("Picture {}", i + 1);
+        let mut cnv_pr = BytesStart::new("xdr:cNvPr");
+        cnv_pr.push_attribute(("id", pic_id.as_str()));
+        cnv_pr.push_attribute(("name", pic_name.as_str()));
+        if let Some(alt) = img.alt_text.as_deref() {
+            cnv_pr.push_attribute(("descr", alt));
+        }
+        w.write_event(Event::Empty(cnv_pr))?;
+        w.write_event(Event::Empty(BytesStart::new("xdr:cNvPicPr")))?;
+        w.write_event(Event::End(BytesEnd::new("xdr:nvPicPr")))?;
+
+        // <xdr:blipFill>
+        w.write_event(Event::Start(BytesStart::new("xdr:blipFill")))?;
+        let mut blip = BytesStart::new("a:blip");
+        blip.push_attribute(("r:embed", rid));
+        w.write_event(Event::Empty(blip))?;
+        w.write_event(Event::Start(BytesStart::new("a:stretch")))?;
+        w.write_event(Event::Empty(BytesStart::new("a:fillRect")))?;
+        w.write_event(Event::End(BytesEnd::new("a:stretch")))?;
+        w.write_event(Event::End(BytesEnd::new("xdr:blipFill")))?;
+
+        // <xdr:spPr>
+        w.write_event(Event::Start(BytesStart::new("xdr:spPr")))?;
+        w.write_event(Event::Start(BytesStart::new("a:xfrm")))?;
+        let mut off = BytesStart::new("a:off");
+        off.push_attribute(("x", pos_x.as_str()));
+        off.push_attribute(("y", pos_y.as_str()));
+        w.write_event(Event::Empty(off))?;
+        let mut ext2 = BytesStart::new("a:ext");
+        ext2.push_attribute(("cx", ext_cx.as_str()));
+        ext2.push_attribute(("cy", ext_cy.as_str()));
+        w.write_event(Event::Empty(ext2))?;
+        w.write_event(Event::End(BytesEnd::new("a:xfrm")))?;
+        let mut prst = BytesStart::new("a:prstGeom");
+        prst.push_attribute(("prst", "rect"));
+        w.write_event(Event::Start(prst))?;
+        w.write_event(Event::Empty(BytesStart::new("a:avLst")))?;
+        w.write_event(Event::End(BytesEnd::new("a:prstGeom")))?;
+        w.write_event(Event::End(BytesEnd::new("xdr:spPr")))?;
+
+        w.write_event(Event::End(BytesEnd::new("xdr:pic")))?;
+
+        // <xdr:clientData/>
+        w.write_event(Event::Empty(BytesStart::new("xdr:clientData")))?;
+
+        w.write_event(Event::End(BytesEnd::new("xdr:absoluteAnchor")))?;
+    }
+
+    // ── Text shapes (one `<xdr:sp>` per layout-mode PDF span) ───────────
+    let pic_count = images.len();
+    for (j, ts) in text_shapes.iter().enumerate() {
+        // Skip empty-text shapes — Excel rejects shape XML with
+        // an empty `<a:t/>` even though OOXML allows it.
+        let trimmed = ts.text.trim_matches('\u{0000}');
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        w.write_event(Event::Start(BytesStart::new("xdr:absoluteAnchor")))?;
+
+        let pos_x = ts.x_emu.to_string();
+        let pos_y = ts.y_emu.to_string();
+        let mut pos = BytesStart::new("xdr:pos");
+        pos.push_attribute(("x", pos_x.as_str()));
+        pos.push_attribute(("y", pos_y.as_str()));
+        w.write_event(Event::Empty(pos))?;
+
+        let ext_cx = ts.cx_emu.max(1).to_string();
+        let ext_cy = ts.cy_emu.max(1).to_string();
+        let mut ext = BytesStart::new("xdr:ext");
+        ext.push_attribute(("cx", ext_cx.as_str()));
+        ext.push_attribute(("cy", ext_cy.as_str()));
+        w.write_event(Event::Empty(ext))?;
+
+        w.write_event(Event::Start(BytesStart::new("xdr:sp")))?;
+
+        // <xdr:nvSpPr>
+        w.write_event(Event::Start(BytesStart::new("xdr:nvSpPr")))?;
+        let sp_id = (pic_count + j + 1).to_string();
+        let sp_name = format!("TextShape {}", pic_count + j + 1);
+        let mut cnv_pr = BytesStart::new("xdr:cNvPr");
+        cnv_pr.push_attribute(("id", sp_id.as_str()));
+        cnv_pr.push_attribute(("name", sp_name.as_str()));
+        w.write_event(Event::Empty(cnv_pr))?;
+        let mut cnv_sp_pr = BytesStart::new("xdr:cNvSpPr");
+        cnv_sp_pr.push_attribute(("txBox", "1"));
+        w.write_event(Event::Empty(cnv_sp_pr))?;
+        w.write_event(Event::End(BytesEnd::new("xdr:nvSpPr")))?;
+
+        // <xdr:spPr>
+        w.write_event(Event::Start(BytesStart::new("xdr:spPr")))?;
+        w.write_event(Event::Start(BytesStart::new("a:xfrm")))?;
+        let mut off = BytesStart::new("a:off");
+        off.push_attribute(("x", pos_x.as_str()));
+        off.push_attribute(("y", pos_y.as_str()));
+        w.write_event(Event::Empty(off))?;
+        let mut ext2 = BytesStart::new("a:ext");
+        ext2.push_attribute(("cx", ext_cx.as_str()));
+        ext2.push_attribute(("cy", ext_cy.as_str()));
+        w.write_event(Event::Empty(ext2))?;
+        w.write_event(Event::End(BytesEnd::new("a:xfrm")))?;
+        let mut prst = BytesStart::new("a:prstGeom");
+        prst.push_attribute(("prst", "rect"));
+        w.write_event(Event::Start(prst))?;
+        w.write_event(Event::Empty(BytesStart::new("a:avLst")))?;
+        w.write_event(Event::End(BytesEnd::new("a:prstGeom")))?;
+        // Transparent fill so the text shape doesn't paint a
+        // white rectangle over neighbouring content.
+        w.write_event(Event::Empty(BytesStart::new("a:noFill")))?;
+        w.write_event(Event::End(BytesEnd::new("xdr:spPr")))?;
+
+        // <xdr:txBody> — inline a single run with the span's run
+        // properties. PPTX/PRESENT and SpreadsheetML share the same
+        // DrawingML run model, so the structure mirrors PPTX text
+        // bodies elsewhere in this crate.
+        w.write_event(Event::Start(BytesStart::new("xdr:txBody")))?;
+        // <a:bodyPr wrap="none"> so a single span doesn't wrap mid-line.
+        let mut body_pr = BytesStart::new("a:bodyPr");
+        body_pr.push_attribute(("wrap", "none"));
+        body_pr.push_attribute(("rtlCol", "0"));
+        body_pr.push_attribute(("lIns", "0"));
+        body_pr.push_attribute(("tIns", "0"));
+        body_pr.push_attribute(("rIns", "0"));
+        body_pr.push_attribute(("bIns", "0"));
+        w.write_event(Event::Empty(body_pr))?;
+        w.write_event(Event::Empty(BytesStart::new("a:lstStyle")))?;
+        w.write_event(Event::Start(BytesStart::new("a:p")))?;
+        // <a:pPr marL="0" indent="0"/>
+        let mut p_pr = BytesStart::new("a:pPr");
+        p_pr.push_attribute(("marL", "0"));
+        p_pr.push_attribute(("indent", "0"));
+        w.write_event(Event::Empty(p_pr))?;
+        // <a:r>
+        w.write_event(Event::Start(BytesStart::new("a:r")))?;
+        // <a:rPr lang="en-US" sz=".." b=".." i=".."> with optional <a:solidFill> and <a:latin>
+        let sz_hp = (ts.font_size_pt * 100.0).round() as i32;
+        let sz_str = sz_hp.to_string();
+        let mut r_pr = BytesStart::new("a:rPr");
+        r_pr.push_attribute(("lang", "en-US"));
+        r_pr.push_attribute(("sz", sz_str.as_str()));
+        if ts.bold {
+            r_pr.push_attribute(("b", "1"));
+        }
+        if ts.italic {
+            r_pr.push_attribute(("i", "1"));
+        }
+        let want_color_or_font = ts.color_hex.is_some() || !ts.font_name.is_empty();
+        if want_color_or_font {
+            w.write_event(Event::Start(r_pr))?;
+            if let Some(ref hex) = ts.color_hex {
+                w.write_event(Event::Start(BytesStart::new("a:solidFill")))?;
+                let mut srgb = BytesStart::new("a:srgbClr");
+                srgb.push_attribute(("val", hex.as_str()));
+                w.write_event(Event::Empty(srgb))?;
+                w.write_event(Event::End(BytesEnd::new("a:solidFill")))?;
+            }
+            if !ts.font_name.is_empty() {
+                let mut latin = BytesStart::new("a:latin");
+                latin.push_attribute(("typeface", ts.font_name.as_str()));
+                w.write_event(Event::Empty(latin))?;
+            }
+            w.write_event(Event::End(BytesEnd::new("a:rPr")))?;
+        } else {
+            w.write_event(Event::Empty(r_pr))?;
+        }
+        // <a:t>text</a:t>
+        w.write_event(Event::Start(BytesStart::new("a:t")))?;
+        w.write_event(Event::Text(quick_xml::events::BytesText::new(
+            &crate::core::xml::sanitize_xml_text(trimmed),
+        )))?;
+        w.write_event(Event::End(BytesEnd::new("a:t")))?;
+        w.write_event(Event::End(BytesEnd::new("a:r")))?;
+        w.write_event(Event::End(BytesEnd::new("a:p")))?;
+        w.write_event(Event::End(BytesEnd::new("xdr:txBody")))?;
+
+        w.write_event(Event::End(BytesEnd::new("xdr:sp")))?;
+        w.write_event(Event::Empty(BytesStart::new("xdr:clientData")))?;
+        w.write_event(Event::End(BytesEnd::new("xdr:absoluteAnchor")))?;
+    }
+
+    w.write_event(Event::End(BytesEnd::new("xdr:wsDr")))?;
+    Ok(w.into_inner())
+}
+
+// ---------------------------------------------------------------------------
+// StyleTable — collects unique CellStyle objects, assigns xfIds, builds
+// styles.xml dynamically.
+// ---------------------------------------------------------------------------
+
+/// A unique font specification key (for deduplication).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct FontKey {
+    bold: bool,
+    italic: bool,
+    underline: bool,
+    color: Option<String>,
+    size_half_pt: Option<u32>, // size_pt * 2, to use as hash key
+    name: Option<String>,
+}
+
+/// A unique fill specification key.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct FillKey(Option<String>); // background RGB hex
+
+/// An xf (cell format) record.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct XfKey {
+    font_idx: u32,
+    fill_idx: u32,
+    num_fmt_id: u32,
+    h_align: Option<String>,
+    wrap_text: bool,
+}
+
+struct StyleTable {
+    /// Map from (sheet_ptr, row, col) to xf index.
+    cell_xf: HashMap<(*const SheetDataInner, usize, usize), u32>,
+    /// Ordered list of fonts for XML serialization.
+    fonts: Vec<FontKey>,
+    /// Ordered list of fills for XML serialization.
+    fills: Vec<FillKey>,
+    num_fmts: Vec<(u32, String)>, // (numFmtId, formatCode) for custom formats
+    /// Ordered list of xf records for XML serialization.
+    xfs: Vec<XfKey>,
+    // Lookup maps for O(1) deduplication during build.
+    font_map: HashMap<FontKey, u32>,
+    fill_map: HashMap<FillKey, u32>,
+    xf_map: HashMap<XfKey, u32>,
+}
+
+impl StyleTable {
+    fn build(sheets: &[SheetDataInner]) -> Self {
+        let default_font = FontKey {
+            bold: false,
+            italic: false,
+            underline: false,
+            color: None,
+            size_half_pt: None,
+            name: None,
+        };
+        let default_xf = XfKey {
+            font_idx: 0,
+            fill_idx: 0,
+            num_fmt_id: 0,
+            h_align: None,
+            wrap_text: false,
+        };
+
+        let mut font_map = HashMap::new();
+        font_map.insert(default_font.clone(), 0u32);
+        let mut fill_map: HashMap<FillKey, u32> = HashMap::new();
+        fill_map.insert(FillKey(None), 0u32); // idx 0 = none; idx 1 = gray125 (pre-populated below)
+        let mut xf_map = HashMap::new();
+        xf_map.insert(default_xf.clone(), 0u32);
+
+        let mut table = StyleTable {
+            cell_xf: HashMap::new(),
+            fonts: vec![default_font],
+            fills: vec![FillKey(None), FillKey(None)], // idx 0: none, idx 1: gray125
+            num_fmts: Vec::new(),
+            xfs: vec![default_xf],
+            font_map,
+            fill_map,
+            xf_map,
+        };
+
+        let mut next_custom_fmt_id: u32 = 164; // custom numFmtIds start at 164
+
+        for sheet in sheets {
+            let sheet_ptr = sheet as *const SheetDataInner;
+            // cell_styles is a HashMap, so iterating it directly assigns
+            // font/fill/xf indices in a random order and styles.xml differs
+            // byte-for-byte between runs of the same input. Sort first so the
+            // output is reproducible.
+            let mut styled: Vec<_> = sheet.cell_styles.iter().collect();
+            styled.sort_by_key(|((row, col), _)| (*row, *col));
+            for ((row, col), style) in styled {
+                // Resolve font index — O(1) via HashMap.
+                let font_key = FontKey {
+                    bold: style.bold,
+                    italic: style.italic,
+                    underline: style.underline,
+                    color: style.font_color.clone(),
+                    size_half_pt: style.font_size_pt.map(|s| (s * 2.0).round() as u32),
+                    name: style.font_name.clone(),
+                };
+                let font_idx = if let Some(&i) = table.font_map.get(&font_key) {
+                    i
+                } else {
+                    let idx = table.fonts.len() as u32;
+                    table.fonts.push(font_key.clone());
+                    table.font_map.insert(font_key, idx);
+                    idx
+                };
+
+                // Resolve fill index — O(1) via HashMap.
+                let fill_key = FillKey(style.background_color.clone());
+                let fill_idx = if fill_key.0.is_none() {
+                    0
+                } else if let Some(&i) = table.fill_map.get(&fill_key) {
+                    i
+                } else {
+                    let idx = table.fills.len() as u32;
+                    table.fills.push(fill_key.clone());
+                    table.fill_map.insert(fill_key, idx);
+                    idx
+                };
+
+                // Resolve number format id. An explicit code wins, and codes
+                // are deduplicated so N cells sharing one format get one id.
+                let num_fmt_id = if let Some(ref code) = style.number_format_code {
+                    if let Some(id) = crate::xlsx::numfmt::builtin_id_for_code(code) {
+                        // Already a built-in; a custom id would be noise.
+                        id
+                    } else if let Some((id, _)) = table.num_fmts.iter().find(|(_, c)| c == code) {
+                        *id
+                    } else {
+                        let id = next_custom_fmt_id;
+                        next_custom_fmt_id += 1;
+                        table.num_fmts.push((id, code.clone()));
+                        id
+                    }
+                } else {
+                    match style.number_format.builtin_id() {
+                        Some(id) => id,
+                        None => {
+                            let id = next_custom_fmt_id;
+                            next_custom_fmt_id += 1;
+                            table.num_fmts.push((id, "General".to_string()));
+                            id
+                        },
+                    }
+                };
+
+                let h_align_str = style.h_align.as_ref().map(|a| {
+                    match a {
+                        HAlign::Left => "left",
+                        HAlign::Center => "center",
+                        HAlign::Right => "right",
+                    }
+                    .to_string()
+                });
+
+                let xf_key = XfKey {
+                    font_idx,
+                    fill_idx,
+                    num_fmt_id,
+                    h_align: h_align_str,
+                    wrap_text: style.wrap_text,
+                };
+
+                // Resolve xf index — O(1) via HashMap.
+                let xf_idx = if let Some(&i) = table.xf_map.get(&xf_key) {
+                    i
+                } else {
+                    let idx = table.xfs.len() as u32;
+                    table.xfs.push(xf_key.clone());
+                    table.xf_map.insert(xf_key, idx);
+                    idx
+                };
+
+                table.cell_xf.insert((sheet_ptr, *row, *col), xf_idx);
+            }
+        }
+
+        table
+    }
+
+    fn get_idx(&self, sheet: &SheetDataInner, row: usize, col: usize) -> Option<u32> {
+        let key = (sheet as *const SheetDataInner, row, col);
+        self.cell_xf.get(&key).copied().filter(|&i| i != 0)
+    }
+
+    fn build_styles_xml(&self) -> crate::core::Result<Vec<u8>> {
+        let mut w = Writer::new(Vec::new());
+
+        w.write_event(Event::Decl(BytesDecl::new("1.0", Some("UTF-8"), Some("yes"))))?;
+
+        let mut root = BytesStart::new("styleSheet");
+        root.push_attribute(("xmlns", NS_SML));
+        w.write_event(Event::Start(root))?;
+
+        // Custom number formats (if any)
+        if !self.num_fmts.is_empty() {
+            let count = self.num_fmts.len().to_string();
+            let mut nf_root = BytesStart::new("numFmts");
+            nf_root.push_attribute(("count", count.as_str()));
+            w.write_event(Event::Start(nf_root))?;
+            for (id, code) in &self.num_fmts {
+                let mut nf = BytesStart::new("numFmt");
+                nf.push_attribute(("numFmtId", id.to_string().as_str()));
+                nf.push_attribute(("formatCode", code.as_str()));
+                w.write_event(Event::Empty(nf))?;
+            }
+            w.write_event(Event::End(BytesEnd::new("numFmts")))?;
+        }
+
+        // fonts
+        let font_count = self.fonts.len().to_string();
+        let mut fonts_elem = BytesStart::new("fonts");
+        fonts_elem.push_attribute(("count", font_count.as_str()));
+        w.write_event(Event::Start(fonts_elem))?;
+        for font in &self.fonts {
+            w.write_event(Event::Start(BytesStart::new("font")))?;
+
+            if font.bold {
+                w.write_event(Event::Empty(BytesStart::new("b")))?;
+            }
+            if font.italic {
+                w.write_event(Event::Empty(BytesStart::new("i")))?;
+            }
+            if font.underline {
+                let mut u = BytesStart::new("u");
+                u.push_attribute(("val", "single"));
+                w.write_event(Event::Empty(u))?;
+            }
+            if let Some(argb) = font.color.as_deref().and_then(argb_from_rgb) {
+                let mut c = BytesStart::new("color");
+                c.push_attribute(("rgb", argb.as_str()));
+                w.write_event(Event::Empty(c))?;
+            }
+            // size: default 11pt if not specified. Half-points must survive
+            // (10.5pt is a real size), and Excel accepts 1..=409.
+            let size_half = font.size_half_pt.unwrap_or(22).clamp(2, 818);
+            let size_val = if size_half % 2 == 0 {
+                format!("{}", size_half / 2)
+            } else {
+                format!("{}.5", size_half / 2)
+            };
+            let mut sz = BytesStart::new("sz");
+            sz.push_attribute(("val", size_val.as_str()));
+            w.write_event(Event::Empty(sz))?;
+
+            let name_val = font.name.as_deref().unwrap_or("Calibri");
+            let mut name = BytesStart::new("name");
+            name.push_attribute(("val", name_val));
+            w.write_event(Event::Empty(name))?;
+
+            w.write_event(Event::End(BytesEnd::new("font")))?;
+        }
+        w.write_event(Event::End(BytesEnd::new("fonts")))?;
+
+        // fills
+        let fill_count = self.fills.len().to_string();
+        let mut fills_elem = BytesStart::new("fills");
+        fills_elem.push_attribute(("count", fill_count.as_str()));
+        w.write_event(Event::Start(fills_elem))?;
+        for (i, fill) in self.fills.iter().enumerate() {
+            w.write_event(Event::Start(BytesStart::new("fill")))?;
+            let pattern_type = if i == 1 {
+                "gray125"
+            } else if fill.0.is_some() {
+                "solid"
+            } else {
+                "none"
+            };
+            let mut pf = BytesStart::new("patternFill");
+            pf.push_attribute(("patternType", pattern_type));
+            if let Some(argb) = fill.0.as_deref().and_then(argb_from_rgb) {
+                w.write_event(Event::Start(pf))?;
+                let mut fg = BytesStart::new("fgColor");
+                fg.push_attribute(("rgb", argb.as_str()));
+                w.write_event(Event::Empty(fg))?;
+                w.write_event(Event::End(BytesEnd::new("patternFill")))?;
+            } else {
+                w.write_event(Event::Empty(pf))?;
+            }
+            w.write_event(Event::End(BytesEnd::new("fill")))?;
+        }
+        w.write_event(Event::End(BytesEnd::new("fills")))?;
+
+        // borders (minimal: one empty border)
+        w.write_event(Event::Start({
+            let mut e = BytesStart::new("borders");
+            e.push_attribute(("count", "1"));
+            e
+        }))?;
+        w.write_event(Event::Start(BytesStart::new("border")))?;
+        for edge in ["left", "right", "top", "bottom"] {
+            w.write_event(Event::Empty(BytesStart::new(edge)))?;
+        }
+        w.write_event(Event::End(BytesEnd::new("border")))?;
+        w.write_event(Event::End(BytesEnd::new("borders")))?;
+
+        // cellStyleXfs (base xf table required by Excel)
+        w.write_event(Event::Start({
+            let mut e = BytesStart::new("cellStyleXfs");
+            e.push_attribute(("count", "1"));
+            e
+        }))?;
+        w.write_event(Event::Empty(BytesStart::new("xf")))?;
+        w.write_event(Event::End(BytesEnd::new("cellStyleXfs")))?;
+
+        // cellXfs
+        let xf_count = self.xfs.len().to_string();
+        let mut cxf = BytesStart::new("cellXfs");
+        cxf.push_attribute(("count", xf_count.as_str()));
+        w.write_event(Event::Start(cxf))?;
+
+        for xf in &self.xfs {
+            let apply_font = (xf.font_idx != 0).to_string();
+            let apply_fill = (xf.fill_idx != 0).to_string();
+            let apply_num_fmt = (xf.num_fmt_id != 0).to_string();
+            let apply_align = xf.h_align.is_some() || xf.wrap_text;
+
+            let mut xf_elem = BytesStart::new("xf");
+            xf_elem.push_attribute(("xfId", "0"));
+            xf_elem.push_attribute(("fontId", xf.font_idx.to_string().as_str()));
+            xf_elem.push_attribute(("fillId", xf.fill_idx.to_string().as_str()));
+            xf_elem.push_attribute(("borderId", "0"));
+            xf_elem.push_attribute(("numFmtId", xf.num_fmt_id.to_string().as_str()));
+            if xf.font_idx != 0 {
+                xf_elem.push_attribute(("applyFont", apply_font.as_str()));
+            }
+            if xf.fill_idx != 0 {
+                xf_elem.push_attribute(("applyFill", apply_fill.as_str()));
+            }
+            if xf.num_fmt_id != 0 {
+                xf_elem.push_attribute(("applyNumberFormat", apply_num_fmt.as_str()));
+            }
+            if apply_align {
+                xf_elem.push_attribute(("applyAlignment", "true"));
+            }
+
+            if apply_align {
+                w.write_event(Event::Start(xf_elem))?;
+                let mut align = BytesStart::new("alignment");
+                if let Some(ref ha) = xf.h_align {
+                    align.push_attribute(("horizontal", ha.as_str()));
+                }
+                if xf.wrap_text {
+                    align.push_attribute(("wrapText", "1"));
+                }
+                w.write_event(Event::Empty(align))?;
+                w.write_event(Event::End(BytesEnd::new("xf")))?;
+            } else {
+                w.write_event(Event::Empty(xf_elem))?;
+            }
+        }
+
+        w.write_event(Event::End(BytesEnd::new("cellXfs")))?;
+        w.write_event(Event::End(BytesEnd::new("styleSheet")))?;
+
+        Ok(w.into_inner())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+fn col_name(col: u32) -> String {
+    let mut result = Vec::new();
+    let mut n = col + 1;
+    while n > 0 {
+        n -= 1;
+        result.push(b'A' + (n % 26) as u8);
+        n /= 26;
+    }
+    result.reverse();
+    String::from_utf8(result).unwrap()
+}
+
+fn format_number(n: f64) -> String {
+    if n.fract() == 0.0 && n.abs() < (i64::MAX as f64) {
+        format!("{}", n as i64)
+    } else {
+        format!("{n}")
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A control character (a raw NUL in particular) in the
+    /// image extension reached the ZIP entry name, the relationship
+    /// target and [Content_Types].xml unescapably, producing a
+    /// non-well-formed package while save() still returned Ok(()).
+    #[test]
+    fn test_add_image_sanitizes_a_hostile_extension() {
+        let mut wb = XlsxWriter::new();
+        wb.add_sheet("S")
+            .add_image(vec![0x89, 0x50], "p\0n\u{1}g", 0, 0, 500_000, 500_000);
+        let mut buf = std::io::Cursor::new(Vec::new());
+        wb.write_to(&mut buf).expect("write xlsx");
+        let bytes = buf.into_inner();
+
+        let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        let mut media_names = Vec::new();
+        for i in 0..zip.len() {
+            let name = zip.by_index(i).unwrap().name().unwrap().to_string();
+            assert!(
+                !name.bytes().any(|b| b.is_ascii_control()),
+                "ZIP entry name must not carry a raw control character from the \
+                 caller's extension: {name:?}"
+            );
+            if name.starts_with("xl/media/") {
+                media_names.push(name);
+            }
+        }
+        assert_eq!(media_names.len(), 1, "expected exactly one media entry: {media_names:?}");
+        assert!(
+            media_names[0].ends_with(".png"),
+            "the alphanumeric characters of the hostile extension must survive: {}",
+            media_names[0]
+        );
+    }
+
+    /// A picture's alternative text comes back from the written workbook.
+    /// The drawing writer named every picture `Picture N` and wrote no
+    /// `descr`, so the description every other reader shows — and the only
+    /// text an image contributes to `plain_text()` — was lost on write.
+    #[test]
+    fn test_image_alt_text_round_trips_through_the_drawing_part() {
+        let mut wb = XlsxWriter::new();
+        wb.add_sheet("S").add_image_with_alt(
+            vec![0x89, 0x50, 0x4e, 0x47],
+            "png",
+            0,
+            0,
+            500_000,
+            500_000,
+            Some("company logo".into()),
+        );
+        let mut buf = std::io::Cursor::new(Vec::new());
+        wb.write_to(&mut buf).expect("write xlsx");
+        let doc = crate::Document::from_reader(
+            std::io::Cursor::new(buf.into_inner()),
+            crate::DocumentFormat::Xlsx,
+        )
+        .expect("reopen");
+        let ir = doc.to_ir();
+        // The reader wraps a positioned picture in a `TextBox` carrying
+        // its anchor.
+        let alt = ir.sections[0].elements.iter().find_map(|e| match e {
+            crate::ir::Element::Image(img) => img.alt_text.clone(),
+            crate::ir::Element::TextBox(tb) => tb.content.iter().find_map(|e| match e {
+                crate::ir::Element::Image(img) => img.alt_text.clone(),
+                _ => None,
+            }),
+            _ => None,
+        });
+        assert_eq!(alt.as_deref(), Some("company logo"), "{ir:?}");
+    }
+
+    /// A caller-supplied extension that's entirely non-alphanumeric must
+    /// still produce a usable file, not an empty/invalid one.
+    #[test]
+    fn test_add_image_falls_back_to_bin_for_an_entirely_invalid_extension() {
+        assert_eq!(sanitize_image_extension("/../../"), "bin");
+        assert_eq!(sanitize_image_extension(""), "bin");
+        assert_eq!(sanitize_image_extension("png"), "png");
+        assert_eq!(sanitize_image_extension("a/b/c"), "abc");
+    }
+
+    #[test]
+    fn test_col_name_basic() {
+        assert_eq!(col_name(0), "A");
+        assert_eq!(col_name(25), "Z");
+        assert_eq!(col_name(26), "AA");
+        assert_eq!(col_name(701), "ZZ");
+    }
+
+    #[test]
+    fn test_formula_cell_roundtrip() {
+        let mut wb = XlsxWriter::new();
+        let mut sheet = wb.add_sheet("Test");
+        sheet.set_cell(0, 0, CellData::Number(10.0));
+        sheet.set_cell(1, 0, CellData::Number(20.0));
+        sheet.set_cell(2, 0, CellData::Formula("SUM(A1:A2)".into()));
+
+        let mut buf = std::io::Cursor::new(Vec::new());
+        wb.write_to(&mut buf).expect("write xlsx");
+        assert!(!buf.get_ref().is_empty());
+    }
+
+    /// A formula cell that went through the IR comes back as a formula
+    /// *and* keeps the value it showed. The IR writer used to keep only
+    /// the value (every formula became a constant) and, for a formula
+    /// with no cached value, nothing at all.
+    #[test]
+    fn test_formulas_survive_an_ir_round_trip_with_their_cached_values() {
+        let mut wb = XlsxWriter::new();
+        let mut sheet = wb.add_sheet("T");
+        sheet.set_cell(0, 0, CellData::Number(10.0));
+        sheet.set_cell(1, 0, CellData::Number(20.0));
+        sheet.set_cell(
+            2,
+            0,
+            CellData::FormulaWithValue {
+                formula: "SUM(A1:A2)".into(),
+                cached: Box::new(CellData::Number(30.0)),
+            },
+        );
+        sheet.set_cell(
+            3,
+            0,
+            CellData::FormulaWithValue {
+                formula: "A1&\"x\"".into(),
+                cached: Box::new(CellData::String("10x".into())),
+            },
+        );
+        sheet.set_cell(4, 0, CellData::Formula("NOW()".into()));
+        // A second column so the sheet converts as a table, not prose.
+        for r in 0..5 {
+            sheet.set_cell(r, 1, CellData::String(format!("row {r}")));
+        }
+        let mut buf = std::io::Cursor::new(Vec::new());
+        wb.write_to(&mut buf).expect("write xlsx");
+
+        let reread = |bytes: Vec<u8>| {
+            let doc = crate::Document::from_reader(
+                std::io::Cursor::new(bytes),
+                crate::DocumentFormat::Xlsx,
+            )
+            .expect("reopen");
+            let ir = doc.to_ir();
+            let table = ir.sections[0]
+                .elements
+                .iter()
+                .find_map(|e| match e {
+                    crate::ir::Element::Table(t) => Some(t.clone()),
+                    _ => None,
+                })
+                .expect("the sheet is a table");
+            let cells: Vec<(String, Option<String>)> = table
+                .rows
+                .iter()
+                .map(|r| {
+                    let c = &r.cells[0];
+                    let text: String = c
+                        .content
+                        .iter()
+                        .map(|e| match e {
+                            crate::ir::Element::Paragraph(p) => {
+                                crate::ir::inline_to_text(&p.content)
+                            },
+                            _ => String::new(),
+                        })
+                        .collect();
+                    (text, c.formula.clone())
+                })
+                .collect();
+            (ir, cells)
+        };
+        let (ir, cells) = reread(buf.into_inner());
+        assert_eq!(
+            cells,
+            vec![
+                ("10".into(), None),
+                ("20".into(), None),
+                ("30".into(), Some("SUM(A1:A2)".into())),
+                ("10x".into(), Some("A1&\"x\"".into())),
+                ("=NOW()".into(), Some("NOW()".into())),
+            ]
+        );
+
+        // Second cycle through the IR: still formulas, still valued.
+        let mut buf = std::io::Cursor::new(Vec::new());
+        crate::create::create_from_ir_to_writer(&ir, crate::DocumentFormat::Xlsx, &mut buf)
+            .expect("write from ir");
+        let (_, again) = reread(buf.into_inner());
+        assert_eq!(again, cells, "formulas or cached values lost on the IR write path");
+    }
+
+    #[test]
+    fn test_styled_cells() {
+        let mut wb = XlsxWriter::new();
+        let mut sheet = wb.add_sheet("Styled");
+        sheet.set_cell_styled(
+            0,
+            0,
+            CellData::String("Header".into()),
+            CellStyle::new()
+                .bold()
+                .background("4472C4")
+                .font_color("FFFFFF"),
+        );
+        sheet.set_cell_styled(
+            1,
+            0,
+            CellData::Formula("SUM(A3:A10)".into()),
+            CellStyle::new()
+                .bold()
+                .number_format(NumberFormat::Currency),
+        );
+        sheet.set_column_width(0, 20.0);
+
+        let mut buf = std::io::Cursor::new(Vec::new());
+        wb.write_to(&mut buf).expect("write xlsx");
+        assert!(!buf.get_ref().is_empty());
+    }
+
+    #[test]
+    fn test_all_number_formats() {
+        let mut wb = XlsxWriter::new();
+        let mut sheet = wb.add_sheet("Fmts");
+        let formats = [
+            NumberFormat::General,
+            NumberFormat::Integer,
+            NumberFormat::Decimal2,
+            NumberFormat::Currency,
+            NumberFormat::Percent,
+            NumberFormat::Percent2,
+            NumberFormat::Date,
+            NumberFormat::DateTime,
+        ];
+        for (i, fmt) in formats.iter().enumerate() {
+            sheet.set_cell_styled(
+                i,
+                0,
+                CellData::Number(42.0),
+                CellStyle::new().number_format(fmt.clone()),
+            );
+        }
+        let mut buf = std::io::Cursor::new(Vec::new());
+        wb.write_to(&mut buf).expect("write xlsx");
+        assert!(!buf.get_ref().is_empty());
+    }
+
+    #[test]
+    fn test_page_setup_round_trip() {
+        // Letter portrait, 0.5" margins. The on-wire format is mm in
+        // <pageSetup paperWidth/paperHeight> + inches in <pageMargins>;
+        // verify both elements appear and that the parser recovers
+        // values within rounding tolerance.
+        let mut wb = XlsxWriter::new();
+        let mut sheet = wb.add_sheet("Geom");
+        sheet.set_cell(0, 0, CellData::String("hi".into()));
+        sheet.set_page_setup(PageSetup {
+            width_twips: 12240,    // 8.5"
+            height_twips: 15840,   // 11"
+            margin_top_twips: 720, // 0.5"
+            margin_bottom_twips: 720,
+            margin_left_twips: 720,
+            margin_right_twips: 720,
+            header_distance_twips: 432, // 0.3"
+            footer_distance_twips: 432,
+            landscape: false,
+        });
+        let mut buf = std::io::Cursor::new(Vec::new());
+        wb.write_to(&mut buf).expect("write");
+
+        // Pull sheet1.xml out and check the attributes.
+        buf.set_position(0);
+        let mut zip = zip::ZipArchive::new(buf).expect("zip");
+        let mut xml = String::new();
+        {
+            let mut entry = zip.by_name("xl/worksheets/sheet1.xml").expect("sheet");
+            std::io::Read::read_to_string(&mut entry, &mut xml).expect("read");
+        }
+        assert!(xml.contains("<pageMargins"), "missing pageMargins: {xml}");
+        assert!(xml.contains("<pageSetup"), "missing pageSetup: {xml}");
+        assert!(xml.contains(r#"orientation="portrait""#));
+        // 8.5" = 215.90mm, 11" = 279.40mm
+        assert!(xml.contains(r#"paperWidth="215.90mm""#), "width attr: {xml}");
+        assert!(xml.contains(r#"paperHeight="279.40mm""#), "height attr: {xml}");
+        assert!(xml.contains(r#"left="0.5000""#));
+    }
+
+    #[test]
+    fn test_merge_cells_xml() {
+        let mut wb = XlsxWriter::new();
+        let mut sheet = wb.add_sheet("MergeTest");
+        sheet.set_cell(0, 0, CellData::String("Merged".into()));
+        sheet.merge_cells(0, 0, 1, 2);
+
+        let mut buf = std::io::Cursor::new(Vec::new());
+        wb.write_to(&mut buf).expect("write xlsx");
+
+        // Extract sheet1.xml from the zip and verify mergeCells element
+        buf.set_position(0);
+        let mut zip = zip::ZipArchive::new(buf).expect("open zip");
+        let mut sheet_xml = String::new();
+        {
+            let mut entry = zip.by_name("xl/worksheets/sheet1.xml").expect("find sheet");
+            std::io::Read::read_to_string(&mut entry, &mut sheet_xml).expect("read");
+        }
+        assert!(sheet_xml.contains("<mergeCells"), "missing mergeCells");
+        assert!(sheet_xml.contains(r#"ref="A1:B1""#), "wrong ref");
+    }
+
+    /// xlsx::write had no hyperlink concept at all; a cell's
+    /// URL was silently dropped, unconditionally, on every write. Checks
+    /// both the raw XML shape (worksheet `<hyperlinks>` + its own
+    /// `_rels` external relationship) and that the crate's own reader
+    /// resolves it back to a URL.
+    #[test]
+    fn test_cell_hyperlink_round_trips() {
+        let mut wb = XlsxWriter::new();
+        let mut sheet = wb.add_sheet("Links");
+        sheet.set_cell(0, 0, CellData::String("Contact".into()));
+        sheet.set_cell_hyperlink(0, 0, "mailto:someone@example.com");
+
+        let mut buf = std::io::Cursor::new(Vec::new());
+        wb.write_to(&mut buf).expect("write xlsx");
+
+        buf.set_position(0);
+        let mut zip = zip::ZipArchive::new(buf.clone()).expect("open zip");
+        let mut sheet_xml = String::new();
+        {
+            let mut entry = zip.by_name("xl/worksheets/sheet1.xml").expect("find sheet");
+            std::io::Read::read_to_string(&mut entry, &mut sheet_xml).expect("read");
+        }
+        assert!(sheet_xml.contains("<hyperlinks>"), "missing hyperlinks element: {sheet_xml}");
+        assert!(sheet_xml.contains(r#"ref="A1""#), "wrong cell ref: {sheet_xml}");
+
+        let mut rels_xml = String::new();
+        {
+            let mut entry = zip
+                .by_name("xl/worksheets/_rels/sheet1.xml.rels")
+                .expect("find sheet rels");
+            std::io::Read::read_to_string(&mut entry, &mut rels_xml).expect("read");
+        }
+        assert!(
+            rels_xml.contains("mailto:someone@example.com"),
+            "missing hyperlink target in rels: {rels_xml}"
+        );
+        assert!(
+            rels_xml.contains(r#"TargetMode="External""#),
+            "hyperlink relationship must be External: {rels_xml}"
+        );
+
+        buf.set_position(0);
+        let doc = crate::Document::from_reader(buf, crate::DocumentFormat::Xlsx).expect("reparse");
+        let ir = doc.to_ir();
+        let mut found = false;
+        for e in &ir.sections[0].elements {
+            let crate::ir::Element::Table(t) = e else {
+                continue;
+            };
+            for row in &t.rows {
+                for cell in &row.cells {
+                    for ce in &cell.content {
+                        let crate::ir::Element::Paragraph(p) = ce else {
+                            continue;
+                        };
+                        for ic in &p.content {
+                            let crate::ir::InlineContent::Text(ts) = ic else {
+                                continue;
+                            };
+                            if ts.hyperlink.as_deref() == Some("mailto:someone@example.com") {
+                                found = true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(found, "hyperlink did not round-trip through the reader: {:?}", ir.sections[0]);
+    }
+}
+
+#[cfg(test)]
+mod validity_tests {
+    use super::*;
+    use std::io::Cursor;
+
+    fn part(wb: &XlsxWriter, name: &str) -> String {
+        let mut buf = Cursor::new(Vec::new());
+        wb.write_to(&mut buf).unwrap();
+        buf.set_position(0);
+        let mut zip = zip::ZipArchive::new(buf).unwrap();
+        let mut e = zip.by_name(name).unwrap();
+        let mut xml = String::new();
+        std::io::Read::read_to_string(&mut e, &mut xml).unwrap();
+        xml
+    }
+
+    /// `sanitize_xml_text` guarded element text but never an attribute, so a
+    /// control character in a sheet name made `workbook.xml` unparseable.
+    #[test]
+    fn test_control_characters_in_a_sheet_name_do_not_break_the_workbook_part() {
+        let mut wb = XlsxWriter::new();
+        wb.add_sheet("ctl\u{1}chr")
+            .add_row(vec![CellData::Number(1.0)]);
+        let xml = part(&wb, "xl/workbook.xml");
+        assert!(!xml.contains('\u{1}'), "control char reached workbook.xml");
+        assert!(xml.contains("ctlchr"), "the rest of the name must survive: {xml}");
+    }
+
+    /// `ST_UnsignedIntHex` is exactly four hex bytes.
+    #[test]
+    fn test_colours_that_are_not_six_hex_digits_are_not_written() {
+        let mut wb = XlsxWriter::new();
+        {
+            let mut s = wb.add_sheet("S");
+            s.set_cell_styled(0, 0, CellData::Number(1.0), CellStyle::new().font_color("#FF0000"));
+            s.set_cell_styled(1, 0, CellData::Number(2.0), CellStyle::new().font_color("red"));
+            s.set_cell_styled(2, 0, CellData::Number(3.0), CellStyle::new().background("F00"));
+        }
+        let xml = part(&wb, "xl/styles.xml");
+        assert!(xml.contains(r#"rgb="FFFF0000""#), "a leading # must be accepted: {xml}");
+        assert!(!xml.contains("FFred"), "non-hex colour written: {xml}");
+        assert!(!xml.contains("FFF00\""), "odd-length hex written: {xml}");
+    }
+
+    /// `CT_Col/@width` is an `xsd:double`; `inf` has no lexical form there,
+    /// and Excel caps width at 255.
+    #[test]
+    fn test_non_finite_or_out_of_range_column_widths_are_dropped() {
+        let mut wb = XlsxWriter::new();
+        {
+            let mut s = wb.add_sheet("S");
+            s.add_row(vec![CellData::Number(1.0)]);
+            s.set_column_width(0, f64::INFINITY);
+            s.set_column_width(1, f64::NAN);
+            s.set_column_width(2, -5.0);
+            s.set_column_width(3, 1e30);
+            s.set_column_width(4, 20.0);
+        }
+        let xml = part(&wb, "xl/worksheets/sheet1.xml");
+        for bad in ["inf", "NaN", "-5.00", "e30"] {
+            assert!(!xml.contains(bad), "wrote {bad} as a column width: {xml}");
+        }
+        assert!(xml.contains("20.00"), "a valid width must survive: {xml}");
+    }
+
+    /// `CT_Sheets` requires at least one `sheet`.
+    #[test]
+    fn test_a_workbook_with_no_sheets_still_writes_one() {
+        let wb = XlsxWriter::new();
+        let xml = part(&wb, "xl/workbook.xml");
+        assert!(xml.contains("<sheet "), "workbook must carry a sheet: {xml}");
+        assert!(!xml.contains("<sheets></sheets>"), "empty <sheets> is invalid");
+    }
+
+    /// `col + col_span` with a caller-supplied `usize` overflowed.
+    #[test]
+    fn test_merge_spans_are_clamped_to_the_grid_and_never_overflow() {
+        let mut wb = XlsxWriter::new();
+        {
+            let mut s = wb.add_sheet("S");
+            s.add_row(vec![CellData::Number(1.0)]);
+            s.merge_cells(1, 0, usize::MAX, 2);
+            s.merge_cells(0, 0, 1, usize::MAX);
+            s.merge_cells(0, 20_000, 2, 2);
+        }
+        // Writing must not panic, and no reference may exceed the grid.
+        let xml = part(&wb, "xl/worksheets/sheet1.xml");
+        assert!(!xml.contains("ACOG"), "merge outside the grid written: {xml}");
+    }
+
+    /// `add_row` must gate on the grid the way `set_cell` does.
+    #[test]
+    fn test_add_row_does_not_write_cells_past_the_last_column() {
+        let mut wb = XlsxWriter::new();
+        {
+            let mut s = wb.add_sheet("S");
+            s.add_row(
+                (0..(MAX_COLS + 2))
+                    .map(|i| CellData::Number(i as f64))
+                    .collect(),
+            );
+        }
+        let xml = part(&wb, "xl/worksheets/sheet1.xml");
+        assert!(xml.contains(r#"r="XFD1""#), "the last real column must be written");
+        assert!(!xml.contains(r#"r="XFE1""#), "column past XFD written: {xml}");
+    }
+
+    /// [ECMA-376] §18.3.1.40: `<f>` content excludes the leading `=`.
+    #[test]
+    fn test_a_formula_keeps_no_leading_equals_sign() {
+        let mut wb = XlsxWriter::new();
+        wb.add_sheet("S")
+            .add_row(vec![CellData::Formula("=SUM(A1:A2)".into())]);
+        let xml = part(&wb, "xl/worksheets/sheet1.xml");
+        assert!(xml.contains("<f>SUM(A1:A2)</f>"), "leading = not stripped: {xml}");
+    }
+
+    /// Formatting a blank cell must actually write the style.
+    #[test]
+    fn test_a_styled_empty_cell_is_written_with_its_style() {
+        let mut wb = XlsxWriter::new();
+        {
+            let mut s = wb.add_sheet("S");
+            s.add_row(vec![CellData::Number(1.0)]);
+            s.set_cell_styled(1, 0, CellData::Empty, CellStyle::new().bold());
+        }
+        let xml = part(&wb, "xl/worksheets/sheet1.xml");
+        assert!(xml.contains(r#"<c r="A2" s="#), "styled empty cell dropped: {xml}");
+    }
+
+    /// Half-point sizes are real; integer division threw them away.
+    #[test]
+    fn test_half_point_font_sizes_survive_and_out_of_range_ones_clamp() {
+        let mut wb = XlsxWriter::new();
+        {
+            let mut s = wb.add_sheet("S");
+            s.set_cell_styled(0, 0, CellData::Number(1.0), CellStyle::new().font_size(10.5));
+            s.set_cell_styled(1, 0, CellData::Number(2.0), CellStyle::new().font_size(-12.0));
+            s.set_cell_styled(2, 0, CellData::Number(3.0), CellStyle::new().font_size(1e9));
+        }
+        let xml = part(&wb, "xl/styles.xml");
+        assert!(xml.contains(r#"val="10.5""#), "half-point size truncated: {xml}");
+        assert!(!xml.contains(r#"val="0""#), "font size 0 is below Excel's minimum: {xml}");
+        assert!(!xml.contains("1000000000"), "font size not clamped: {xml}");
+    }
+
+    /// The same input must produce the same bytes.
+    #[test]
+    fn test_styles_are_written_deterministically() {
+        let build = || {
+            let mut wb = XlsxWriter::new();
+            {
+                let mut s = wb.add_sheet("S");
+                for i in 0..8 {
+                    s.set_cell_styled(
+                        i,
+                        0,
+                        CellData::Number(i as f64),
+                        CellStyle::new()
+                            .bold()
+                            .background("FFFF00")
+                            .font_size(9.0 + i as f32),
+                    );
+                }
+            }
+            let mut buf = Cursor::new(Vec::new());
+            wb.write_to(&mut buf).unwrap();
+            buf.set_position(0);
+            let mut zip = zip::ZipArchive::new(buf).unwrap();
+            let mut e = zip.by_name("xl/styles.xml").unwrap();
+            let mut xml = String::new();
+            std::io::Read::read_to_string(&mut e, &mut xml).unwrap();
+            xml
+        };
+        let first = build();
+        for _ in 0..25 {
+            assert_eq!(first, build(), "styles.xml is not deterministic");
+        }
+    }
+
+    /// The algorithm `SheetNames::claim` replaced, kept as the reference its
+    /// output must equal: it copied every name per sheet and probed each
+    /// suffix against all of them.
+    fn reference_sheet_name(name: &str, existing: &[String]) -> String {
+        let cleaned: String = name
+            .chars()
+            .map(|c| {
+                if matches!(c, '[' | ']' | ':' | '*' | '?' | '/' | '\\') {
+                    '_'
+                } else {
+                    c
+                }
+            })
+            .collect();
+        let cleaned = cleaned.trim_matches('\'').to_string();
+        let mut base: String = cleaned.chars().take(31).collect();
+        base = base.trim_matches('\'').to_string();
+        if base.trim().is_empty() || base.eq_ignore_ascii_case("History") {
+            base = format!("Sheet{}", existing.len() + 1);
+        }
+        if !existing.iter().any(|e| e.eq_ignore_ascii_case(&base)) {
+            return base;
+        }
+        for n in 2..1000 {
+            let suffix = format!(" ({n})");
+            let keep = 31usize.saturating_sub(suffix.len());
+            let candidate = format!("{}{}", base.chars().take(keep).collect::<String>(), suffix);
+            if !existing.iter().any(|e| e.eq_ignore_ascii_case(&candidate)) {
+                return candidate;
+            }
+        }
+        base
+    }
+
+    /// Names drawn from a pool of clashing shapes (case, forbidden
+    /// characters, apostrophes, over-long, reserved, already suffixed) get
+    /// the same result as the reference, in the same order.
+    #[test]
+    fn test_sheet_names_equal_the_reference_for_clashing_inputs() {
+        let long = "L".repeat(40);
+        let pool = [
+            "",
+            " ",
+            "a",
+            "A",
+            "a (2)",
+            "A (3)",
+            "a (2) (2)",
+            "History",
+            "history",
+            "x/y",
+            "x_y",
+            "x:y",
+            "'q'",
+            "'",
+            "It's",
+            &long,
+            &long[..31],
+            &long[..28],
+            "Sheet1",
+            "Sheet2",
+            "sheet3",
+            "[a]",
+            "ä",
+            "Ä",
+            "日本",
+        ];
+        let mut state = 0x2545_f491_u32;
+        for _ in 0..300 {
+            let mut writer = XlsxWriter::new();
+            let mut existing: Vec<String> = Vec::new();
+            let count = 1 + (state as usize % 40);
+            for _ in 0..count {
+                state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                let name = pool[(state >> 8) as usize % pool.len()];
+                let want = reference_sheet_name(name, &existing);
+                let idx = writer.add_sheet_get_index(name);
+                assert_eq!(writer.sheets[idx].name, want, "name {name:?} after {existing:?}");
+                existing.push(want);
+            }
+        }
+        // Past 998 repeats the reference gave up and repeated the base name;
+        // the new names stay unique.
+        let mut writer = XlsxWriter::new();
+        for _ in 0..1100 {
+            writer.add_sheet("dup");
+        }
+        let mut seen = std::collections::HashSet::new();
+        for s in &writer.sheets {
+            assert!(seen.insert(s.name.to_ascii_lowercase()), "repeated {}", s.name);
+            assert!(s.name.chars().count() <= 31);
+        }
+    }
+
+    /// Names that differ only after the cut `" (n)"` leaves room for share
+    /// their candidates, so probing must share progress across them.
+    #[test]
+    fn test_sheet_names_sharing_a_cut_prefix_do_not_reprobe_each_other() {
+        let mut writer = XlsxWriter::new();
+        // 31-character names differing only in their last four characters:
+        // each one clashes once, and all cut to the same 27-character prefix
+        // for their suffixed candidates.
+        for i in 0..5_000 {
+            let name = format!("{}{i:04}", "p".repeat(27));
+            writer.add_sheet(&name);
+            writer.add_sheet(&name);
+        }
+        let mut seen = std::collections::HashSet::new();
+        for s in &writer.sheets {
+            assert!(seen.insert(s.name.to_ascii_lowercase()), "repeated {}", s.name);
+            assert!(s.name.chars().count() <= 31, "{}", s.name);
+        }
+        assert!(
+            writer.names.probes <= 2 * 5_000,
+            "{} suffix probes for 5,000 clashes",
+            writer.names.probes
+        );
+    }
+
+    /// Adding thousands of sheets costs time in the sheet count only once:
+    /// every name used to be copied and probed again for each new sheet.
+    #[test]
+    fn test_adding_many_sheets_with_clashing_names_is_not_quadratic() {
+        let start = std::time::Instant::now();
+        let mut writer = XlsxWriter::new();
+        for i in 0..6_000 {
+            writer.add_sheet(if i % 2 == 0 { "same" } else { "" });
+        }
+        assert_eq!(writer.sheets.len(), 6_000);
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(3),
+            "6,000 sheets took {:?}",
+            start.elapsed()
+        );
+    }
+
+    /// Truncating a name at 31 characters can put an apostrophe back on the end.
+    #[test]
+    fn test_sheet_name_truncation_does_not_reintroduce_a_trailing_apostrophe() {
+        let name = format!("{}'{}", "a".repeat(30), "z".repeat(9));
+        let cleaned = SheetNames::default().claim(&name);
+        assert!(!cleaned.ends_with('\''), "trailing apostrophe survived: {cleaned}");
+        assert!(cleaned.chars().count() <= 31);
+
+        // "History" is reserved by Excel.
+        let cleaned = SheetNames::default().claim("History");
+        assert_ne!(cleaned, "History", "Excel reserves this name");
+    }
+
+    /// Text with leading/trailing whitespace is written with
+    /// `xml:space="preserve"` (XML 1.0 §2.10), as Excel and openpyxl
+    /// write it; without it a normalising consumer may strip the spaces.
+    #[test]
+    fn test_padded_cell_text_is_written_with_xml_space_preserve() {
+        let mut wb = XlsxWriter::new();
+        {
+            let mut sheet = wb.add_sheet("S");
+            sheet.set_cell(0, 0, CellData::String("  padded ".into()));
+            sheet.set_cell(0, 1, CellData::String("tight".into()));
+            sheet.set_cell(
+                0,
+                2,
+                CellData::RichString(vec![RichRun {
+                    text: " run".into(),
+                    ..Default::default()
+                }]),
+            );
+        }
+        let xml = part(&wb, "xl/worksheets/sheet1.xml");
+        assert!(xml.contains(r#"<t xml:space="preserve">  padded </t>"#), "{xml}");
+        assert!(xml.contains("<t>tight</t>"), "{xml}");
+        assert!(xml.contains(r#"<t xml:space="preserve"> run</t>"#), "{xml}");
+    }
+}

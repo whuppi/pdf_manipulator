@@ -1,0 +1,17 @@
+pub fn run(file: &str, embed_images: bool) -> Result<(), Box<dyn std::error::Error>> {
+    let doc = super::open(file)?;
+    if embed_images {
+        use office_oxide::ir_render::{ImageEmbed, MarkdownOptions};
+        super::emit_with(|out| {
+            doc.write_markdown_with(
+                MarkdownOptions {
+                    image_embed: ImageEmbed::Base64,
+                },
+                out,
+            )
+        })?;
+    } else {
+        super::emit_with(|out| doc.write_markdown(out))?;
+    }
+    Ok(())
+}

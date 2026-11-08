@@ -1,0 +1,2382 @@
+use crate::format::DocumentFormat;
+
+fn default_true() -> bool {
+    true
+}
+
+// ── Enums ────────────────────────────────────────────────────────────────────
+
+/// Underline style for a text span.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UnderlineStyle {
+    /// Single underline.
+    Single,
+    /// Double underline.
+    Double,
+    /// Thick underline.
+    Thick,
+    /// Dotted underline.
+    Dotted,
+    /// Dashed underline.
+    Dash,
+    /// Dot-dash underline.
+    DotDash,
+    /// Dot-dot-dash underline.
+    DotDotDash,
+    /// Wavy underline.
+    Wave,
+    /// Underline applied only to words (not spaces).
+    Words,
+    /// No underline.
+    None,
+}
+
+/// Paragraph text alignment.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ParagraphAlignment {
+    /// Left-aligned.
+    Left,
+    /// Centered.
+    Center,
+    /// Right-aligned.
+    Right,
+    /// Justified (both edges).
+    Justify,
+    /// Distributed (space between characters).
+    Distribute,
+}
+
+/// Line spacing rule for a paragraph.
+/// `Auto(240)` = single, `Auto(360)` = 1.5×, `Auto(480)` = double.
+/// `Multiple` uses the same OOXML rule as `Auto`.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LineSpacing {
+    /// Automatic line height scaled by the given value (in twentieths of a point).
+    Auto(u32),
+    /// Multiple of normal line height (same units as `Auto`).
+    Multiple(u32),
+    /// Exact line height in twentieths of a point.
+    Exact(u32),
+    /// At-least line height in twentieths of a point.
+    AtLeast(u32),
+}
+
+/// Border style.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BorderStyle {
+    /// No border.
+    None,
+    /// Single-line border.
+    Single,
+    /// Thick single-line border.
+    Thick,
+    /// Double-line border.
+    Double,
+    /// Dotted border.
+    Dotted,
+    /// Dashed border.
+    Dashed,
+    /// Wavy border.
+    Wave,
+    /// Dashed border with small gaps.
+    DashSmallGap,
+    /// Outset (3-D) border.
+    Outset,
+    /// Inset (3-D) border.
+    Inset,
+}
+
+/// Vertical alignment within a table cell.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CellVerticalAlign {
+    /// Align content to the top of the cell.
+    Top,
+    /// Align content to the middle of the cell.
+    Center,
+    /// Align content to the bottom of the cell.
+    Bottom,
+}
+
+/// Horizontal alignment of a table on the page.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TableAlignment {
+    /// Table aligned to the left margin.
+    Left,
+    /// Table centered on the page.
+    Center,
+    /// Table aligned to the right margin.
+    Right,
+}
+
+/// Text direction within a cell or frame.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TextDirection {
+    /// Left-to-right, top-to-bottom (default).
+    LrTb,
+    /// Top-to-bottom, right-to-left (vertical CJK).
+    TbRl,
+    /// Bottom-to-top, left-to-right (rotated).
+    BtLr,
+}
+
+/// Raster / vector image format.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ImageFormat {
+    /// PNG raster image.
+    Png,
+    /// JPEG raster image.
+    Jpeg,
+    /// GIF raster image.
+    Gif,
+    /// TIFF raster image.
+    Tiff,
+    /// BMP raster image.
+    Bmp,
+    /// Enhanced Metafile vector image.
+    Emf,
+    /// Windows Metafile vector image.
+    Wmf,
+}
+
+impl ImageFormat {
+    /// Returns the MIME content-type string for this image format.
+    pub fn content_type(&self) -> &'static str {
+        match self {
+            Self::Png => "image/png",
+            Self::Jpeg => "image/jpeg",
+            Self::Gif => "image/gif",
+            Self::Tiff => "image/tiff",
+            Self::Bmp => "image/bmp",
+            Self::Emf => "image/x-emf",
+            Self::Wmf => "image/x-wmf",
+        }
+    }
+
+    /// Returns the file extension (without leading dot) for this image format.
+    pub fn extension(&self) -> &'static str {
+        match self {
+            Self::Png => "png",
+            Self::Jpeg => "jpg",
+            Self::Gif => "gif",
+            Self::Tiff => "tiff",
+            Self::Bmp => "bmp",
+            Self::Emf => "emf",
+            Self::Wmf => "wmf",
+        }
+    }
+}
+
+/// How an image is positioned relative to surrounding text.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ImagePositioning {
+    /// Image flows inline with surrounding text.
+    #[default]
+    Inline,
+    /// Image is anchored at a fixed position with text wrap.
+    Floating(FloatingImage),
+}
+
+/// Section break type.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SectionBreakType {
+    /// Continuous section break (no page break).
+    #[default]
+    Continuous,
+    /// Section starts on the next page.
+    NextPage,
+    /// Section starts on the next even-numbered page.
+    EvenPage,
+    /// Section starts on the next odd-numbered page.
+    OddPage,
+}
+
+/// Vertical text alignment (superscript / subscript).
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VerticalAlign {
+    /// Text raised above the baseline (superscript).
+    Superscript,
+    /// Text lowered below the baseline (subscript).
+    Subscript,
+    /// Normal baseline position.
+    Baseline,
+}
+
+/// Anchor reference for a floating object.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FloatAnchor {
+    /// Anchored relative to the page.
+    #[default]
+    Page,
+    /// Anchored relative to the page margin.
+    Margin,
+    /// Anchored relative to the column.
+    Column,
+    /// Anchored relative to the paragraph.
+    Paragraph,
+}
+
+/// Text wrap mode around a floating object.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TextWrap {
+    /// Text wraps around a rectangular bounding box.
+    #[default]
+    Square,
+    /// Text wraps tightly around the object contour.
+    Tight,
+    /// Text wraps through the object's contour.
+    Through,
+    /// Text appears only above and below the object.
+    TopAndBottom,
+    /// Object appears behind the text layer.
+    Behind,
+    /// Object appears in front of the text layer.
+    InFront,
+}
+
+/// List marker style.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ListStyle {
+    /// Filled circle bullet marker.
+    Bullet,
+    /// Decimal number marker (1, 2, 3, …).
+    Decimal,
+    /// Lowercase Roman numeral marker (i, ii, iii, …).
+    LowerRoman,
+    /// Uppercase Roman numeral marker (I, II, III, …).
+    UpperRoman,
+    /// Lowercase alphabetic marker (a, b, c, …).
+    LowerAlpha,
+    /// Uppercase alphabetic marker (A, B, C, …).
+    UpperAlpha,
+    /// Dash marker.
+    Dash,
+    /// Square bullet marker.
+    Square,
+    /// Open circle bullet marker.
+    Circle,
+}
+
+// ── New structs ───────────────────────────────────────────────────────────────
+
+/// A single border line definition.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct BorderLine {
+    /// Border line style.
+    pub style: BorderStyle,
+    /// Border colour (RGB), if specified.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<[u8; 3]>,
+    /// Line width in eighths of a point.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<u32>,
+    /// Spacing between border and content in points.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub space: Option<u32>,
+}
+
+/// Full border set for a table (all six edges).
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct TableBorder {
+    /// Top border of the table.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top: Option<BorderLine>,
+    /// Bottom border of the table.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bottom: Option<BorderLine>,
+    /// Left border of the table.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub left: Option<BorderLine>,
+    /// Right border of the table.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub right: Option<BorderLine>,
+    /// Horizontal interior borders between rows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inside_h: Option<BorderLine>,
+    /// Vertical interior borders between columns.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inside_v: Option<BorderLine>,
+}
+
+/// Page geometry and margins (all values in twips).
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct PageSetup {
+    /// Page width in twips.
+    pub width_twips: u32,
+    /// Page height in twips.
+    pub height_twips: u32,
+    /// Top margin in twips.
+    pub margin_top_twips: u32,
+    /// Bottom margin in twips.
+    pub margin_bottom_twips: u32,
+    /// Left margin in twips.
+    pub margin_left_twips: u32,
+    /// Right margin in twips.
+    pub margin_right_twips: u32,
+    /// Whether the page is in landscape orientation.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub landscape: bool,
+    /// Distance from top edge to header in twips (default 720 = 0.5").
+    pub header_distance_twips: u32,
+    /// Distance from bottom edge to footer in twips (default 720 = 0.5").
+    pub footer_distance_twips: u32,
+    /// Extra binding margin in twips (DOCX `w:pgMar/@w:gutter`), added to
+    /// the inside edge for binding. `0` when there is none.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub gutter_twips: u32,
+    /// The number of the section's first page, when it restarts numbering
+    /// (DOCX `w:pgNumType/@w:start`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page_number_start: Option<u32>,
+    /// The page-number format (DOCX `w:pgNumType/@w:fmt`: `decimal`,
+    /// `lowerRoman`, `upperLetter`, ...), when not decimal by default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page_number_format: Option<String>,
+}
+
+fn is_zero_u32(v: &u32) -> bool {
+    *v == 0
+}
+
+impl Default for PageSetup {
+    fn default() -> Self {
+        Self {
+            width_twips: 12240,
+            height_twips: 15840,
+            margin_top_twips: 1440,
+            margin_bottom_twips: 1440,
+            margin_left_twips: 1800,
+            margin_right_twips: 1800,
+            landscape: false,
+            header_distance_twips: 720,
+            footer_distance_twips: 720,
+            gutter_twips: 0,
+            page_number_start: None,
+            page_number_format: None,
+        }
+    }
+}
+
+/// Multi-column layout for a section.
+#[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]
+pub struct ColumnLayout {
+    /// Number of columns.
+    pub count: u32,
+    /// Space between columns in twips.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub space_twips: Option<u32>,
+    /// Whether a vertical separator line is drawn between columns.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub separator: bool,
+    /// Per-column widths in twips (overrides uniform spacing when non-empty).
+    #[serde(default)]
+    pub column_widths_twips: Vec<u32>,
+}
+
+/// Paragraph border (four sides plus between-paragraph rule).
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ParagraphBorder {
+    /// Top border of the paragraph.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top: Option<BorderLine>,
+    /// Bottom border of the paragraph.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bottom: Option<BorderLine>,
+    /// Left border of the paragraph.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub left: Option<BorderLine>,
+    /// Right border of the paragraph.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub right: Option<BorderLine>,
+    /// Border drawn between consecutive bordered paragraphs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub between: Option<BorderLine>,
+}
+
+/// Per-edge cell padding (all values in twips).
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct CellPadding {
+    /// Top cell padding in twips.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top_twips: Option<u32>,
+    /// Bottom cell padding in twips.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bottom_twips: Option<u32>,
+    /// Left cell padding in twips.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub left_twips: Option<u32>,
+    /// Right cell padding in twips.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub right_twips: Option<u32>,
+}
+
+/// Positioning data for a floating (non-inline) image.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct FloatingImage {
+    /// Horizontal offset from the anchor in EMUs.
+    pub x_emu: i64,
+    /// Vertical offset from the anchor in EMUs.
+    pub y_emu: i64,
+    /// Display width in EMUs.
+    pub width_emu: u64,
+    /// Display height in EMUs.
+    pub height_emu: u64,
+    /// Horizontal anchor reference frame.
+    pub h_anchor: FloatAnchor,
+    /// Vertical anchor reference frame.
+    pub v_anchor: FloatAnchor,
+    /// Text wrap mode around the image.
+    pub text_wrap: TextWrap,
+    /// Whether the image may overlap other floating objects.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub allow_overlap: bool,
+}
+
+/// A header or footer containing block elements.
+#[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]
+pub struct HeaderFooter {
+    /// Block elements that make up the header or footer.
+    pub content: Vec<Element>,
+}
+
+/// A floating text box containing block elements.
+#[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]
+pub struct TextBox {
+    /// Block elements inside the text box.
+    pub content: Vec<Element>,
+    /// Width of the text box in EMUs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width_emu: Option<u64>,
+    /// Height of the text box in EMUs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height_emu: Option<u64>,
+    /// Horizontal position in EMUs from the anchor.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub x_emu: Option<i64>,
+    /// Vertical position in EMUs from the anchor.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub y_emu: Option<i64>,
+    /// Horizontal anchor reference frame.
+    #[serde(default)]
+    pub h_anchor: FloatAnchor,
+    /// Vertical anchor reference frame.
+    #[serde(default)]
+    pub v_anchor: FloatAnchor,
+    /// Text wrap mode around this box.
+    #[serde(default)]
+    pub wrap: TextWrap,
+}
+
+/// A footnote or endnote body.
+#[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]
+pub struct Note {
+    /// Numeric identifier matching the inline reference mark.
+    pub id: u32,
+    /// Block elements comprising the note body.
+    pub content: Vec<Element>,
+    /// Optional custom marker text (when absent the auto-number is used).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub marker: Option<String>,
+    /// Comment author, when the source format records one. Distinct from
+    /// `marker` — some converters also fold the author into `marker` for
+    /// backward-compatible display text, but this field is the structured
+    /// value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author: Option<String>,
+}
+
+/// An inline reference mark pointing to a footnote or endnote.
+#[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]
+pub struct FootnoteRef {
+    /// Numeric identifier of the referenced note.
+    pub note_id: u32,
+    /// Optional custom marker text (when absent the auto-number is used).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub marker: Option<String>,
+}
+
+/// A preformatted code block with an optional language tag.
+#[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]
+pub struct CodeBlock {
+    /// Optional language identifier for syntax highlighting.
+    ///
+    /// **Not preserved through DOCX.** WordprocessingML has no native slot
+    /// for a code block's language — only the `Code` paragraph style
+    /// survives a round trip. Carrying it would mean inventing a
+    /// non-standard convention (custom XML wrapper, style-name suffix,
+    /// `w:tag`), which was judged not worth the compatibility risk for a
+    /// syntax-highlighting hint. HTML and Markdown *do* preserve it (via
+    /// `<pre><code class="language-…">` and the fence's language token,
+    /// respectively) — this limitation is DOCX-specific.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
+    /// The preformatted code text.
+    pub content: String,
+}
+
+// ── Core document types ───────────────────────────────────────────────────────
+
+/// A format-agnostic intermediate representation of a document.
+#[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]
+pub struct DocumentIR {
+    /// Document-level metadata (format, title, etc.).
+    pub metadata: Metadata,
+    /// Ordered list of sections (pages, worksheets, slides, etc.).
+    pub sections: Vec<Section>,
+}
+
+/// A defined name (named range, print area, …) from a spreadsheet
+/// workbook's Name Manager.
+#[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]
+pub struct DefinedName {
+    /// Name string.
+    pub name: String,
+    /// Formula or reference value (e.g. `Sheet1!$A$1:$B$10`).
+    pub value: String,
+    /// If set, this name is scoped to a specific sheet (0-based index)
+    /// rather than the whole workbook.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local_sheet_id: Option<u32>,
+    /// Whether this name is hidden in the Name Manager UI.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hidden: bool,
+}
+
+/// Document-level metadata extracted from the source file.
+#[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]
+pub struct Metadata {
+    /// The source format this document was parsed from.
+    pub format: DocumentFormat,
+    /// Optional document title from core properties.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// Document author.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author: Option<String>,
+    /// Document subject.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subject: Option<String>,
+    /// Keywords / tags.
+    #[serde(default)]
+    pub keywords: Vec<String>,
+    /// Creation date (ISO-8601 string).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created: Option<String>,
+    /// Last-modified date (ISO-8601 string).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub modified: Option<String>,
+    /// Document description / comments.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// `true` when the source document carries a macro/VBA project — an
+    /// OOXML part reached via a `vbaProject` relationship, or a
+    /// legacy file's VBA project (a `.doc`'s `Macros/VBA` storage, a
+    /// `.ppt`'s `VBAInfoAtom`, an `.xls`'s project storage). A cheap presence-only
+    /// signal for content-safety use cases; office_oxide never
+    /// interprets or executes the macro content itself.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub has_macros: bool,
+    /// Defined names (named ranges, print areas) — populated for XLSX/XLS
+    /// only. Lives on `Metadata` rather than `DocumentIR` so that
+    /// `DocumentIR` stays exactly `{ metadata, sections }`: downstream
+    /// crates build it with a full literal, and a new public field there
+    /// is a compile error for them on a patch release.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub defined_names: Vec<DefinedName>,
+    /// `true` when parsing hit a known, detectable cause of missing
+    /// content this crate could not safely recover, and no other signal
+    /// would tell a caller that anything is wrong: DOC (the piece table
+    /// has a gap before the FIB's declared text length) and
+    /// XLS (the record-parsing safety cap cut the Workbook stream short,
+    /// dropping trailing sheets or the whole workbook).
+    /// `false` (the default) means either the format has no such
+    /// self-check, or the check passed.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub text_truncated: bool,
+    /// The user who last saved the document (`cp:lastModifiedBy`; the
+    /// legacy SummaryInformation `PIDSI_LASTAUTHOR`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_modified_by: Option<String>,
+    /// The revision number (`cp:revision`; legacy `PIDSI_REVNUMBER`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revision: Option<String>,
+    /// The document category (`cp:category`; legacy
+    /// DocumentSummaryInformation `PIDDSI_CATEGORY`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category: Option<String>,
+    /// The content status, e.g. "Draft" or "Final" (`cp:contentStatus`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_status: Option<String>,
+    /// The document's language (`dc:language`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
+    /// The company (`docProps/app.xml` `<Company>`; legacy
+    /// DocumentSummaryInformation `PIDDSI_COMPANY`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub company: Option<String>,
+    /// The author's manager (`<Manager>`; legacy `PIDDSI_MANAGER`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manager: Option<String>,
+    /// User-defined document properties (`docProps/custom.xml`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub custom_properties: Vec<CustomProperty>,
+    /// `true` when the source package carries a digital signature — an
+    /// OOXML digital-signature origin part, or a legacy compound file's
+    /// `_signatures` / `_xmlsignatures` storage. Presence only: the
+    /// signature is not validated, and a converted or re-written document
+    /// no longer carries it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub has_digital_signature: bool,
+    /// The package thumbnail (the image the file browser shows), when the
+    /// source carries one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thumbnail: Option<Image>,
+    /// Structural problems the reader worked around rather than failing
+    /// on, one human-readable line each — e.g. a legacy container whose
+    /// header counts disagree with its chains, or a structure the IR could
+    /// only represent approximately. Reported here instead of being written
+    /// into the document's text. Empty when there were none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
+}
+
+impl Metadata {
+    /// The document properties that are set, as `(label, value)` pairs in
+    /// a fixed order — what a summary view (`office-oxide info`, the MCP
+    /// `info` tool) lists. Flags and custom properties are not included;
+    /// read their fields directly.
+    pub fn properties(&self) -> Vec<(&'static str, String)> {
+        let keywords = (!self.keywords.is_empty()).then(|| self.keywords.join(", "));
+        [
+            ("Title", &self.title),
+            ("Author", &self.author),
+            ("Subject", &self.subject),
+            ("Keywords", &keywords),
+            ("Description", &self.description),
+            ("Category", &self.category),
+            ("Company", &self.company),
+            ("Manager", &self.manager),
+            ("Created", &self.created),
+            ("Modified", &self.modified),
+            ("Last modified by", &self.last_modified_by),
+            ("Revision", &self.revision),
+            ("Content status", &self.content_status),
+            ("Language", &self.language),
+        ]
+        .into_iter()
+        .filter_map(|(label, value)| {
+            value
+                .as_deref()
+                .filter(|v| !v.is_empty())
+                .map(|v| (label, v.to_string()))
+        })
+        .collect()
+    }
+}
+
+/// One user-defined document property (ECMA-376 Part 1 §22.3.2.2
+/// `property`). The value is kept as its text form together with the
+/// variant type that holds it, so it can be written back unchanged.
+#[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]
+pub struct CustomProperty {
+    /// The property name.
+    pub name: String,
+    /// The value, as the text of its variant element.
+    pub value: String,
+    /// The variant type's local name (ECMA-376 Part 1 §22.4, e.g.
+    /// `lpwstr`, `i4`, `r8`, `bool`, `filetime`).
+    pub value_type: String,
+}
+
+/// A conditional formatting rule from a worksheet (XLSX `<cfRule>` inside
+/// `<conditionalFormatting sqref="...">`, XLS `CF`/`CF12` records).
+///
+/// This is a scope/awareness gap fix, not a value-correctness one — no
+/// cell's own value is affected by conditional formatting being invisible,
+/// only the fact that the workbook has this metadata at all. Colour
+/// scales, data bars and icon sets are captured by `rule_type` alone
+/// (their own gradient/icon-set stops are not parsed); cell-value and
+/// formula rules additionally carry their comparison `formulas`.
+#[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]
+pub struct ConditionalFormat {
+    /// The cell range(s) this rule applies to, e.g. `"A1:B10"` or a
+    /// space-separated multi-range sqref like `"A1:A5 C1:C5"`.
+    pub range: String,
+    /// Rule type, e.g. `"cellIs"`, `"expression"`, `"colorScale"`,
+    /// `"dataBar"`, `"iconSet"`, `"top10"`, `"containsText"`,
+    /// `"duplicateValues"`. XLSX's own `type` attribute vocabulary is used
+    /// as-is; XLS rules are mapped onto the closest XLSX equivalent.
+    pub rule_type: String,
+    /// The comparison operator, when the rule type uses one (e.g.
+    /// `"greaterThan"`, `"between"`). `None` for rule types with no
+    /// operator (colour scales, data bars, icon sets, most `top10`/text
+    /// rules).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operator: Option<String>,
+    /// Formula(s) driving the rule: the comparison value(s) for a
+    /// `cellIs` rule, or the boolean expression for an `expression` rule.
+    /// Empty for rule types that carry no formula (colour scales, data
+    /// bars, icon sets).
+    #[serde(default)]
+    pub formulas: Vec<String>,
+}
+
+/// A data validation rule from a worksheet (XLSX `<dataValidation>`, XLS
+/// `DV` records grouped under a `DVAL`).
+///
+/// Same scope tier as [`ConditionalFormat`]: an
+/// awareness/scope gap, not a value-correctness one — no cell's own value
+/// is affected by a validation rule being invisible, only the fact the
+/// workbook defines the constraint at all. XLS's `formula1`/`formula2` are
+/// RPN byte-code token arrays, not text, and this crate has no general
+/// formula disassembler anywhere (same limitation already documented on
+/// `ConditionalFormat` for XLS's `CF` records); the type/operator/range/
+/// allow-blank metadata is still extracted, but XLS's `formula1`/
+/// `formula2` are always `None`. XLSX's `<formula1>`/`<formula2>` are
+/// already plain text in the XML and are populated directly.
+#[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]
+pub struct DataValidation {
+    /// The cell range(s) this rule applies to, e.g. `"A1:B10"` or a
+    /// space-separated multi-range sqref like `"A1:A5 C1:C5"`.
+    pub range: String,
+    /// Validation type, using XLSX's own `type` attribute vocabulary:
+    /// `"whole"`, `"decimal"`, `"list"`, `"date"`, `"time"`,
+    /// `"textLength"`, `"custom"`, or `"none"` (no restriction, just a
+    /// prompt/error message). XLS's numeric type code is mapped onto it.
+    pub validation_type: String,
+    /// The comparison operator, when the type uses one (e.g.
+    /// `"between"`, `"greaterThan"`). `None` for types with no operator
+    /// (`"list"`, `"custom"`, `"none"`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operator: Option<String>,
+    /// The first comparison value / formula / explicit list source (e.g.
+    /// `"Yes,No,Maybe"` for an inline list, or a cell reference/formula).
+    /// `None` for XLS (see the type's own doc); populated for XLSX.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub formula1: Option<String>,
+    /// The second comparison value, used only by the `"between"`/
+    /// `"notBetween"` operators. `None` otherwise, and always `None` for
+    /// XLS.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub formula2: Option<String>,
+    /// Whether an empty cell is considered valid (`allowBlank`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub allow_blank: bool,
+}
+
+/// A logical section (DOCX: section break, XLSX: worksheet, PPTX: slide).
+#[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]
+pub struct Section {
+    /// Optional section title (e.g. slide title or worksheet name).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// Content elements within this section.
+    pub elements: Vec<Element>,
+    /// Page geometry for this section.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page_setup: Option<PageSetup>,
+    /// Multi-column layout, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub columns: Option<ColumnLayout>,
+    /// How this section break was introduced.
+    #[serde(default)]
+    pub break_type: SectionBreakType,
+    /// Default header for this section.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub header: Option<HeaderFooter>,
+    /// Default footer for this section.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub footer: Option<HeaderFooter>,
+    /// Header used on the first page of this section.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_page_header: Option<HeaderFooter>,
+    /// Footer used on the first page of this section.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_page_footer: Option<HeaderFooter>,
+    /// Header used on even-numbered pages of this section.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub even_page_header: Option<HeaderFooter>,
+    /// Footer used on even-numbered pages of this section.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub even_page_footer: Option<HeaderFooter>,
+    /// Speaker notes attached to this section (PPTX notes slides).
+    ///
+    /// Notes are **not** part of the visible surface. They are kept in their
+    /// own field rather than in `elements` so that writing a document back
+    /// out cannot promote a presenter's private note into audience-visible
+    /// body text. Renderers label them explicitly.
+    ///
+    /// Structured `Element`s (`Paragraph`/`List`), not a flat `String` —
+    /// notes carry the exact same bold/italic/bullet/numbering
+    /// formatting slide body text already does, via the same
+    /// `TextBody`/run model, but used to be flattened to plain lines
+    /// before ever reaching the IR, silently losing all of it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speaker_notes: Option<Vec<Element>>,
+    /// Solid background colour for this section (RGB).
+    /// PPTX: parsed from `<p:cSld><p:bg><p:bgPr><a:solidFill>` on the slide.
+    /// Image / gradient backgrounds are intentionally skipped — only the
+    /// solid case round-trips through this minimal field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub background_rgb: Option<[u8; 3]>,
+    /// `true` when the source marks this section as hidden — an XLSX sheet
+    /// with `state="hidden"`/`"veryHidden"`, or a PPTX slide with
+    /// `show="0"`. The content is still extracted (a consumer indexing a
+    /// workbook usually wants it) but a renderer can now tell that the
+    /// author did not intend it to be seen, which extracting it silently
+    /// made impossible.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hidden: bool,
+    /// Conditional formatting rules defined on this worksheet (XLSX/XLS
+    /// only). Empty for every other format, and for a worksheet that
+    /// defines none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub conditional_formats: Vec<ConditionalFormat>,
+    /// Data validation rules defined on this worksheet (XLSX/XLS only).
+    /// Empty for every other format, and for a worksheet that defines
+    /// none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub data_validations: Vec<DataValidation>,
+    /// How this section numbers and places its footnotes (DOCX
+    /// `w:sectPr/w:footnotePr`, ECMA-376 §17.11.11). `None` when the section
+    /// states nothing, which means the document-wide settings apply.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub footnote_settings: Option<NoteSettings>,
+    /// How this section numbers and places its endnotes (DOCX
+    /// `w:sectPr/w:endnotePr`, ECMA-376 §17.11.5).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub endnote_settings: Option<NoteSettings>,
+    /// What kind of spreadsheet sheet this section is (XLSX/XLSB/XLS
+    /// only; `None` for every other format). A chart sheet or dialog sheet
+    /// is a named tab with no cells, and an Excel 4.0 macro sheet holds
+    /// cells that are macro code rather than data — a consumer can tell
+    /// them from worksheets by this.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sheet_kind: Option<SheetKind>,
+}
+
+/// The kind of a spreadsheet sheet.
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum SheetKind {
+    /// An ordinary worksheet: a grid of cells.
+    #[default]
+    Worksheet,
+    /// An Excel 4.0 (XLM) macro sheet: the worksheet cell model, whose
+    /// cells hold macro formulas, labels and their cached values.
+    Macro,
+    /// A chart sheet: one chart occupying the whole tab, no cells.
+    Chart,
+    /// A dialog sheet: an Excel 5.0 dialog, no cells.
+    Dialog,
+}
+
+/// Footnote or endnote numbering and placement for one section. Values are
+/// kept as the source's ST_* tokens, like [`PageSetup::page_number_format`].
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct NoteSettings {
+    /// Where the notes are placed (`w:pos`: `pageBottom`, `beneathText`,
+    /// `sectEnd`, `docEnd`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position: Option<String>,
+    /// The reference-mark number format (`w:numFmt`: `decimal`,
+    /// `lowerRoman`, `chicago`, ...).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub number_format: Option<String>,
+    /// The first note number (`w:numStart`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start: Option<u32>,
+    /// When numbering restarts (`w:numRestart`: `continuous`, `eachSect`,
+    /// `eachPage`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub restart: Option<String>,
+}
+
+/// A block-level content element.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum Element {
+    /// A heading with a numeric level (1–6).
+    Heading(Heading),
+    /// A paragraph of inline content.
+    Paragraph(Paragraph),
+    /// A table.
+    Table(Table),
+    /// An ordered or unordered list.
+    List(List),
+    /// An embedded image.
+    Image(Image),
+    /// A horizontal rule / thematic break.
+    ThematicBreak,
+    /// A floating or anchored text box.
+    TextBox(TextBox),
+    /// A hard page break.
+    PageBreak,
+    /// A column break.
+    ColumnBreak,
+    /// A footnote body (block-level, appears in footnote area).
+    Footnote(Note),
+    /// An endnote body (block-level, appears in endnote area).
+    Endnote(Note),
+    /// A preformatted code block.
+    CodeBlock(CodeBlock),
+    /// A vector shape (line / rectangle) anchored on the page. Used by
+    /// the layout-preserving DOCX path to round-trip rules and dividers.
+    Shape(Shape),
+}
+
+/// Work item for `Element`'s iterative `Drop`: a batch of child `Element`s
+/// still holding their own subtrees, or a batch of `ListItem`s (which
+/// recurse through `List` rather than `Element`, so they need their own
+/// case). Both variants are whole `Vec`s, moved as-is from the parent's
+/// field: one push per container rather than one per child, and no
+/// per-element boxing on the drop path.
+enum DropWork {
+    Elems(Vec<Element>),
+    Items(Vec<ListItem>),
+}
+
+/// The bytes of picture data in `elements`, nested content included, counting
+/// a picture once for every place it appears. Iterative like
+/// [`for_each_image_mut`].
+pub(crate) fn image_bytes_in(elements: &[Element]) -> u64 {
+    enum Work<'a> {
+        Elems(&'a [Element]),
+        Items(&'a [ListItem]),
+    }
+    let mut total = 0u64;
+    let mut stack = vec![Work::Elems(elements)];
+    while let Some(work) = stack.pop() {
+        match work {
+            Work::Elems(els) => {
+                for e in els {
+                    match e {
+                        Element::Image(i) => {
+                            total =
+                                total.saturating_add(i.data.as_ref().map_or(0, |d| d.len() as u64));
+                        },
+                        Element::TextBox(tb) => stack.push(Work::Elems(&tb.content)),
+                        Element::Footnote(n) | Element::Endnote(n) => {
+                            stack.push(Work::Elems(&n.content));
+                        },
+                        Element::Table(t) => {
+                            for row in &t.rows {
+                                for cell in &row.cells {
+                                    stack.push(Work::Elems(&cell.content));
+                                }
+                            }
+                        },
+                        Element::List(l) => stack.push(Work::Items(&l.items)),
+                        _ => {},
+                    }
+                }
+            },
+            Work::Items(items) => {
+                for item in items {
+                    stack.push(Work::Elems(&item.content));
+                    if let Some(n) = &item.nested {
+                        stack.push(Work::Items(&n.items));
+                    }
+                }
+            },
+        }
+    }
+    total
+}
+
+/// Call `f` on every [`Image`] in `elements`, nested content included (table
+/// cells, text boxes, notes, list items). Iterative: IR trees can be deep.
+pub(crate) fn for_each_image_mut(elements: &mut [Element], mut f: impl FnMut(&mut Image)) {
+    enum Work<'a> {
+        Elems(&'a mut [Element]),
+        Items(&'a mut [ListItem]),
+    }
+    let mut stack = vec![Work::Elems(elements)];
+    while let Some(work) = stack.pop() {
+        match work {
+            Work::Elems(els) => {
+                for e in els {
+                    match e {
+                        Element::Image(i) => f(i),
+                        Element::TextBox(tb) => stack.push(Work::Elems(&mut tb.content)),
+                        Element::Footnote(n) | Element::Endnote(n) => {
+                            stack.push(Work::Elems(&mut n.content));
+                        },
+                        Element::Table(t) => {
+                            for row in &mut t.rows {
+                                for cell in &mut row.cells {
+                                    stack.push(Work::Elems(&mut cell.content));
+                                }
+                            }
+                        },
+                        Element::List(l) => stack.push(Work::Items(&mut l.items)),
+                        _ => {},
+                    }
+                }
+            },
+            Work::Items(items) => {
+                for item in items {
+                    stack.push(Work::Elems(&mut item.content));
+                    if let Some(n) = &mut item.nested {
+                        stack.push(Work::Items(&mut n.items));
+                    }
+                }
+            },
+        }
+    }
+}
+
+/// Move every `Element` (and `ListItem`) directly reachable from `elem`
+/// onto `stack`, leaving `elem`'s own recursive fields empty. Used by both
+/// `Drop for Element` and the `List` arm below — see that impl for why
+/// this can't just be normal field access.
+fn drain_element_children(elem: &mut Element, stack: &mut Vec<DropWork>) {
+    match elem {
+        Element::TextBox(tb) => stack.push(DropWork::Elems(std::mem::take(&mut tb.content))),
+        Element::Footnote(n) | Element::Endnote(n) => {
+            stack.push(DropWork::Elems(std::mem::take(&mut n.content)));
+        },
+        Element::Table(t) => {
+            for row in &mut t.rows {
+                for cell in &mut row.cells {
+                    stack.push(DropWork::Elems(std::mem::take(&mut cell.content)));
+                }
+            }
+        },
+        Element::List(l) => stack.push(DropWork::Items(std::mem::take(&mut l.items))),
+        // No Vec<Element> (or List) field to drain: Heading/Paragraph hold
+        // only InlineContent, and Image/ThematicBreak/PageBreak/
+        // ColumnBreak/CodeBlock/Shape hold none. A future non_exhaustive
+        // variant that adds one just doesn't get the iterative treatment
+        // (falls back to the compiler's normal recursive drop for that
+        // one field) — safe, not a soundness regression, only a missed
+        // optimization for that specific new shape.
+        _ => {},
+    }
+}
+
+impl Drop for Element {
+    /// `DocumentIR` is `Deserialize`, so an `Element` tree can arrive from
+    /// anywhere, including untrusted input, at depths well past what the
+    /// bounded readers/writers ever produce themselves. The default
+    /// compiler-generated drop glue recurses through every nested
+    /// `Vec<Element>` (`TextBox`/`Footnote`/`Endnote`/`Table` cells/`List`
+    /// items, and `List` nests further through `ListItem::nested`), so a
+    /// sufficiently deep value overflowed the stack on drop independent of
+    /// any writer's own depth guard — an abort, not a catchable error
+    /// (the "Additional context"). This walks the tree with an
+    /// explicit heap-allocated stack instead of the call stack: every
+    /// popped node's own children are drained into the stack *before* it
+    /// is allowed to actually drop, so that drop is O(1) rather than
+    /// recursive.
+    fn drop(&mut self) {
+        let mut stack = Vec::new();
+        drain_element_children(self, &mut stack);
+        while let Some(work) = stack.pop() {
+            match work {
+                DropWork::Elems(elems) => {
+                    for mut e in elems {
+                        drain_element_children(&mut e, &mut stack);
+                        // `e` drops here: its own Vec<Element>/List fields
+                        // are now empty, so this is shallow, not recursive.
+                    }
+                },
+                DropWork::Items(items) => {
+                    for mut item in items {
+                        stack.push(DropWork::Elems(std::mem::take(&mut item.content)));
+                        if let Some(nested) = item.nested.take() {
+                            stack.push(DropWork::Items(nested.items));
+                        }
+                        // `item` drops here: content is empty and nested
+                        // is None, so this is shallow too.
+                    }
+                },
+            }
+        }
+    }
+}
+
+/// A vector shape anchored at absolute page coordinates.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct Shape {
+    /// Geometry kind.
+    pub kind: ShapeGeom,
+    /// X offset from the anchor in EMUs.
+    pub x_emu: i64,
+    /// Y offset from the anchor in EMUs.
+    pub y_emu: i64,
+    /// Width in EMUs.
+    pub width_emu: u64,
+    /// Height in EMUs.
+    pub height_emu: u64,
+    /// Horizontal anchor reference frame.
+    #[serde(default)]
+    pub h_anchor: FloatAnchor,
+    /// Vertical anchor reference frame.
+    #[serde(default)]
+    pub v_anchor: FloatAnchor,
+    /// Stroke colour as RGB (0..255).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stroke_rgb: Option<[u8; 3]>,
+    /// Fill colour as RGB (0..255).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fill_rgb: Option<[u8; 3]>,
+    /// Stroke width in EMUs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stroke_w_emu: Option<i64>,
+}
+
+/// Vector-shape geometry kinds we currently round-trip.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ShapeGeom {
+    /// Straight line from `(x, y)` to `(x + width, y + height)`.
+    #[default]
+    Line,
+    /// Axis-aligned rectangle.
+    Rect,
+}
+
+/// The deepest heading level the IR can express: `Heading::level` is 1–
+/// `MAX_HEADING_DEPTH`, a markdown-style depth. Format readers whose native
+/// heading range is deeper (MS-DOC outline levels run to 9) clamp to this when
+/// they build the IR, so every consumer can rely on the bound.
+///
+/// This is the **only** definition of that range: [`Heading::clamped_level`]
+/// and the format emitters all clamp through it, so changing the depth is a
+/// one-line change and no consumer can drift from it.
+pub(crate) const MAX_HEADING_DEPTH: u8 = 6;
+
+/// A heading element with a nesting level.
+#[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]
+pub struct Heading {
+    /// Heading level 1–6 (1 = largest).
+    ///
+    /// The field is not type-constrained, and `Default`/`serde` can both
+    /// produce a `0`. Read it through [`Heading::clamped_level`] rather
+    /// than directly: the five consumers used to normalise it two
+    /// different ways, so the same IR rendered as `<h1>` in HTML and as a
+    /// body line with a leading space in markdown.
+    #[serde(default = "default_heading_level")]
+    pub level: u8,
+    /// Inline content of the heading.
+    #[serde(default)]
+    pub content: Vec<InlineContent>,
+    /// Absolute frame position for layout-preserving DOCX
+    /// (mirrors `Paragraph::frame_position`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frame_position: Option<FramePosition>,
+    /// Horizontal alignment (mirrors `Paragraph::alignment`). PDF
+    /// title pages often centre their headings; without this the
+    /// round-trip flattens them to left-aligned.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alignment: Option<ParagraphAlignment>,
+    /// Left indent in twips (mirrors `Paragraph::indent_left_twips`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub indent_left_twips: Option<i32>,
+    /// Right indent in twips (mirrors `Paragraph::indent_right_twips`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub indent_right_twips: Option<i32>,
+    /// First-line indent in twips, negative = hanging (mirrors
+    /// `Paragraph::first_line_indent_twips`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_line_indent_twips: Option<i32>,
+    /// Space before the heading in twips (mirrors
+    /// `Paragraph::space_before_twips`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub space_before_twips: Option<u32>,
+    /// Space after the heading in twips (mirrors
+    /// `Paragraph::space_after_twips`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub space_after_twips: Option<u32>,
+    /// Line spacing rule (mirrors `Paragraph::line_spacing`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_spacing: Option<LineSpacing>,
+    /// Background / shading colour (mirrors `Paragraph::background_color`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub background_color: Option<[u8; 3]>,
+    /// Borders (mirrors `Paragraph::border`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub border: Option<ParagraphBorder>,
+    /// Tab stops (mirrors `Paragraph::tabs`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tabs: Vec<TabStop>,
+    /// Keep this heading on the same page as the next paragraph (mirrors
+    /// `Paragraph::keep_with_next`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub keep_with_next: bool,
+    /// Prevent a page break within this heading (mirrors
+    /// `Paragraph::keep_together`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub keep_together: bool,
+    /// Force a page break before this heading (mirrors
+    /// `Paragraph::page_break_before`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub page_break_before: bool,
+}
+
+impl Heading {
+    /// The heading level as a renderer should use it: clamped into the
+    /// documented 1–6 range. This is the single definition of that range;
+    /// every renderer and writer calls it.
+    pub fn clamped_level(&self) -> u8 {
+        self.level.clamp(1, MAX_HEADING_DEPTH)
+    }
+}
+
+fn default_heading_level() -> u8 {
+    1
+}
+
+/// Alignment of a tab stop (`jc` from a TBC descriptor).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum TabAlignment {
+    /// Text starts at the tab stop.
+    Left,
+    /// Text is centred on the tab stop.
+    Center,
+    /// Text ends at the tab stop.
+    Right,
+    /// Decimal-aligned on the tab stop.
+    Decimal,
+    /// A vertical bar at the tab stop (no positioning of text).
+    Bar,
+}
+
+/// Leader character drawn in the gap before a tab stop (`tlc` from a TBC
+/// descriptor).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum TabLeader {
+    /// No leader.
+    None,
+    /// Dotted leader.
+    Dot,
+    /// Hyphenated leader.
+    Hyphen,
+    /// Underlined leader.
+    Underscore,
+    /// Heavy line leader.
+    Heavy,
+    /// Middle-dot leader.
+    MiddleDot,
+}
+
+/// A paragraph tab stop, decoded from `sprmPChgTabs`.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct TabStop {
+    /// Position from the paragraph start, in twips.
+    pub position_twips: i32,
+    /// Alignment of text at the tab stop.
+    pub alignment: TabAlignment,
+    /// Leader character drawn in the gap before the tab stop.
+    pub leader: TabLeader,
+}
+
+/// A paragraph of inline content.
+#[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]
+pub struct Paragraph {
+    /// Inline runs making up this paragraph.
+    pub content: Vec<InlineContent>,
+    /// Display name of the paragraph style the document applies to this
+    /// paragraph (`Caption`, `Body Text`, a legislation style such as
+    /// `section-e`, …) in body text, table cells and list items.
+    ///
+    /// `None` means no style name is known, which includes:
+    /// - the document's default paragraph style (what Word calls `Normal`),
+    ///   recognised by `w:default` in DOCX and by `istd` 0 in `.doc`, never by
+    ///   name, which Word localizes;
+    /// - a style the document does not define, or one that is not a paragraph
+    ///   style (the default style applies, as in python-docx);
+    /// - a name that is blank, longer than 255 characters or holds a control
+    ///   character (reported once in `Metadata::warnings`);
+    /// - paragraphs the converter builds itself or does not take from a styled
+    ///   source paragraph: `.doc` headers, footers, footnotes, comments and
+    ///   text boxes, Word 6/95 files, and every PPTX, XLSX, XLS and PPT
+    ///   paragraph.
+    ///
+    /// Headings are `Element::Heading` and carry their level instead, though a
+    /// paragraph in a heading style that states it is body text stays a
+    /// `Paragraph` with the name.
+    ///
+    /// DOCX: the style's `w:name`, with Word's lower-case spellings of the
+    /// built-ins it displays capitalized (`caption`, `heading 1`, `header`,
+    /// `footer`) capitalized. `.doc`: Heading 1–9, Header, Footer and Caption
+    /// under those same English names whatever language the file was saved
+    /// in; any other style keeps the name stored in the file, which may be
+    /// localized, without an alias after a comma. Other built-in styles are
+    /// therefore not comparable between the formats.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub style: Option<String>,
+    /// Horizontal alignment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alignment: Option<ParagraphAlignment>,
+    /// Left indent in twips.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub indent_left_twips: Option<i32>,
+    /// Right indent in twips.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub indent_right_twips: Option<i32>,
+    /// First-line indent in twips (negative = hanging).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_line_indent_twips: Option<i32>,
+    /// Space before the paragraph in twips.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub space_before_twips: Option<u32>,
+    /// Space after the paragraph in twips.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub space_after_twips: Option<u32>,
+    /// Line spacing rule.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_spacing: Option<LineSpacing>,
+    /// Background / shading colour (RGB).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub background_color: Option<[u8; 3]>,
+    /// Paragraph borders.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub border: Option<ParagraphBorder>,
+    /// Tab stops set by `sprmPChgTabs` (positions in twips). Empty when the
+    /// paragraph carries no tab-stop SPRM.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tabs: Vec<TabStop>,
+    /// Keep this paragraph on the same page as the next paragraph.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub keep_with_next: bool,
+    /// Prevent a page break within this paragraph.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub keep_together: bool,
+    /// Force a page break before this paragraph.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub page_break_before: bool,
+    /// Outline level, using ECMA-376 §17.3.1.20's value space: `0` is
+    /// Heading 1, `1` is Heading 2, … and `9` means *no* outline level (body
+    /// text), which is also the value assumed when `<w:outlineLvl>` is
+    /// absent. This comment used to state the range backwards, so a caller
+    /// following it set `Some(0)` for body text and Word read every
+    /// paragraph in the document as a Heading 1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outline_level: Option<u8>,
+    /// Absolute frame position (from `<w:framePr>`). Present when the
+    /// DOCX uses page-anchored frames for layout-preserving content
+    /// (see pdf_oxide's `to_docx_bytes_layout`). Twips relative to the
+    /// page origin (top-left).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frame_position: Option<FramePosition>,
+    /// PPTX/PPT placeholder role this paragraph's content came from (e.g.
+    /// `"title"`, `"body"`, `"ctrTitle"`, `"subTitle"`, `"dt"`, `"sldNum"`,
+    /// `"ftr"`, `"hdr"`, `"obj"`, `"chart"`, `"tbl"`, `"clipArt"`, `"dgm"`,
+    /// `"media"`, `"pic"`) — the same `ST_PlaceholderType` vocabulary OOXML
+    /// itself uses for `<p:ph type="...">`, so both formats share one
+    /// string set. `None` when the paragraph is not from a placeholder
+    /// shape, or the source placeholder carries no resolvable role.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub placeholder_role: Option<String>,
+}
+
+/// Absolute frame position for a paragraph anchored to the page.
+/// Mirrors the OOXML `<w:framePr>` attribute set we care about for
+/// reproducing visual layout in downstream renderers.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct FramePosition {
+    /// X position in twips, anchored to the page origin (top-left).
+    pub x_twips: i32,
+    /// Y position in twips, anchored to the page origin (top-left).
+    pub y_twips: i32,
+    /// Frame width in twips.
+    pub width_twips: i32,
+    /// Frame height in twips.
+    pub height_twips: i32,
+}
+
+/// Inline content within a paragraph or heading.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum InlineContent {
+    /// A styled text span.
+    Text(TextSpan),
+    /// A line break within a paragraph.
+    LineBreak,
+    /// An inline footnote reference mark.
+    FootnoteRef(FootnoteRef),
+    /// An inline endnote reference mark.
+    EndnoteRef(FootnoteRef),
+    /// Where a comment's anchored range begins. The comment itself is the
+    /// `Element::Endnote` labelled `"Comment"`/`"Comment (author)"` with
+    /// the same id.
+    CommentStart(CommentAnchor),
+    /// A comment's citation point, which also ends its anchored range.
+    CommentRef(CommentAnchor),
+}
+
+/// Identifies the comment an inline [`InlineContent::CommentStart`] or
+/// [`InlineContent::CommentRef`] marker belongs to.
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub struct CommentAnchor {
+    /// The comment's id — the `id` of its `Element::Endnote`.
+    pub comment_id: u32,
+}
+
+/// Concatenate a heading/paragraph's inline content into plain text —
+/// `Text` spans verbatim, `LineBreak` as `\n`, note references dropped.
+/// The one canonical extraction every writer's "does this heading match
+/// title text T" check must use; a second, narrower reimplementation in
+/// `convert_docx.rs`'s own title-derivation (which silently dropped
+/// `LineBreak` instead of emitting `\n`) made `section.title` disagree
+/// with this function on any heading containing a line break, so the
+/// write-side "is the title already present in the elements" check
+/// always came back `false` for such headings and duplicated them on
+/// every write.
+pub fn inline_to_text(content: &[InlineContent]) -> String {
+    let mut out = String::new();
+    for item in content {
+        match item {
+            InlineContent::Text(span) => out.push_str(&span.text),
+            InlineContent::LineBreak => out.push('\n'),
+            InlineContent::FootnoteRef(_)
+            | InlineContent::EndnoteRef(_)
+            | InlineContent::CommentStart(_)
+            | InlineContent::CommentRef(_) => {},
+        }
+    }
+    out
+}
+
+/// Extract the first `font_size_half_pt` declared on any run in a run of
+/// inline content. Returns the *first* declared `font_size_half_pt`,
+/// converted from half-points to points (e.g. 18 half-pt → 9 pt).
+///
+/// Used by both renderers and writers when one paragraph-level size is
+/// needed: the IR groups runs into a paragraph by line clustering, so
+/// the size on the first span is representative of the body text.
+/// Mixed-size paragraphs (drop-caps, math marks mid-line) lose the
+/// variation — that's the deliberate trade-off.
+pub fn first_inline_font_size_pt(content: &[InlineContent]) -> Option<f32> {
+    for ic in content {
+        if let InlineContent::Text(span) = ic {
+            if let Some(half_pt) = span.font_size_half_pt {
+                return Some(half_pt as f32 / 2.0);
+            }
+        }
+    }
+    None
+}
+
+/// A styled run of text.
+#[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]
+pub struct TextSpan {
+    /// The text content.
+    pub text: String,
+    /// Whether the text is bold.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub bold: bool,
+    /// Whether the text is italic.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub italic: bool,
+    /// Whether the text has strikethrough.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub strikethrough: bool,
+    /// Optional hyperlink URL.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hyperlink: Option<String>,
+    /// The hyperlink's hover text (DOCX `w:hyperlink/@w:tooltip`, XLSX
+    /// `hyperlink/@tooltip`, PPTX `a:hlinkClick/@tooltip`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hyperlink_tooltip: Option<String>,
+    /// Font size in half-points (e.g. 24 = 12 pt).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_size_half_pt: Option<u32>,
+    /// Foreground colour (RGB).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<[u8; 3]>,
+    /// Underline style, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub underline: Option<UnderlineStyle>,
+    /// Font family name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_name: Option<String>,
+    /// Highlight / background colour (RGB).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub highlight: Option<[u8; 3]>,
+    /// Superscript / subscript alignment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vertical_align: Option<VerticalAlign>,
+    /// Whether all characters are rendered as uppercase.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub all_caps: bool,
+    /// Whether lowercase letters are rendered as smaller capitals.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub small_caps: bool,
+    /// Character spacing in half-points (negative = condensed).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub char_spacing_half_pt: Option<i32>,
+}
+
+impl TextSpan {
+    /// Create a plain (unformatted) text span.
+    pub fn plain(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            ..Default::default()
+        }
+    }
+}
+
+/// A table with rows and cells.
+#[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]
+pub struct Table {
+    /// Rows in the table (first row is header when `is_header = true`).
+    pub rows: Vec<TableRow>,
+    /// Column widths in twips (may be shorter than the actual column count).
+    #[serde(default)]
+    pub column_widths_twips: Vec<u32>,
+    /// Table-level borders.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub border: Option<TableBorder>,
+    /// Horizontal alignment of the table on the page.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alignment: Option<TableAlignment>,
+    /// Default cell padding in twips (applied to all cells).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cell_padding_twips: Option<u32>,
+    /// Optional caption string.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub caption: Option<String>,
+    /// Total table width in twips (`None` = auto).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width_twips: Option<u32>,
+    /// Left indent of the table from the margin in twips.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub indent_left_twips: Option<i32>,
+}
+
+/// A single row within a table.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct TableRow {
+    /// Cells within this row.
+    pub cells: Vec<TableCell>,
+    /// Whether this row is a header row.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub is_header: bool,
+    /// Row height in twips, if set explicitly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height_twips: Option<u32>,
+    /// How `height_twips` constrains the row. `None` is the OOXML default,
+    /// a minimum height.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height_rule: Option<RowHeightRule>,
+    /// Whether the row may break across pages.
+    #[serde(default = "default_true", skip_serializing_if = "Clone::clone")]
+    pub allow_break: bool,
+    /// Whether this row is repeated as a header on subsequent pages.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub repeat_as_header: bool,
+}
+
+/// How a table row's height is applied (DOCX `w:trHeight/@w:hRule`,
+/// ECMA-376 §17.18).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RowHeightRule {
+    /// The height is a minimum; the row grows to fit its content.
+    AtLeast,
+    /// The row is exactly this tall; content beyond it is clipped.
+    Exact,
+    /// The height is ignored and the row fits its content.
+    Auto,
+}
+
+impl Default for TableRow {
+    fn default() -> Self {
+        Self {
+            cells: Vec::new(),
+            is_header: false,
+            height_twips: None,
+            height_rule: None,
+            allow_break: true,
+            repeat_as_header: false,
+        }
+    }
+}
+
+/// Semantic data type of a spreadsheet cell.
+///
+/// Populated only for cells derived from a spreadsheet (XLSX); cells from
+/// prose formats (DOCX/PPTX tables) leave `TableCell::data_type` as `None`.
+/// This lets consumers distinguish a numeric or date cell from a text cell —
+/// the rendered display string in `TableCell::content` alone cannot convey
+/// that (e.g. `"42"` may be a number, and `"2026-07-14"` may be a date serial
+/// under a date format).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CellDataType {
+    /// Text / string cell (`t="s"`, `t="str"`, `t="inlineStr"`).
+    Text,
+    /// Numeric cell with no date format applied.
+    Number,
+    /// Numeric cell whose number format is a date/time format.
+    Date,
+    /// Boolean cell (`t="b"`).
+    Boolean,
+    /// Error cell (`t="e"`, e.g. `#DIV/0!`).
+    Error,
+}
+
+/// A single cell within a table row.
+#[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]
+pub struct TableCell {
+    /// Block elements inside the cell.
+    pub content: Vec<Element>,
+    /// Number of columns this cell spans.
+    pub col_span: u32,
+    /// Number of rows this cell spans.
+    pub row_span: u32,
+    /// Cell background / shading colour (RGB).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub background_color: Option<[u8; 3]>,
+    /// Cell-level borders.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub border: Option<TableBorder>,
+    /// Vertical alignment within the cell.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vertical_align: Option<CellVerticalAlign>,
+    /// Horizontal alignment of text within the cell.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_align: Option<ParagraphAlignment>,
+    /// Cell width in twips.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width_twips: Option<u32>,
+    /// Per-edge cell padding.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub padding: Option<CellPadding>,
+    /// Text direction within the cell.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_direction: Option<TextDirection>,
+    /// Spreadsheet cell semantic type (XLSX only; `None` for prose formats).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data_type: Option<CellDataType>,
+    /// Underlying numeric value for `Number`/`Date`/`Boolean` cells (dates as
+    /// an Excel serial number; booleans as `1.0`/`0.0`). `None` for text,
+    /// error, and prose cells. Lets consumers recover the raw value behind a
+    /// formatted display string.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_number: Option<f64>,
+    /// Number-format code applied to the cell (e.g. `"0.00"`, `"yyyy-mm-dd"`).
+    /// `None` when the cell uses the General format or carries no style.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub number_format: Option<String>,
+    /// Number-format ID (a built-in id such as `14` for a date, or a custom
+    /// `numFmtId`). `None` when the cell carries no style.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub number_format_id: Option<u32>,
+    /// Formula text (XLSX only, without the leading `=`), when the cell
+    /// carries a formula — present alongside `content` even when a cached
+    /// value made `content` non-empty, so a consumer isn't forced to
+    /// choose between seeing the computed value and knowing a formula
+    /// produced it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub formula: Option<String>,
+    /// Text wraps onto multiple lines within the cell (XLSX `wrapText`,
+    /// ECMA-376 §18.8.1 `alignment`). `false` for prose formats.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub wrap_text: bool,
+}
+
+/// An ordered or unordered list.
+#[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]
+pub struct List {
+    /// `true` = numbered list, `false` = bullet list.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub ordered: bool,
+    /// Items in the list.
+    pub items: Vec<ListItem>,
+    /// Starting number for ordered lists.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_number: Option<u32>,
+    /// Marker / numbering style.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub style: Option<ListStyle>,
+    /// Nesting depth (0 = top-level).
+    #[serde(default)]
+    pub level: u8,
+    /// How an ordered list's marker is drawn around its number, as a
+    /// DOCX `w:lvlText` pattern (ECMA-376 Part 1 §17.9, numbering): `%N` is the
+    /// level-`N` counter (1-based), so `"%1)"` is `1)`, `"(%1)"` is `(1)`
+    /// and `"%1.%2."` is `1.2.`. `None` for bullets and when the source
+    /// uses the plain `"%N."` form or has no such notion.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub marker_pattern: Option<String>,
+    /// How the marker is aligned in its number area (DOCX `w:lvlJc`,
+    /// ECMA-376 Part 1 §17.9). `None` when unstated (left).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub marker_alignment: Option<ParagraphAlignment>,
+}
+
+impl List {
+    /// The CommonMark delimiter for this list's ordered markers: `)` when
+    /// the marker pattern is the bare counter followed by `)` (`%N)`),
+    /// otherwise `.` — CommonMark has no form for `(1)` or `1.2.`.
+    pub fn ordered_delimiter(&self) -> char {
+        match self.marker_pattern.as_deref() {
+            Some(p) if is_paren_pattern(p) => ')',
+            _ => '.',
+        }
+    }
+}
+
+/// `true` for a `w:lvlText` of the form `%N)` (one counter, closing paren).
+pub(crate) fn is_paren_pattern(pattern: &str) -> bool {
+    pattern
+        .trim()
+        .strip_prefix('%')
+        .and_then(|rest| rest.strip_suffix(')'))
+        .is_some_and(|n| n.len() == 1 && n.as_bytes()[0].is_ascii_digit())
+}
+
+/// A single item within a list.
+#[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]
+pub struct ListItem {
+    /// Block-level content of this item (typically a single Paragraph).
+    pub content: Vec<Element>,
+    /// Optional nested sub-list.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nested: Option<List>,
+}
+
+/// Wrap a non-empty inline-content vector into a single-Paragraph
+/// block, or return an empty Vec if the inline content is empty.
+/// Used by list builders to turn each item's inline run into its
+/// `Vec<Element>` content slot.
+pub fn inline_to_element_block(content: Vec<InlineContent>) -> Vec<Element> {
+    if content.is_empty() {
+        Vec::new()
+    } else {
+        vec![Element::Paragraph(Paragraph {
+            content,
+            ..Default::default()
+        })]
+    }
+}
+
+/// Build a nested `List` from a flat `(level, inline)` sequence.
+///
+/// Each item becomes a `ListItem` at the current depth; the run of items
+/// immediately following it whose level is *deeper than that item's own
+/// level* becomes its `nested` sub-list, recursively. Levels are 0-indexed.
+///
+/// `base_level` is the shallowest level treated as "current depth": an item
+/// at or above it is a `ListItem` here rather than a child. Grouping keys off
+/// each item's own level, so a run whose items are all deeper than
+/// `base_level` (a list that starts indented — `<a:p lvl="1">` throughout, for
+/// example) yields one `ListItem` per item rather than collapsing into the
+/// first one.
+///
+/// Used by both `convert_docx` and `convert_pptx` to translate flat
+/// `<w:numPr w:ilvl=…>` / `<a:p lvl=…>` paragraph streams into the
+/// IR's tree-shaped `List`.
+pub fn build_nested_list(
+    ordered: bool,
+    items: &[(u8, Vec<InlineContent>)],
+    base_level: u8,
+) -> List {
+    let mut list_items = Vec::new();
+    let mut idx = 0;
+
+    while idx < items.len() {
+        let (level, content) = &items[idx];
+        // Children are the items deeper than *this* item, not deeper than
+        // `base_level`: keying off `base_level` drops every item of a run that
+        // is uniformly deeper than it, because the run is claimed as a child
+        // range and then discarded for not having a shallow-enough parent.
+        let depth = (*level).max(base_level);
+        let nested_start = idx + 1;
+        let mut nested_end = nested_start;
+        while nested_end < items.len() && items[nested_end].0 > depth {
+            nested_end += 1;
+        }
+        let nested = if nested_end > nested_start {
+            Some(build_nested_list(
+                ordered,
+                &items[nested_start..nested_end],
+                depth.saturating_add(1),
+            ))
+        } else {
+            None
+        };
+        list_items.push(ListItem {
+            content: inline_to_element_block(content.clone()),
+            nested,
+        });
+        // `nested_end` is always at least `idx + 1`, so this makes progress.
+        idx = nested_end;
+    }
+
+    List {
+        ordered,
+        items: list_items,
+        ..Default::default()
+    }
+}
+
+/// Give each item of a list built by [`build_nested_list`] the paragraph style
+/// of the source paragraph it came from.
+///
+/// `styles` is in the order of the flat items the list was built from, which is
+/// the pre-order of the finished tree: an item, then its nested sub-list, then
+/// its next sibling. An item with no content has no paragraph to carry a
+/// style, but still consumes its entry.
+pub(crate) fn assign_list_item_styles(
+    list: &mut List,
+    styles: &mut impl Iterator<Item = Option<String>>,
+) {
+    for item in &mut list.items {
+        let style = styles.next().flatten();
+        if let Some(Element::Paragraph(p)) = item.content.first_mut() {
+            p.style = style;
+        }
+        if let Some(nested) = item.nested.as_mut() {
+            assign_list_item_styles(nested, styles);
+        }
+    }
+}
+
+impl ImageFormat {
+    /// Map an OfficeArt BLIP format onto the IR's image format.
+    ///
+    /// Legacy `.doc`/`.xls`/`.ppt` images are extracted as BLIPs and were
+    /// then dropped at the IR boundary, so every picture in a legacy file
+    /// vanished on conversion even though the bytes were already in hand.
+    pub fn from_blip(f: &crate::cfb::blip::BlipFormat) -> Option<Self> {
+        use crate::cfb::blip::BlipFormat;
+        Some(match f {
+            BlipFormat::Emf => ImageFormat::Emf,
+            BlipFormat::Wmf => ImageFormat::Wmf,
+            BlipFormat::Jpeg => ImageFormat::Jpeg,
+            BlipFormat::Png => ImageFormat::Png,
+            BlipFormat::Dib => ImageFormat::Bmp,
+            BlipFormat::Tiff => ImageFormat::Tiff,
+            BlipFormat::Pict | BlipFormat::Unknown(_) => return None,
+        })
+    }
+}
+
+/// serde codec for [`Image::data`]: base64 out, base64 *or* the legacy
+/// number array in.
+mod image_bytes {
+    /// The base64 text of some bytes, written into the serializer as it is
+    /// produced (no `String` of the whole encoding is built first).
+    struct Base64<'a>(&'a [u8]);
+
+    impl serde::Serialize for Base64<'_> {
+        fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+            s.collect_str(&crate::core::base64::Display(self.0))
+        }
+    }
+
+    use serde::de::{self, Deserializer, SeqAccess, Visitor};
+    use serde::ser::Serializer;
+
+    pub fn serialize<S: Serializer>(data: &Option<Vec<u8>>, s: S) -> Result<S::Ok, S::Error> {
+        match data {
+            Some(bytes) => s.serialize_some(&Base64(bytes)),
+            None => s.serialize_none(),
+        }
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Vec<u8>>, D::Error> {
+        struct BytesVisitor;
+        impl<'de> Visitor<'de> for BytesVisitor {
+            type Value = Option<Vec<u8>>;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("a base64 string, an array of bytes, or null")
+            }
+            fn visit_none<E: de::Error>(self) -> Result<Self::Value, E> {
+                Ok(None)
+            }
+            fn visit_unit<E: de::Error>(self) -> Result<Self::Value, E> {
+                Ok(None)
+            }
+            fn visit_some<D2: Deserializer<'de>>(self, d: D2) -> Result<Self::Value, D2::Error> {
+                d.deserialize_any(self)
+            }
+            fn visit_str<E: de::Error>(self, v: &str) -> Result<Self::Value, E> {
+                crate::core::base64::decode(v).map(Some).map_err(E::custom)
+            }
+            fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
+                let mut out = Vec::with_capacity(seq.size_hint().unwrap_or(0));
+                while let Some(b) = seq.next_element::<u8>()? {
+                    out.push(b);
+                }
+                Ok(Some(out))
+            }
+        }
+        d.deserialize_option(BytesVisitor)
+    }
+}
+
+/// An embedded image reference.
+#[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]
+pub struct Image {
+    /// Optional alt-text description of the image.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alt_text: Option<String>,
+    /// Raw image bytes, if extracted.
+    ///
+    /// Serialised as a base64 string. serde's default for `Vec<u8>` is a
+    /// JSON array of numbers, which the pretty-printing CLI and MCP
+    /// surfaces turned into one line per byte: a 1.2 MB `.docx` produced a
+    /// 140 MB, 8.3-million-line `ir` dump. Deserialisation still accepts
+    /// the number array so IR JSON written by earlier releases loads.
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "image_bytes")]
+    pub data: Option<Vec<u8>>,
+    /// Pixel format of the image data.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub format: Option<ImageFormat>,
+    /// Display width in EMUs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_width_emu: Option<u64>,
+    /// Display height in EMUs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_height_emu: Option<u64>,
+    /// Source image pixel width.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pixel_width: Option<u32>,
+    /// Source image pixel height.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pixel_height: Option<u32>,
+    /// Whether the image is purely decorative (no semantic content).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub decorative: bool,
+    /// Inline vs. floating positioning.
+    #[serde(default)]
+    pub positioning: ImagePositioning,
+    /// Click-action target (PPTX `p:cNvPr > a:hlinkClick`) — the shape's
+    /// own navigation/URL target, distinct from any hyperlink on text
+    /// inside the shape. Action Buttons and "click this icon to
+    /// navigate" shapes carry their entire purpose here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hyperlink: Option<String>,
+    /// Where a *linked* image's bytes live — the external target of a
+    /// picture that references its image instead of embedding it
+    /// (DrawingML `<a:blip r:link>`). Usually a URL; `data` is then `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_url: Option<String>,
+}
+
+impl DocumentIR {
+    /// Write this IR as JSON to `out`, as [`serde_json::to_writer`] does, without
+    /// building the JSON in memory first. Pictures are written as base64
+    /// strings, so an IR with 300 MiB of pictures is written in a few buffers
+    /// instead of one 400 MiB string.
+    pub fn write_json<W: std::io::Write>(&self, out: W) -> serde_json::Result<()> {
+        serde_json::to_writer(out, self)
+    }
+
+    /// This IR as a JSON string, built in a buffer sized for the pictures it
+    /// holds, so the string is not grown by doubling and copied (which is up to
+    /// twice its size in memory at the peak).
+    pub fn to_json_string(&self) -> serde_json::Result<String> {
+        let pictures: u64 = self
+            .sections
+            .iter()
+            .map(|s| image_bytes_in(&s.elements))
+            .fold(0, u64::saturating_add);
+        // Base64 is 4 bytes for every 3; the rest of the JSON is small beside it.
+        let capacity = usize::try_from(pictures / 3 * 4)
+            .unwrap_or(usize::MAX / 2)
+            .saturating_add(64 << 10)
+            .min(usize::MAX / 2);
+        let mut buf = Vec::new();
+        buf.try_reserve_exact(capacity).map_err(|_| {
+            <serde_json::Error as serde::ser::Error>::custom("not enough memory for the IR JSON")
+        })?;
+        serde_json::to_writer(&mut buf, self)?;
+        String::from_utf8(buf).map_err(|_| {
+            <serde_json::Error as serde::ser::Error>::custom("the IR JSON is not valid UTF-8")
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    fn ir_with_pictures(count: usize, each: usize) -> DocumentIR {
+        let image = || {
+            Element::Image(Image {
+                data: Some(vec![7u8; each]),
+                ..Default::default()
+            })
+        };
+        DocumentIR {
+            sections: vec![Section {
+                elements: (0..count).map(|_| image()).collect(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }
+    }
+
+    /// The JSON string is the same as `serde_json::to_string`'s, and its buffer
+    /// was sized for the pictures, not grown by doubling past them.
+    #[test]
+    fn test_ir_json_string_matches_serde_and_is_not_over_allocated() {
+        let ir = ir_with_pictures(5, 300_000);
+        let json = ir.to_json_string().unwrap();
+        assert_eq!(json, serde_json::to_string(&ir).unwrap());
+        assert!(
+            json.capacity() <= json.len() + (128 << 10),
+            "{} bytes of capacity for {} of JSON",
+            json.capacity(),
+            json.len()
+        );
+        let mut written = Vec::new();
+        ir.write_json(&mut written).unwrap();
+        assert_eq!(written, json.as_bytes());
+    }
+
+    #[test]
+    fn test_image_bytes_in_counts_nested_pictures_once_per_place() {
+        let ir = ir_with_pictures(3, 1_000);
+        assert_eq!(image_bytes_in(&ir.sections[0].elements), 3_000);
+        assert_eq!(image_bytes_in(&[]), 0);
+    }
+
+    use super::*;
+
+    /// The compiler-generated drop
+    /// glue recurses through every nested Vec<Element>, so a sufficiently
+    /// deep value overflowed the stack on drop alone, independent of any
+    /// writer's own depth guard (DocumentIR is Deserialize, so this can
+    /// arrive from untrusted input). 100,000 levels of TextBox nesting
+    /// would abort a normal thread's stack under the old recursive drop
+    /// (256 levels was already enough to abort a 2 MiB thread per the
+    /// DepthGuard doc comment) and must complete instantly under the new
+    /// iterative one.
+    #[test]
+    fn test_deeply_nested_element_drops_without_stack_overflow() {
+        let mut inner = Element::Paragraph(Paragraph::default());
+        for _ in 0..100_000 {
+            inner = Element::TextBox(TextBox {
+                content: vec![inner],
+                ..Default::default()
+            });
+        }
+        drop(inner); // must not abort the process
+    }
+
+    /// Same shape, but recursing through `List`/`ListItem::nested`
+    /// instead of `TextBox` — the second recursive path `Drop for
+    /// Element` has to flatten.
+    #[test]
+    fn test_deeply_nested_list_drops_without_stack_overflow() {
+        let mut list = List::default();
+        for _ in 0..100_000 {
+            list = List {
+                items: vec![ListItem {
+                    content: vec![],
+                    nested: Some(list),
+                }],
+                ..Default::default()
+            };
+        }
+        drop(Element::List(list)); // must not abort the process
+    }
+
+    // ── first_inline_font_size_pt ────────────────────────────────────
+
+    #[test]
+    fn test_first_font_size_returns_half_pt_as_pt() {
+        let content = vec![InlineContent::Text(TextSpan {
+            text: "hi".into(),
+            font_size_half_pt: Some(24), // 12pt
+            ..Default::default()
+        })];
+        assert_eq!(first_inline_font_size_pt(&content), Some(12.0));
+    }
+
+    #[test]
+    fn test_first_font_size_picks_first_declared() {
+        // Second span's size is ignored — the first declared one wins.
+        let content = vec![
+            InlineContent::Text(TextSpan {
+                text: "a".into(),
+                font_size_half_pt: Some(20), // 10pt
+                ..Default::default()
+            }),
+            InlineContent::Text(TextSpan {
+                text: "b".into(),
+                font_size_half_pt: Some(48), // 24pt — ignored
+                ..Default::default()
+            }),
+        ];
+        assert_eq!(first_inline_font_size_pt(&content), Some(10.0));
+    }
+
+    #[test]
+    fn test_first_font_size_skips_unsized_runs() {
+        // First run has no size; second does → returns the second's size.
+        let content = vec![
+            InlineContent::Text(TextSpan {
+                text: "a".into(),
+                ..Default::default()
+            }),
+            InlineContent::Text(TextSpan {
+                text: "b".into(),
+                font_size_half_pt: Some(16), // 8pt
+                ..Default::default()
+            }),
+        ];
+        assert_eq!(first_inline_font_size_pt(&content), Some(8.0));
+    }
+
+    #[test]
+    fn test_first_font_size_empty_returns_none() {
+        assert_eq!(first_inline_font_size_pt(&[]), None);
+    }
+
+    #[test]
+    fn test_first_font_size_all_unsized_returns_none() {
+        let content = vec![
+            InlineContent::Text(TextSpan::plain("a")),
+            InlineContent::Text(TextSpan::plain("b")),
+        ];
+        assert_eq!(first_inline_font_size_pt(&content), None);
+    }
+
+    // ── inline_to_element_block ──────────────────────────────────────
+
+    #[test]
+    fn test_inline_to_element_block_empty_returns_empty() {
+        let result = inline_to_element_block(vec![]);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_inline_to_element_block_wraps_in_paragraph() {
+        let inline = vec![InlineContent::Text(TextSpan::plain("hello"))];
+        let result = inline_to_element_block(inline);
+        assert_eq!(result.len(), 1);
+        match &result[0] {
+            Element::Paragraph(p) => {
+                assert_eq!(p.content.len(), 1);
+                assert!(matches!(
+                    &p.content[0],
+                    InlineContent::Text(s) if s.text == "hello"
+                ));
+            },
+            _ => panic!("expected Paragraph"),
+        }
+    }
+
+    // ── build_nested_list ────────────────────────────────────────────
+
+    fn item(level: u8, text: &str) -> (u8, Vec<InlineContent>) {
+        (level, vec![InlineContent::Text(TextSpan::plain(text))])
+    }
+
+    fn list_item_text(item: &ListItem) -> String {
+        let mut out = String::new();
+        for el in &item.content {
+            if let Element::Paragraph(p) = el {
+                for c in &p.content {
+                    if let InlineContent::Text(s) = c {
+                        out.push_str(&s.text);
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn test_build_nested_list_flat() {
+        let items = vec![item(0, "A"), item(0, "B"), item(0, "C")];
+        let list = build_nested_list(false, &items, 0);
+        assert!(!list.ordered);
+        assert_eq!(list.items.len(), 3);
+        assert!(list.items.iter().all(|li| li.nested.is_none()));
+        assert_eq!(list_item_text(&list.items[1]), "B");
+    }
+
+    #[test]
+    fn test_build_nested_list_two_levels() {
+        // Top:   A
+        //   sub: A.1, A.2
+        // Top:   B
+        let items = vec![item(0, "A"), item(1, "A.1"), item(1, "A.2"), item(0, "B")];
+        let list = build_nested_list(true, &items, 0);
+        assert!(list.ordered);
+        assert_eq!(list.items.len(), 2);
+        let nested = list.items[0].nested.as_ref().expect("A has nested");
+        assert_eq!(nested.items.len(), 2);
+        assert_eq!(list_item_text(&nested.items[0]), "A.1");
+        assert_eq!(list_item_text(&nested.items[1]), "A.2");
+        // B has no nested children.
+        assert!(list.items[1].nested.is_none());
+    }
+
+    #[test]
+    fn test_build_nested_list_three_levels() {
+        let items = vec![item(0, "A"), item(1, "A.1"), item(2, "A.1.x"), item(0, "B")];
+        let list = build_nested_list(false, &items, 0);
+        let l1 = list.items[0].nested.as_ref().unwrap();
+        assert_eq!(l1.items.len(), 1);
+        let l2 = l1.items[0].nested.as_ref().unwrap();
+        assert_eq!(l2.items.len(), 1);
+        assert_eq!(list_item_text(&l2.items[0]), "A.1.x");
+    }
+
+    #[test]
+    fn test_build_nested_list_empty() {
+        let list = build_nested_list(false, &[], 0);
+        assert!(list.items.is_empty());
+    }
+
+    // ── TextSpan::plain ──────────────────────────────────────────────
+
+    #[test]
+    fn test_text_span_plain_has_default_styling() {
+        let s = TextSpan::plain("hi");
+        assert_eq!(s.text, "hi");
+        assert!(!s.bold);
+        assert!(!s.italic);
+        assert!(s.font_size_half_pt.is_none());
+        assert!(s.hyperlink.is_none());
+    }
+
+    // ── FramePosition / Shape defaults ───────────────────────────────
+
+    #[test]
+    fn test_shape_default_is_line_at_origin() {
+        let s = Shape::default();
+        assert!(matches!(s.kind, ShapeGeom::Line));
+        assert_eq!(s.x_emu, 0);
+        assert_eq!(s.width_emu, 0);
+        assert!(s.stroke_rgb.is_none());
+    }
+
+    #[test]
+    fn test_frame_position_round_trips_via_serde() {
+        let fp = FramePosition {
+            x_twips: 720,
+            y_twips: 1080,
+            width_twips: 5000,
+            height_twips: 400,
+        };
+        let json = serde_json::to_string(&fp).unwrap();
+        let back: FramePosition = serde_json::from_str(&json).unwrap();
+        assert_eq!(fp, back);
+    }
+
+    /// A list whose items all sit deeper than `base_level` — a list that starts
+    /// indented, e.g. a PowerPoint placeholder whose bullets are all
+    /// `<a:p lvl="1">`. Every item must survive; grouping keyed off
+    /// `base_level` used to keep only the first and silently drop the rest.
+    #[test]
+    fn test_uniformly_indented_run_keeps_every_item() {
+        let items = vec![item(1, "A"), item(1, "B"), item(1, "C")];
+        let list = build_nested_list(false, &items, 0);
+        assert_eq!(list.items.len(), 3, "no item may be dropped");
+        assert_eq!(list_item_text(&list.items[0]), "A");
+        assert_eq!(list_item_text(&list.items[1]), "B");
+        assert_eq!(list_item_text(&list.items[2]), "C");
+        assert!(list.items.iter().all(|li| li.nested.is_none()));
+    }
+
+    /// A shallower item following a deeper run must close the run rather than
+    /// be absorbed into it.
+    #[test]
+    fn test_deeper_run_closes_when_a_shallower_item_follows() {
+        let items = vec![item(1, "A"), item(2, "A.1"), item(1, "B")];
+        let list = build_nested_list(false, &items, 0);
+        assert_eq!(list.items.len(), 2, "A and B are siblings");
+        assert_eq!(list_item_text(&list.items[0]), "A");
+        assert_eq!(list_item_text(&list.items[1]), "B");
+        let nested = list.items[0].nested.as_ref().expect("A has a child");
+        assert_eq!(nested.items.len(), 1);
+        assert_eq!(list_item_text(&nested.items[0]), "A.1");
+    }
+
+    /// Levels that skip a depth (0 then 2) must not lose the deeper item.
+    #[test]
+    fn test_skipped_depth_keeps_the_deeper_item() {
+        let items = vec![item(0, "A"), item(2, "A.1"), item(0, "B")];
+        let list = build_nested_list(false, &items, 0);
+        assert_eq!(list.items.len(), 2);
+        let nested = list.items[0].nested.as_ref().expect("A has a child");
+        assert_eq!(nested.items.len(), 1);
+        assert_eq!(list_item_text(&nested.items[0]), "A.1");
+    }
+}
+
+#[cfg(test)]
+mod serde_shape_tests {
+    use super::*;
+
+    /// `Image::data` went out as serde's default `Vec<u8>` shape — a JSON
+    /// number array — which the pretty-printing surfaces spread over one
+    /// line per byte (a 1.2 MB `.docx` → 140 MB of `ir`). It is a base64
+    /// string now, and the array is still accepted on the way in.
+    #[test]
+    fn test_image_bytes_serialize_as_base64_and_deserialize_from_either_shape() {
+        let image = Image {
+            data: Some(vec![0x89, b'P', b'N', b'G', 0, 1, 2]),
+            ..Image::default()
+        };
+        let json = serde_json::to_string(&image).unwrap();
+        assert!(json.contains(r#""data":"iVBORwABAg==""#), "{json}");
+        assert!(!json.contains('['), "no byte array: {json}");
+        let back: Image = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, image);
+
+        let legacy: Image = serde_json::from_str(r#"{"data":[137,80,78,71,0,1,2]}"#).unwrap();
+        assert_eq!(legacy, image);
+        let absent: Image = serde_json::from_str(r#"{"alt_text":"x"}"#).unwrap();
+        assert_eq!(absent.data, None);
+        let null: Image = serde_json::from_str(r#"{"data":null}"#).unwrap();
+        assert_eq!(null.data, None);
+        assert!(serde_json::from_str::<Image>(r#"{"data":"not base64!"}"#).is_err());
+    }
+
+    /// The JSON form omits fields at their default — every `None` and
+    /// every `false` (`allow_break` at `true`). A 14 MB `.xls` serialised
+    /// to 909 MB pretty-printed when each of 467k cells carried ~30
+    /// null/false keys. Absent keys deserialize back to the same value, so
+    /// the round trip is exact.
+    #[test]
+    fn test_default_fields_are_omitted_and_round_trip() {
+        let plain = TextSpan::plain("x");
+        let json = serde_json::to_string(&InlineContent::Text(plain.clone())).unwrap();
+        assert_eq!(json, r#"{"type":"text","text":"x"}"#, "{json}");
+        let back: InlineContent = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, InlineContent::Text(plain));
+
+        let row = TableRow::default();
+        let json = serde_json::to_string(&row).unwrap();
+        assert_eq!(json, r#"{"cells":[]}"#, "{json}");
+        let back: TableRow = serde_json::from_str(&json).unwrap();
+        assert!(back.allow_break, "the default-true flag must survive omission");
+
+        let mut styled = TextSpan::plain("y");
+        styled.bold = true;
+        styled.color = Some([1, 2, 3]);
+        let json = serde_json::to_string(&styled).unwrap();
+        assert!(json.contains(r#""bold":true"#) && json.contains(r#""color":[1,2,3]"#), "{json}");
+        assert!(!json.contains("italic") && !json.contains("hyperlink"), "{json}");
+    }
+}

@@ -1,0 +1,589 @@
+use std::collections::HashMap;
+
+use quick_xml::Writer;
+use quick_xml::events::{BytesDecl, BytesStart, Event};
+
+use super::error::{Error, Result};
+use super::opc::PartName;
+use super::xml;
+
+/// Standard relationship type URIs (Transitional / ECMA-376).
+pub mod rel_types {
+    /// Relationship type for the main office document part.
+    pub const OFFICE_DOCUMENT: &str =
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument";
+    /// Relationship type for core (Dublin Core) properties.
+    pub const CORE_PROPERTIES: &str =
+        "http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties";
+    /// Relationship type for extended (application) properties.
+    pub const EXTENDED_PROPERTIES: &str =
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties";
+    /// Relationship type for an embedded VBA project (`vbaProject.bin`),
+    /// referenced from the main document part's own `.rels` — presence
+    /// alone is a cheap macro-content signal, no VBA interpretation
+    /// required.
+    pub const VBA_PROJECT: &str =
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/vbaProject";
+    /// The `vbaProject` relationship type Word, Excel and PowerPoint
+    /// actually write ([MS-OI29500] §2.1.6): the VBA project part is a
+    /// Microsoft extension, so its relationship lives in the Microsoft
+    /// namespace. Every real `.docm`/`.xlsm`/`.pptm` carries this one;
+    /// looking for the OOXML-namespace form alone found macros in none.
+    pub const VBA_PROJECT_MS: &str =
+        "http://schemas.microsoft.com/office/2006/relationships/vbaProject";
+    /// Relationship type for custom (user-defined) properties,
+    /// `docProps/custom.xml` (ECMA-376 Part 1 §15.2.12.2).
+    pub const CUSTOM_PROPERTIES: &str =
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/custom-properties";
+    /// Relationship type for the digital signature origin part
+    /// (ECMA-376 Part 2 §13.2.3); its presence marks a signed package.
+    pub const DIGITAL_SIGNATURE_ORIGIN: &str =
+        "http://schemas.openxmlformats.org/package/2006/relationships/digital-signature/origin";
+    /// Relationship type for the package thumbnail.
+    pub const THUMBNAIL: &str =
+        "http://schemas.openxmlformats.org/package/2006/relationships/metadata/thumbnail";
+    /// Relationship type for `styles.xml`.
+    pub const STYLES: &str =
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles";
+    /// Relationship type for `theme/theme1.xml`.
+    pub const THEME: &str =
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme";
+    /// Relationship type for document settings.
+    pub const SETTINGS: &str =
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings";
+    /// Relationship type for the font table.
+    pub const FONT_TABLE: &str =
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/fontTable";
+    /// Relationship type for an individual embedded font program (the
+    /// `<w:embedRegular r:id="…"/>` reference from `fontTable.xml` to a
+    /// `.ttf` part under `word/fonts/`).
+    pub const FONT: &str =
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/font";
+    /// Relationship type for embedded images.
+    pub const IMAGE: &str =
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image";
+    /// Relationship type for a SpreadsheetML / DrawingML drawing part
+    /// (`xl/drawings/drawingN.xml`). Worksheet-to-drawing rel; the
+    /// drawing itself owns IMAGE rels keyed by `<a:blip r:embed=...>`.
+    pub const DRAWING: &str =
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing";
+    /// Relationship type for hyperlinks.
+    pub const HYPERLINK: &str =
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink";
+    /// Relationship type for `numbering.xml`.
+    pub const NUMBERING: &str =
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering";
+    /// Relationship type for comments.
+    pub const COMMENTS: &str =
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments";
+    /// Relationship type for a legacy VML drawing part (comment popup
+    /// shapes).
+    pub const VML_DRAWING: &str =
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/vmlDrawing";
+    /// Relationship type for a modern (Excel 2016+) threaded-comment part
+    /// (`xl/threadedComments/threadedCommentN.xml`), worksheet-to-part.
+    pub const THREADED_COMMENTS: &str =
+        "http://schemas.microsoft.com/office/2017/10/relationships/threadedComment";
+    /// Relationship type for the workbook-level person list
+    /// (`xl/persons/person.xml`), which threaded comments' `personId`
+    /// resolves against.
+    pub const PERSONS: &str = "http://schemas.microsoft.com/office/2017/10/relationships/person";
+    /// Relationship type for document headers.
+    pub const HEADER: &str =
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/header";
+    /// Relationship type for document footers.
+    pub const FOOTER: &str =
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer";
+    /// Relationship type for worksheet parts.
+    pub const WORKSHEET: &str =
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet";
+    /// Relationship type for chartsheet parts ([ECMA-376] §12.3.2) — a
+    /// sheet that is one chart, with no cells.
+    pub const CHARTSHEET: &str =
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/chartsheet";
+    /// Relationship type for dialog sheet parts ([ECMA-376] §12.3.7) — an
+    /// Excel 5.0 dialog, with no cells.
+    pub const DIALOGSHEET: &str =
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/dialogsheet";
+    /// Relationship type for an Excel 4.0 macro sheet part (a Microsoft
+    /// extension: root `xne:macrosheet`, a `CT_Worksheet`, [MS-XLSX]
+    /// §2.2.2.1; the Open XML SDK's `MacroSheetPart`).
+    pub const MACROSHEET: &str =
+        "http://schemas.microsoft.com/office/2006/relationships/xlMacrosheet";
+    /// Relationship type for an Excel 4.0 international macro sheet part
+    /// (the Open XML SDK's `InternationalMacroSheetPart`), the same
+    /// content model as [`MACROSHEET`].
+    pub const INTL_MACROSHEET: &str =
+        "http://schemas.microsoft.com/office/2006/relationships/xlIntlMacrosheet";
+    /// Relationship type for the shared string table.
+    pub const SHARED_STRINGS: &str =
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings";
+    /// Relationship type for slide parts.
+    pub const SLIDE: &str =
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide";
+    /// Relationship type for slide layout parts.
+    pub const SLIDE_LAYOUT: &str =
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout";
+    /// Relationship type for slide master parts.
+    pub const SLIDE_MASTER: &str =
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideMaster";
+    /// Relationship type for the presentation properties part
+    /// (`ppt/presProps.xml`).
+    pub const PRES_PROPS: &str =
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/presProps";
+    /// Relationship type for the notes master part.
+    pub const NOTES_MASTER: &str =
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/notesMaster";
+    /// Relationship type for notes slide parts.
+    pub const NOTES_SLIDE: &str =
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/notesSlide";
+    /// Relationship type for chart parts.
+    pub const CHART: &str =
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart";
+    /// Relationship type for a SmartArt diagram's data part
+    /// (`word/diagrams/dataN.xml`).
+    pub const DIAGRAM_DATA: &str =
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/diagramData";
+    /// Relationship type for an embedded native OOXML package object
+    /// (`<o:OLEObject Type="Embed">` → `word/embeddings/*.xlsx`/`.docx`/`.pptx`).
+    pub const PACKAGE: &str =
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/package";
+    /// Relationship type for the footnotes part.
+    pub const FOOTNOTES: &str =
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/footnotes";
+    /// Relationship type for the endnotes part.
+    pub const ENDNOTES: &str =
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/endnotes";
+}
+
+/// Strict (ISO 29500) relationship type prefix.
+const STRICT_REL_PREFIX: &str = "http://purl.oclc.org/ooxml/officeDocument/relationships/";
+/// Transitional relationship type prefix.
+const TRANSITIONAL_REL_PREFIX: &str =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/";
+
+/// Normalize a Strict relationship type URI to its Transitional equivalent.
+/// Strict uses `http://purl.oclc.org/ooxml/officeDocument/relationships/...`
+/// Transitional uses `http://schemas.openxmlformats.org/officeDocument/2006/relationships/...`
+/// If it's already Transitional or an unrecognized URI, return as-is.
+fn normalize_rel_type(rel_type: String) -> String {
+    if let Some(suffix) = rel_type.strip_prefix(STRICT_REL_PREFIX) {
+        format!("{TRANSITIONAL_REL_PREFIX}{suffix}")
+    } else {
+        rel_type
+    }
+}
+
+/// The longest relationship `Target` accepted, in bytes: 64 KiB.
+///
+/// A target is a part path or a URI. Word itself stops a hyperlink address at
+/// about 2,000 characters and browsers at 2 MiB or less; genuine documents stay
+/// far below 64 KiB even with a `data:` URI. A target is stored once but is
+/// referenced from every hyperlink that names it, so an unbounded one turns
+/// each such reference into a copy of its length: a 2 KB package naming a 1 MB
+/// target from 400 links reached 393 MB. A relationship part holding a longer
+/// target is refused with [`Error::PackageLimit`].
+pub const MAX_RELATIONSHIP_TARGET_BYTES: usize = 64 * 1024;
+
+/// Indicates whether a relationship target is inside or outside the package.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TargetMode {
+    /// Target is another part within the same OPC package.
+    Internal,
+    /// Target is an external resource (e.g., a hyperlink URL).
+    External,
+}
+
+/// A single relationship entry from a `.rels` file.
+#[derive(Debug, Clone)]
+pub struct Relationship {
+    /// Relationship ID (`rId1`, `rId2`, …).
+    pub id: String,
+    /// Relationship type URI.
+    pub rel_type: String,
+    /// Target path or URL. Shared: a reference that resolves to it clones the
+    /// pointer, not the text.
+    pub target: std::sync::Arc<str>,
+    /// Whether the target is internal or external.
+    pub target_mode: TargetMode,
+}
+
+/// Parsed collection of relationships from a `.rels` file.
+#[derive(Debug, Clone)]
+pub struct Relationships {
+    rels: Vec<Relationship>,
+    by_id: HashMap<String, usize>,
+    by_type: HashMap<String, Vec<usize>>,
+    /// Ids that occur more than once, in first-repeat order.
+    duplicate_ids: Vec<String>,
+}
+
+impl Relationships {
+    /// Parse a `.rels` XML file.
+    pub fn parse(xml_data: &[u8]) -> Result<Self> {
+        let mut reader = xml::make_fast_reader(xml_data);
+        let mut rels = Vec::new();
+
+        loop {
+            match reader.read_event()? {
+                Event::Start(ref e) | Event::Empty(ref e)
+                    if e.local_name().as_ref() == "Relationship" =>
+                {
+                    let id = xml::required_attr_str(e, "Id")?.into_owned();
+                    let rel_type =
+                        normalize_rel_type(xml::required_attr_str(e, "Type")?.into_owned());
+                    let target = xml::required_attr_str(e, "Target")?;
+                    if target.len() > MAX_RELATIONSHIP_TARGET_BYTES {
+                        return Err(Error::PackageLimit(format!(
+                            "relationship '{id}' has a Target of {} bytes; the limit is \
+                             {MAX_RELATIONSHIP_TARGET_BYTES}",
+                            target.len()
+                        )));
+                    }
+                    let target: std::sync::Arc<str> = target.into();
+                    let target_mode = match xml::optional_attr_str(e, "TargetMode")? {
+                        Some(ref m) if m.eq_ignore_ascii_case("External") => TargetMode::External,
+                        _ => TargetMode::Internal,
+                    };
+                    rels.push(Relationship {
+                        id,
+                        rel_type,
+                        target,
+                        target_mode,
+                    });
+                },
+                Event::Eof => break,
+                _ => {},
+            }
+        }
+
+        Ok(Self::from_vec(rels))
+    }
+
+    /// Create an empty relationships collection.
+    pub fn empty() -> Self {
+        Self {
+            rels: Vec::new(),
+            by_id: HashMap::new(),
+            by_type: HashMap::new(),
+            duplicate_ids: Vec::new(),
+        }
+    }
+
+    fn from_vec(rels: Vec<Relationship>) -> Self {
+        let mut by_id = HashMap::with_capacity(rels.len());
+        let mut by_type: HashMap<String, Vec<usize>> = HashMap::new();
+        let mut duplicate_ids: Vec<String> = Vec::new();
+        for (i, r) in rels.iter().enumerate() {
+            // Ids must be unique within a part (ECMA-376 Part 2 §9.3.2.2).
+            // When one repeats, Word resolves it to the first occurrence;
+            // do the same, and put the violation on record.
+            match by_id.entry(r.id.clone()) {
+                std::collections::hash_map::Entry::Vacant(v) => {
+                    v.insert(i);
+                },
+                std::collections::hash_map::Entry::Occupied(_) => {
+                    if !duplicate_ids.contains(&r.id) {
+                        log::warn!(
+                            "relationship Id '{}' occurs more than once; the first occurrence is used",
+                            r.id
+                        );
+                        duplicate_ids.push(r.id.clone());
+                    }
+                },
+            }
+            by_type.entry(r.rel_type.clone()).or_default().push(i);
+        }
+        Self {
+            rels,
+            by_id,
+            by_type,
+            duplicate_ids,
+        }
+    }
+
+    /// Relationship Ids that occur more than once in this part. OPC
+    /// forbids this; [`get_by_id`](Self::get_by_id) resolves each such Id
+    /// to its first occurrence, as Word does.
+    pub fn duplicate_ids(&self) -> &[String] {
+        &self.duplicate_ids
+    }
+
+    /// Look up a relationship by its ID.
+    pub fn get_by_id(&self, id: &str) -> Option<&Relationship> {
+        self.by_id.get(id).map(|&i| &self.rels[i])
+    }
+
+    /// Return all relationships with the given type URI.
+    pub fn get_by_type(&self, rel_type: &str) -> Vec<&Relationship> {
+        self.by_type
+            .get(rel_type)
+            .map(|indices| indices.iter().map(|&i| &self.rels[i]).collect())
+            .unwrap_or_default()
+    }
+
+    /// Whether the part carries a VBA project, under either relationship
+    /// type (see [`rel_types::VBA_PROJECT_MS`]).
+    pub fn has_vba_project(&self) -> bool {
+        self.first_by_type(rel_types::VBA_PROJECT_MS).is_some()
+            || self.first_by_type(rel_types::VBA_PROJECT).is_some()
+    }
+
+    /// Return the first relationship with the given type URI.
+    pub fn first_by_type(&self, rel_type: &str) -> Option<&Relationship> {
+        self.by_type
+            .get(rel_type)
+            .and_then(|indices| indices.first().map(|&i| &self.rels[i]))
+    }
+
+    /// Return a slice of all relationships in parse order.
+    pub fn all(&self) -> &[Relationship] {
+        &self.rels
+    }
+
+    /// Resolve an internal relationship target relative to a source part name.
+    ///
+    /// For package-level relationships (source is root), pass a source of `PartName::new("/").ok()`
+    /// or use `resolve_target_from_root`.
+    pub fn resolve_target(&self, id: &str, source: &PartName) -> Result<PartName> {
+        let rel = self
+            .get_by_id(id)
+            .ok_or_else(|| Error::RelationshipNotFound(id.to_string()))?;
+
+        if rel.target_mode == TargetMode::External {
+            return Err(Error::Unsupported(format!(
+                "cannot resolve external target: {}",
+                rel.target
+            )));
+        }
+
+        source.resolve_relative(&rel.target)
+    }
+
+    /// Resolve an internal relationship target relative to the package root.
+    pub fn resolve_target_from_root(&self, id: &str) -> Result<PartName> {
+        let rel = self
+            .get_by_id(id)
+            .ok_or_else(|| Error::RelationshipNotFound(id.to_string()))?;
+
+        if rel.target_mode == TargetMode::External {
+            return Err(Error::Unsupported(format!(
+                "cannot resolve external target: {}",
+                rel.target
+            )));
+        }
+
+        // Package-level targets are relative to root
+        let target = if rel.target.starts_with('/') {
+            rel.target.to_string()
+        } else {
+            format!("/{}", rel.target)
+        };
+        PartName::new(&target)
+    }
+}
+
+/// Builder for constructing relationship XML for the write path.
+#[derive(Debug, Clone)]
+pub struct RelationshipsBuilder {
+    rels: Vec<Relationship>,
+    next_id: u32,
+}
+
+impl RelationshipsBuilder {
+    /// Create an empty builder.
+    pub fn new() -> Self {
+        Self {
+            rels: Vec::new(),
+            next_id: 1,
+        }
+    }
+
+    /// Add a relationship and return the generated rId.
+    pub fn add(&mut self, rel_type: &str, target: &str) -> String {
+        self.add_with_mode(rel_type, target, TargetMode::Internal)
+    }
+
+    /// Add a relationship with explicit target mode and return the generated rId.
+    pub fn add_with_mode(
+        &mut self,
+        rel_type: &str,
+        target: &str,
+        target_mode: TargetMode,
+    ) -> String {
+        let id = format!("rId{}", self.next_id);
+        self.next_id += 1;
+        self.rels.push(Relationship {
+            id: id.clone(),
+            rel_type: rel_type.to_string(),
+            target: target.into(),
+            target_mode,
+        });
+        id
+    }
+
+    /// Add a relationship with an explicit ID (for round-trip preservation).
+    pub fn add_with_id(&mut self, id: &str, rel_type: &str, target: &str, target_mode: TargetMode) {
+        self.rels.push(Relationship {
+            id: id.to_string(),
+            rel_type: rel_type.to_string(),
+            target: target.into(),
+            target_mode,
+        });
+    }
+
+    /// Returns `true` if no relationships have been added.
+    pub fn is_empty(&self) -> bool {
+        self.rels.is_empty()
+    }
+
+    /// Serialize to `.rels` XML bytes.
+    pub fn serialize(&self) -> Vec<u8> {
+        let mut writer = Writer::new_with_indent(Vec::new(), b' ', 2);
+
+        writer
+            .write_event(Event::Decl(BytesDecl::new("1.0", Some("UTF-8"), Some("yes"))))
+            .expect("write decl");
+
+        let mut root = BytesStart::new("Relationships");
+        root.push_attribute((
+            "xmlns",
+            "http://schemas.openxmlformats.org/package/2006/relationships",
+        ));
+        writer.write_event(Event::Start(root)).expect("write start");
+
+        for rel in &self.rels {
+            let mut elem = BytesStart::new("Relationship");
+            elem.push_attribute(("Id", rel.id.as_str()));
+            elem.push_attribute(("Type", rel.rel_type.as_str()));
+            elem.push_attribute(("Target", encode_target_controls(&rel.target).as_ref()));
+            if rel.target_mode == TargetMode::External {
+                elem.push_attribute(("TargetMode", "External"));
+            }
+            writer.write_event(Event::Empty(elem)).expect("write rel");
+        }
+
+        writer
+            .write_event(Event::End(quick_xml::events::BytesEnd::new("Relationships")))
+            .expect("write end");
+
+        writer.into_inner()
+    }
+}
+
+/// Percent-encode the characters a relationship `Target` cannot hold as
+/// XML: C0 controls (other than tab, LF, CR) have no representation in
+/// XML 1.0, and a URI must percent-encode controls anyway (RFC 3986 §2.1),
+/// so encoding them keeps the target meaningful where deleting them would
+/// silently change it.
+fn encode_target_controls(target: &str) -> std::borrow::Cow<'_, str> {
+    let illegal = |c: char| (c as u32) < 0x20 && !matches!(c, '\t' | '\n' | '\r');
+    if !target.chars().any(illegal) {
+        return std::borrow::Cow::Borrowed(target);
+    }
+    let mut out = String::with_capacity(target.len() + 8);
+    for c in target.chars() {
+        if illegal(c) {
+            out.push_str(&format!("%{:02X}", c as u32));
+        } else {
+            out.push(c);
+        }
+    }
+    std::borrow::Cow::Owned(out)
+}
+
+impl Default for RelationshipsBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SAMPLE_RELS: &[u8] = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1"
+    Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument"
+    Target="word/document.xml"/>
+  <Relationship Id="rId2"
+    Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties"
+    Target="docProps/core.xml"/>
+  <Relationship Id="rId3"
+    Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties"
+    Target="docProps/app.xml"/>
+</Relationships>"#;
+
+    #[test]
+    fn test_parse_relationships() {
+        let rels = Relationships::parse(SAMPLE_RELS).unwrap();
+        assert_eq!(rels.all().len(), 3);
+    }
+
+    #[test]
+    fn test_get_by_id() {
+        let rels = Relationships::parse(SAMPLE_RELS).unwrap();
+        let r = rels.get_by_id("rId1").unwrap();
+        assert_eq!(&*r.target, "word/document.xml");
+        assert_eq!(r.target_mode, TargetMode::Internal);
+    }
+
+    #[test]
+    fn test_get_by_type() {
+        let rels = Relationships::parse(SAMPLE_RELS).unwrap();
+        let docs = rels.get_by_type(rel_types::OFFICE_DOCUMENT);
+        assert_eq!(docs.len(), 1);
+        assert_eq!(&*docs[0].target, "word/document.xml");
+    }
+
+    #[test]
+    fn test_first_by_type() {
+        let rels = Relationships::parse(SAMPLE_RELS).unwrap();
+        let r = rels.first_by_type(rel_types::CORE_PROPERTIES).unwrap();
+        assert_eq!(&*r.target, "docProps/core.xml");
+    }
+
+    #[test]
+    fn test_resolve_target_from_root() {
+        let rels = Relationships::parse(SAMPLE_RELS).unwrap();
+        let pn = rels.resolve_target_from_root("rId1").unwrap();
+        assert_eq!(pn.as_str(), "/word/document.xml");
+    }
+
+    #[test]
+    fn test_builder_round_trip() {
+        let mut builder = RelationshipsBuilder::new();
+        let id = builder.add(rel_types::OFFICE_DOCUMENT, "word/document.xml");
+        assert_eq!(id, "rId1");
+
+        let xml = builder.serialize();
+        let rels = Relationships::parse(&xml).unwrap();
+        assert_eq!(rels.all().len(), 1);
+        assert_eq!(rels.get_by_id("rId1").unwrap().rel_type, rel_types::OFFICE_DOCUMENT);
+    }
+
+    /// OPC requires relationship Ids to be unique within a part
+    /// (ECMA-376 Part 2 §9.3.2.2). When a producer repeats one, Word
+    /// resolves the Id to its first occurrence; resolving to the last
+    /// made header/image/hyperlink lookups diverge from Word.
+    #[test]
+    fn test_duplicate_relationship_id_resolves_to_the_first_and_is_reported() {
+        let xml = br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/first.png"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/other.png"/>
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/second.png"/>
+</Relationships>"#;
+        let rels = Relationships::parse(xml).unwrap();
+        assert_eq!(rels.get_by_id("rId1").unwrap().target.as_ref(), "media/first.png");
+        assert_eq!(rels.duplicate_ids(), ["rId1".to_string()]);
+        // The edit path writes the relationships back verbatim.
+        assert_eq!(rels.all().len(), 3);
+
+        let clean = Relationships::parse(
+            br#"<Relationships><Relationship Id="rId1" Type="t" Target="a"/></Relationships>"#,
+        )
+        .unwrap();
+        assert!(clean.duplicate_ids().is_empty());
+    }
+}

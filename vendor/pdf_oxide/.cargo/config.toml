@@ -1,0 +1,3 @@
+# Per-target linker flags are applied via build.rs using cargo:rustc-cdylib-link-arg
+# so they affect only the final cdylib link, not build scripts.
+# See build.rs for the __memcmpeq glibc 2.35 shim (issue #416).

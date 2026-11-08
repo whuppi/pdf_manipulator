@@ -1,0 +1,1298 @@
+use std::borrow::Cow;
+
+use quick_xml::NsReader;
+use quick_xml::events::BytesStart;
+use quick_xml::name::{Namespace, ResolveResult};
+
+use super::error::{Error, Result};
+
+/// OOXML namespace URI constants. Match by URI, never by prefix.
+pub mod ns {
+    // OPC package namespaces
+    /// `[Content_Types].xml` namespace.
+    pub const CONTENT_TYPES: &str = "http://schemas.openxmlformats.org/package/2006/content-types";
+    /// `.rels` relationships namespace.
+    pub const RELATIONSHIPS: &str = "http://schemas.openxmlformats.org/package/2006/relationships";
+    /// Core properties namespace.
+    pub const CORE_PROPERTIES: &str =
+        "http://schemas.openxmlformats.org/package/2006/metadata/core-properties";
+
+    // Dublin Core
+    /// Dublin Core elements namespace.
+    pub const DC: &str = "http://purl.org/dc/elements/1.1/";
+    /// Dublin Core terms namespace.
+    pub const DC_TERMS: &str = "http://purl.org/dc/terms/";
+
+    // DrawingML
+    /// DrawingML main namespace (`a:` prefix).
+    pub const DRAWING_ML: &str = "http://schemas.openxmlformats.org/drawingml/2006/main";
+
+    // Format-specific
+    /// WordprocessingML namespace (`w:` prefix).
+    pub const WML: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+    /// SpreadsheetML namespace (`x:` prefix).
+    pub const SML: &str = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+    /// PresentationML namespace (`p:` prefix).
+    pub const PML: &str = "http://schemas.openxmlformats.org/presentationml/2006/main";
+
+    // Office document relationships (r: prefix in content XML)
+    /// Relationships namespace used inline in content XML (`r:` prefix).
+    pub const R: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+
+    // Extended properties
+    /// Extended (application) properties namespace.
+    pub const EXTENDED_PROPERTIES: &str =
+        "http://schemas.openxmlformats.org/officeDocument/2006/extended-properties";
+
+    // Aliases kept for the XML writers, which predate the constants above
+    // being `&str`.
+    /// Alias of [`WML`].
+    pub const WML_STR: &str = WML;
+    /// Alias of [`SML`].
+    pub const SML_STR: &str = SML;
+    /// Alias of [`PML`].
+    pub const PML_STR: &str = PML;
+    /// Alias of [`DRAWING_ML`].
+    pub const DRAWING_ML_STR: &str = DRAWING_ML;
+    /// Alias of [`R`].
+    pub const R_STR: &str = R;
+
+    // Strict OOXML variants
+    /// ISO 29500 Strict variant of `WML`.
+    pub const STRICT_WML: &str = "http://purl.oclc.org/ooxml/wordprocessingml/main";
+    /// ISO 29500 Strict variant of `SML`.
+    pub const STRICT_SML: &str = "http://purl.oclc.org/ooxml/spreadsheetml/main";
+    /// ISO 29500 Strict variant of `PML`.
+    pub const STRICT_PML: &str = "http://purl.oclc.org/ooxml/presentationml/main";
+    /// ISO 29500 Strict variant of `DRAWING_ML`.
+    pub const STRICT_DRAWING: &str = "http://purl.oclc.org/ooxml/drawingml/main";
+    /// ISO 29500 Strict variant of `R`.
+    pub const STRICT_R: &str = "http://purl.oclc.org/ooxml/officeDocument/relationships";
+
+    // DrawingML sub-vocabularies (ISO/IEC 29500-1:2016 Annex A lists the
+    // Transitional and Strict URI of each schema side by side).
+    /// DrawingML charts (`c:` prefix).
+    pub const CHART: &str = "http://schemas.openxmlformats.org/drawingml/2006/chart";
+    /// ISO 29500 Strict variant of `CHART`.
+    pub const STRICT_CHART: &str = "http://purl.oclc.org/ooxml/drawingml/chart";
+    /// DrawingML WordprocessingML drawing (`wp:` prefix).
+    pub const WORDPROCESSING_DRAWING: &str =
+        "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing";
+    /// ISO 29500 Strict variant of `WORDPROCESSING_DRAWING`.
+    pub const STRICT_WORDPROCESSING_DRAWING: &str =
+        "http://purl.oclc.org/ooxml/drawingml/wordprocessingDrawing";
+    /// DrawingML SpreadsheetML drawing (`xdr:` prefix).
+    pub const SPREADSHEET_DRAWING: &str =
+        "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing";
+    /// ISO 29500 Strict variant of `SPREADSHEET_DRAWING`.
+    pub const STRICT_SPREADSHEET_DRAWING: &str =
+        "http://purl.oclc.org/ooxml/drawingml/spreadsheetDrawing";
+    /// DrawingML pictures (`pic:` prefix).
+    pub const PICTURE: &str = "http://schemas.openxmlformats.org/drawingml/2006/picture";
+    /// ISO 29500 Strict variant of `PICTURE`.
+    pub const STRICT_PICTURE: &str = "http://purl.oclc.org/ooxml/drawingml/picture";
+    /// DrawingML diagrams / SmartArt (`dgm:` prefix).
+    pub const DIAGRAM: &str = "http://schemas.openxmlformats.org/drawingml/2006/diagram";
+    /// ISO 29500 Strict variant of `DIAGRAM`.
+    pub const STRICT_DIAGRAM: &str = "http://purl.oclc.org/ooxml/drawingml/diagram";
+}
+
+/// Return the Strict namespace variant for a Transitional namespace, if one exists.
+/// This enables transparent parsing of both ISO 29500 Strict and ECMA-376 Transitional documents.
+fn strict_alternate(ns: &str) -> Option<&'static str> {
+    match ns {
+        x if x == ns::WML => Some(ns::STRICT_WML),
+        x if x == ns::SML => Some(ns::STRICT_SML),
+        x if x == ns::PML => Some(ns::STRICT_PML),
+        x if x == ns::DRAWING_ML => Some(ns::STRICT_DRAWING),
+        x if x == ns::R => Some(ns::STRICT_R),
+        x if x == ns::CHART => Some(ns::STRICT_CHART),
+        x if x == ns::WORDPROCESSING_DRAWING => Some(ns::STRICT_WORDPROCESSING_DRAWING),
+        x if x == ns::SPREADSHEET_DRAWING => Some(ns::STRICT_SPREADSHEET_DRAWING),
+        x if x == ns::PICTURE => Some(ns::STRICT_PICTURE),
+        x if x == ns::DIAGRAM => Some(ns::STRICT_DIAGRAM),
+        _ => None,
+    }
+}
+
+/// Check if a resolved namespace + local name matches expected values.
+/// Also matches the Strict (ISO 29500) variant of the namespace.
+pub fn matches_start(resolve: &ResolveResult, start: &BytesStart, ns: &str, local: &str) -> bool {
+    start.local_name().as_ref() == local
+        && match resolve {
+            ResolveResult::Bound(Namespace(n)) => {
+                *n == ns || strict_alternate(ns).is_some_and(|s| *n == s)
+            },
+            _ => false,
+        }
+}
+
+/// Check if a resolved namespace matches, ignoring local name.
+/// Also matches the Strict (ISO 29500) variant of the namespace.
+pub fn matches_ns(resolve: &ResolveResult, ns: &str) -> bool {
+    match resolve {
+        ResolveResult::Bound(Namespace(n)) => {
+            *n == ns || strict_alternate(ns).is_some_and(|s| *n == s)
+        },
+        _ => false,
+    }
+}
+
+/// Get a required attribute value, returning Error::MissingAttribute if absent.
+pub fn required_attr<'a>(event: &'a BytesStart, key: &str) -> Result<Cow<'a, str>> {
+    match optional_attr(event, key)? {
+        Some(value) => Ok(value),
+        None => Err(Error::MissingAttribute {
+            element: event.local_name().as_ref().to_string(),
+            attr: key.to_string(),
+        }),
+    }
+}
+
+/// Get a required attribute as a UTF-8 string, with XML entity references
+/// resolved. See [`optional_attr_str`] for why the unescape matters.
+pub fn required_attr_str<'a>(event: &'a BytesStart, key: &str) -> Result<Cow<'a, str>> {
+    unescape_cow(required_attr(event, key)?)
+}
+
+/// Resolve XML entity references in an attribute value, borrowing when the
+/// value contains none (the overwhelmingly common case).
+fn unescape_cow(text: Cow<'_, str>) -> Result<Cow<'_, str>> {
+    if !text.contains('&') {
+        return Ok(text);
+    }
+    let unescaped = quick_xml::escape::unescape(&text).map_err(quick_xml::Error::from)?;
+    Ok(Cow::Owned(unescaped.into_owned()))
+}
+
+/// Every attribute of `e` in one pass, as `(key, raw value)` — entity
+/// references left as written; see [`attrs`] for the resolved form.
+///
+/// quick-xml's own duplicate check keeps the keys it has seen in a `Vec`,
+/// so every `try_get_attribute` was a heap allocation — the last one in the
+/// worksheet cell loop, and thousands per document across the `w:val`
+/// reads of the property parsers. The check below is the same rule without
+/// the heap: real tags have a handful of attributes, so a fixed window of
+/// seen keys covers them, and a duplicate is still an error.
+fn raw_attrs<'a>(
+    e: &'a BytesStart<'_>,
+) -> impl Iterator<Item = Result<(&'a str, Cow<'a, str>)>> + 'a {
+    let mut seen: [&'a str; 16] = [""; 16];
+    let mut seen_len = 0usize;
+    let mut attributes = e.attributes();
+    attributes.with_checks(false);
+    attributes.map(move |attr| {
+        let attr = attr?;
+        let key = attr.key.0;
+        if seen[..seen_len].contains(&key) {
+            return Err(quick_xml::events::attributes::AttrError::Duplicated(0, 0).into());
+        }
+        if seen_len < seen.len() {
+            seen[seen_len] = key;
+            seen_len += 1;
+        }
+        Ok((key, attr.value))
+    })
+}
+
+/// Every attribute of `e` in one pass, as `(key, value)` with entity
+/// references resolved, borrowing the value whenever it contains none.
+///
+/// `try_get_attribute` re-parses the attribute list from its start on every
+/// call, so reading N keys off an M-attribute tag costs N·M attribute
+/// parses. In the worksheet cell loop and the DOCX property parsers that
+/// was a quarter of the whole run; a single pass with a `match` on the key
+/// is the shape the hot loops use instead. A malformed attribute is an
+/// error here exactly as it is through the per-key helpers.
+pub fn attrs<'a>(
+    e: &'a BytesStart<'_>,
+) -> impl Iterator<Item = Result<(&'a str, Cow<'a, str>)>> + 'a {
+    raw_attrs(e).map(|attr| {
+        let (key, value) = attr?;
+        Ok((key, unescape_cow(value)?))
+    })
+}
+
+/// Get an optional attribute value (entity references left as written).
+pub fn optional_attr<'a>(event: &'a BytesStart, key: &str) -> Result<Option<Cow<'a, str>>> {
+    for attr in raw_attrs(event) {
+        let (k, value) = attr?;
+        if k == key {
+            return Ok(Some(value));
+        }
+    }
+    Ok(None)
+}
+
+/// Get an optional attribute as a UTF-8 string, with XML entity references
+/// resolved.
+///
+/// The raw bytes quick-xml hands back are still escaped: a `formatCode`
+/// written as `#,##0,,&quot; M&quot;` arrives with the six literal
+/// characters `&quot;` in place of each `"`. Every consumer that inspects
+/// the value then sees text that is not in the document — the number-format
+/// scanner read the `M` of `&quot; M&quot;` as a month token and rendered
+/// 12,500,000 as the date 36123-11-01 — and every URL, alt text and style
+/// name kept its `&amp;` verbatim.
+pub fn optional_attr_str<'a>(event: &'a BytesStart, key: &str) -> Result<Option<Cow<'a, str>>> {
+    optional_attr(event, key)?.map(unescape_cow).transpose()
+}
+
+/// Get an optional prefixed attribute by local name, trying all namespace prefixes.
+/// For example, `optional_prefixed_attr_str(e, "id")` matches `r:id`, `d3p1:id`, etc.
+/// Falls back to unprefixed `id` if no prefixed match is found.
+pub fn optional_prefixed_attr_str<'a>(
+    event: &'a BytesStart,
+    local_name: &str,
+) -> Result<Option<Cow<'a, str>>> {
+    for attr in event.attributes().flatten() {
+        let key = attr.key.as_ref();
+        // Check prefixed: look for `:localname` at the end
+        if let Some((_, rest)) = key.split_once(':') {
+            if rest == local_name {
+                return Ok(Some(Cow::Owned(unescape_attr_value(&attr)?)));
+            }
+        } else if key == local_name {
+            return Ok(Some(Cow::Owned(unescape_attr_value(&attr)?)));
+        }
+    }
+    Ok(None)
+}
+
+/// Parse an OOXML boolean toggle element.
+///
+/// Bare element (`<b/>`) = true, `val="0"` / `val="false"` / `val="off"` = false.
+/// The `attr_name` is typically `"w:val"` (WML) or `"val"` (SML/DrawingML).
+pub fn parse_toggle(e: &BytesStart, attr_name: &str) -> bool {
+    match optional_attr_str(e, attr_name) {
+        Ok(Some(ref val)) => !matches!(val.as_ref(), "0" | "false" | "off"),
+        _ => true,
+    }
+}
+
+/// Read text content between start and end tags, consuming through the matching end tag.
+pub fn read_text_content(reader: &mut NsReader<&[u8]>) -> Result<String> {
+    use quick_xml::events::Event;
+    let mut text = String::new();
+    let mut depth = 1u32;
+    loop {
+        match reader.read_event()? {
+            Event::Text(e) => {
+                text.push_str(&unescape_text(&e)?);
+            },
+            Event::GeneralRef(e) => {
+                text.push_str(&resolve_general_ref(&e)?);
+            },
+            Event::CData(e) => {
+                text.push_str(&e);
+            },
+            Event::Start(_) => depth += 1,
+            Event::End(_) => {
+                depth -= 1;
+                if depth == 0 {
+                    break;
+                }
+            },
+            Event::Eof => break,
+            _ => {},
+        }
+    }
+    Ok(text)
+}
+
+/// Skip over the current element and all its children (consumes through matching end tag).
+pub fn skip_element(reader: &mut NsReader<&[u8]>) -> Result<()> {
+    use quick_xml::events::Event;
+    let mut depth = 1u32;
+    loop {
+        match reader.read_event()? {
+            Event::Start(_) => depth += 1,
+            Event::End(_) => {
+                depth -= 1;
+                if depth == 0 {
+                    break;
+                }
+            },
+            Event::Eof => break,
+            _ => {},
+        }
+    }
+    Ok(())
+}
+
+/// Create an NsReader configured for OOXML parsing.
+pub fn make_reader(xml: &[u8]) -> NsReader<&[u8]> {
+    let mut reader = NsReader::from_reader(xml);
+    let config = reader.config_mut();
+    config.trim_text(true);
+    config.check_end_names = false;
+    config.check_comments = false;
+    reader
+}
+
+// ===========================================================================
+// Fast Reader utilities (no namespace resolution — for hot-path parsing)
+// ===========================================================================
+
+/// Unescape a `BytesText` event into an owned string.
+///
+/// quick-xml hands text events over as already-validated UTF-8 (the reader
+/// rejects anything else), so only the entity references remain to be
+/// resolved. `EscapeError` goes through `quick_xml::Error` to reach our
+/// `core::Error`.
+pub fn unescape_text(e: &quick_xml::events::BytesText<'_>) -> Result<String> {
+    let unescaped = quick_xml::escape::unescape(e).map_err(quick_xml::Error::from)?;
+    Ok(unescaped.into_owned())
+}
+
+/// Unescape an `Attribute` value into an owned string.
+///
+/// `Attribute::unescape_value()` is deprecated and, under quick-xml's
+/// `encoding` feature, `cfg`-compiled out entirely. Feature unification can
+/// turn `encoding` on transitively (e.g. via `calamine`), so relying on it
+/// makes the build fragile. Resolving the entity references (`&amp;`,
+/// `&lt;`, …) explicitly mirrors `unescape_text` above and is independent
+/// of that feature.
+///
+/// One deliberate difference from `unescape_value()`: that method additionally
+/// applied XML attribute-value whitespace normalization (a *literal* tab/CR/LF
+/// inside a value collapses to a space), which `escape::unescape` does not do.
+/// This never affects real OOXML — attribute values do not contain literal
+/// control whitespace, and character references (`&#9;`, `&#10;`) are unescaped
+/// identically either way.
+pub fn unescape_attr_value(attr: &quick_xml::events::attributes::Attribute<'_>) -> Result<String> {
+    let unescaped = quick_xml::escape::unescape(&attr.value).map_err(quick_xml::Error::from)?;
+    Ok(unescaped.into_owned())
+}
+
+/// The part of a damaged XML part that is well-formed: the data up to the end
+/// of the last complete element whose parent chain is exactly `depth`
+/// elements deep (`depth` 2 for the children of `<w:body>` in a
+/// `<w:document>`, 3 for the shapes under `<p:spTree>` of a slide), closed with
+/// the end tags of the elements still open there, and how many such elements
+/// it holds.
+///
+/// `None` when the data is not damaged (an end tag that does not match, a
+/// syntax error, or an element still open at the end) or holds no complete
+/// element at that depth: the caller keeps its error.
+///
+/// `container` names the element (by local name) whose children are counted,
+/// when the depth alone would also count children of a sibling at the same
+/// depth (`w:background` beside `w:body`); `skip` names children that are not
+/// content (`p:nvGrpSpPr` and `p:grpSpPr` open every `p:spTree`). An element the damage
+/// reaches is never kept, so none is ever cut in two. The stack of open names
+/// is bounded by the data it came from.
+pub(crate) fn salvage_prefix(
+    data: &[u8],
+    depth: usize,
+    container: Option<&str>,
+    skip: &[&str],
+) -> Option<(Vec<u8>, usize)> {
+    let local =
+        |name: &[u8]| -> Vec<u8> { name.rsplit(|&b| b == b':').next().unwrap_or(name).to_vec() };
+    // Whether a child called `child` of the current innermost element is
+    // content to count.
+    let counts = |parent: Option<&Vec<u8>>, child: &[u8]| -> bool {
+        let in_container =
+            container.is_none_or(|c| parent.is_some_and(|p| local(p) == c.as_bytes()));
+        in_container && !skip.iter().any(|s| local(child) == s.as_bytes())
+    };
+    let mut reader = quick_xml::Reader::from_reader(data);
+    let config = reader.config_mut();
+    config.trim_text(true);
+    config.check_comments = false;
+    // `check_end_names` stays on: a mismatched end tag is the damage.
+    let mut open: Vec<Vec<u8>> = Vec::new();
+    let mut cut: Option<(usize, Vec<Vec<u8>>)> = None;
+    let mut kept = 0usize;
+    let damaged;
+    loop {
+        match reader.read_event() {
+            Ok(quick_xml::events::Event::Start(e)) => {
+                open.push(e.name().as_ref().as_bytes().to_vec());
+            },
+            Ok(quick_xml::events::Event::End(_)) => {
+                let closed = open.pop();
+                if open.len() == depth && closed.is_some_and(|c| counts(open.last(), &c)) {
+                    kept += 1;
+                    cut = Some((reader.buffer_position() as usize, open.clone()));
+                }
+            },
+            Ok(quick_xml::events::Event::Empty(e))
+                if open.len() == depth && counts(open.last(), e.name().as_ref().as_bytes()) =>
+            {
+                kept += 1;
+                cut = Some((reader.buffer_position() as usize, open.clone()));
+            },
+            Ok(quick_xml::events::Event::Eof) => {
+                damaged = !open.is_empty();
+                break;
+            },
+            Err(_) => {
+                damaged = true;
+                break;
+            },
+            Ok(_) => {},
+        }
+    }
+    if !damaged {
+        return None;
+    }
+    let (end, open) = cut?;
+    let mut out = Vec::with_capacity(end + 64);
+    out.extend_from_slice(data.get(..end)?);
+    for name in open.iter().rev() {
+        out.extend_from_slice(b"</");
+        out.extend_from_slice(name);
+        out.push(b'>');
+    }
+    Some((out, kept))
+}
+
+/// Fail when an XML part ends before its root element is closed.
+///
+/// A parse loop that breaks on `Event::Eof` returns whatever it read, so a
+/// `document.xml` cut off mid-element by a failed download or a truncated
+/// upload produced a document that looked complete and was not, with no
+/// signal at all. Checking that the closing tag is present is cheap — the
+/// root close is always the last markup in the part, so only the tail is
+/// scanned — and catches exactly that case without a second full parse.
+pub fn check_root_closed(data: &[u8], part: &str, root_local: &str) -> Result<()> {
+    // The root close is always the last markup in the part, so only the
+    // tail is scanned. Small parts are scanned whole.
+    const TAIL: usize = 64 * 1024;
+    let tail = &data[data.len().saturating_sub(TAIL)..];
+    let needle = format!("{root_local}>");
+    let needle = needle.as_bytes();
+
+    // Accept `</root>` and `</prefix:root>`: find the local-name-plus-`>`
+    // and require it to be the *whole* local name — immediately after `</`
+    // or after a `prefix:` — so `</otherroot>` does not pass for `</root>`.
+    let found = tail
+        .windows(needle.len())
+        .enumerate()
+        .filter(|(_, w)| *w == needle)
+        .any(|(i, _)| {
+            let before = &tail[i.saturating_sub(24)..i];
+            match before.iter().rposition(|&b| b == b'<') {
+                Some(lt) => {
+                    let between = &before[lt..];
+                    let Some(prefix) = between.strip_prefix(b"</") else {
+                        return false;
+                    };
+                    match prefix.split_last() {
+                        None => true,
+                        Some((b':', name)) => {
+                            !name.is_empty()
+                                && name.iter().all(|&b| {
+                                    !b.is_ascii_whitespace()
+                                        && !matches!(b, b'<' | b'>' | b':' | b'/')
+                                })
+                        },
+                        Some(_) => false,
+                    }
+                },
+                None => false,
+            }
+        });
+    if found {
+        Ok(())
+    } else {
+        Err(Error::TruncatedPart(part.to_string()))
+    }
+}
+
+/// The prefixes bound to an expected namespace by a part's root element.
+///
+/// Element dispatch throughout this crate matches on *local name* only, so
+/// an element from any namespace whose local name happens to match is
+/// parsed as if it were the real thing: a `<evil:p><evil:r><evil:t>` inside
+/// a `w:body` extracted as ordinary document text that Word never renders.
+/// This records which prefixes the root actually bound to the format's
+/// namespace so the content parsers can skip everything else.
+#[derive(Debug, Clone, Default)]
+pub struct NsGuard {
+    /// Prefixes bound to the expected namespace. An empty `Vec` with
+    /// `permissive` set means "accept everything".
+    prefixes: Vec<String>,
+    /// Set when the part declared no usable namespace at all, in which case
+    /// filtering would reject the whole document. Hand-written and minimal
+    /// fixtures do this routinely.
+    permissive: bool,
+}
+
+impl NsGuard {
+    /// A guard that accepts every element. Used where a part's root has not
+    /// been inspected.
+    pub fn permissive() -> Self {
+        Self {
+            prefixes: Vec::new(),
+            permissive: true,
+        }
+    }
+
+    /// Build a guard from a part's root start tag.
+    ///
+    /// `expected` are the namespace URIs that count as the format's own
+    /// (Transitional and Strict). Returns `Err` when the root binds its own
+    /// prefix to something else entirely — a document claiming to be
+    /// WordprocessingML while its `w:` prefix points elsewhere is not the
+    /// format it says it is.
+    pub fn from_root(root: &BytesStart, expected: &[&str], format: &str) -> Result<Self> {
+        let root_prefix = root
+            .name()
+            .as_ref()
+            .split_once(':')
+            .map(|(p, _)| p.to_string());
+
+        let mut prefixes = Vec::new();
+        let mut root_prefix_bound_elsewhere = false;
+        for attr in root.attributes().flatten() {
+            let key = attr.key.as_ref();
+            let (prefix, is_ns) = if key == "xmlns" {
+                (String::new(), true)
+            } else if let Some(rest) = key.strip_prefix("xmlns:") {
+                (rest.to_string(), true)
+            } else {
+                (String::new(), false)
+            };
+            if !is_ns {
+                continue;
+            }
+            if expected.iter().any(|e| *e == attr.value.as_ref()) {
+                prefixes.push(prefix);
+            } else if root_prefix.as_deref() == Some(prefix.as_str()) {
+                root_prefix_bound_elsewhere = true;
+            }
+        }
+
+        if prefixes.is_empty() {
+            if root_prefix_bound_elsewhere {
+                return Err(Error::MalformedXml(format!(
+                    "root element's namespace is not {format}"
+                )));
+            }
+            // No namespace declaration at all — accept, so minimal
+            // hand-written parts keep working.
+            return Ok(Self::permissive());
+        }
+        Ok(Self {
+            prefixes,
+            permissive: false,
+        })
+    }
+
+    /// Whether an element belongs to the expected namespace.
+    pub fn accepts(&self, e: &BytesStart) -> bool {
+        if self.permissive {
+            return true;
+        }
+        let name = e.name();
+        let prefix = name.as_ref().split_once(':').map_or("", |(p, _)| p);
+        self.prefixes.iter().any(|p| p == prefix)
+    }
+}
+
+/// Strip characters XML 1.0 forbids from a text value.
+///
+/// XML 1.0 §2.2 permits only tab, LF, CR and `U+0020..` (minus the
+/// surrogate and non-character ranges) — every other C0 control is
+/// unrepresentable, *including* as a numeric character reference. Writing
+/// one produces a file that Word, Excel and LibreOffice all reject as
+/// corrupt, and such characters arrive routinely from PDF text extraction
+/// and from database exports. Dropping them is the only lossless-enough
+/// option: there is no escape that would round-trip.
+pub fn sanitize_xml_text(s: &str) -> std::borrow::Cow<'_, str> {
+    fn allowed(c: char) -> bool {
+        matches!(c,
+            '\u{09}' | '\u{0A}' | '\u{0D}'
+            | '\u{20}'..='\u{D7FF}'
+            | '\u{E000}'..='\u{FFFD}'
+            | '\u{10000}'..='\u{10FFFF}'
+        )
+    }
+    if s.chars().all(allowed) {
+        return std::borrow::Cow::Borrowed(s);
+    }
+    std::borrow::Cow::Owned(s.chars().filter(|&c| allowed(c)).collect())
+}
+
+/// Maximum element-nesting depth accepted by the recursive-descent parsers.
+///
+/// Without a cap, a small `.docx` holding a few thousand nested `<w:tbl>`
+/// elements drives the parser into a stack overflow, which aborts the
+/// process — an uncatchable crash no consumer of this library, in any
+/// binding, can defend against.
+///
+/// The value is empirical, and the measurement that matters is the *worst*
+/// stack a caller might have, not the best. Nested-table documents built at
+/// increasing depths overflow at:
+///
+/// | build | stack | layer | cliff |
+/// |---|---|---|---|
+/// | release | 16 MB parse stack | XML parse (`parse_table`) | 3,000-4,000 |
+/// | debug | default 2 MiB thread | XML parse (`parse_table`) | 512-1,024 |
+/// | debug | default 2 MiB thread | `to_ir()` (`convert_table`) | 150-200 |
+///
+/// `DepthGuard` bounds the XML-parse recursion, which now runs on its own
+/// `PARSE_STACK_SIZE` thread rather than whatever the caller happened to
+/// have (see below) — but the *result* is then walked again by `to_ir()`/
+/// `plain_text()`/`to_markdown()`, on whatever stack the caller gave *them*,
+/// which this crate does not control and is not necessarily large. Those
+/// walkers hit their own stack limit well before the XML-parse cliff, since
+/// `convert_table`/`plain_text_table` recurse with a much larger frame
+/// (multiple local `Vec`s and struct literals per level) than the XML
+/// event-loop's `parse_table` does — so they carry their own `DepthGuard`
+/// too, and it's the tighter of the two cliffs, not the
+/// parse-stack one, that this constant must stay under.
+///
+/// 100 is chosen with real margin under the 150-200 debug/2 MiB `to_ir()`
+/// cliff — still ~20x deeper than any document a human authoring tool
+/// produces.
+///
+/// That the XML-parse cliff has its own large margin only ever held where
+/// the parse actually got the stack it was measured against, and it often
+/// did not: `needs_stack_thread` inferred the answer from `RLIMIT_STACK`,
+/// which describes the main thread rather than the running one, so an
+/// unlimited limit ran the parse inline on an ordinary 2 MiB thread. Every
+/// threaded platform now parses on a `PARSE_STACK_SIZE` stack, so *that*
+/// part of this constant is calibrated against a stack the library owns —
+/// the `to_ir()`/`plain_text()` cliff is not, and never can be, since it
+/// runs on the caller's own stack.
+///
+/// Re-measure if the parser or IR-conversion structs grow — this moves with
+/// the frame size, and it moved once already: earlier releases' cliffs were
+/// measured only against the XML-parse layer and were 5,000-10,000 (release)
+/// / 512-1,024 (debug) before this release's added fields (and before the
+/// conversion-layer `DepthGuard`s existed at all) pulled the real, tighter
+/// limit down to what's measured above.
+pub const MAX_NESTING_DEPTH: usize = 100;
+
+thread_local! {
+    static NESTING_DEPTH: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static TRUNCATED_SUBTREES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// RAII guard tracking recursion depth in the parsers.
+///
+/// [`DepthGuard::enter`] returns `None` once [`MAX_NESTING_DEPTH`] is
+/// reached; the caller then skips the over-deep subtree instead of
+/// recursing into it. The counter is thread-local, so parallel worksheet
+/// and slide parsing each get their own budget.
+pub struct DepthGuard(());
+
+impl DepthGuard {
+    /// Enter one level of nesting, or return `None` when the limit is hit.
+    ///
+    /// Every `None` also increments the thread-local truncated-subtree
+    /// counter (see [`truncated_subtrees`]) — content past the bound used
+    /// to be dropped with only a `log::warn!`, leaving a caller with no
+    /// way to learn that the document they just wrote or read is missing
+    /// content.
+    pub fn enter() -> Option<Self> {
+        Self::enter_within(MAX_NESTING_DEPTH)
+    }
+
+    /// [`enter`](Self::enter) with a caller-chosen limit on the same
+    /// thread-local counter — for a walk that spends more than one level
+    /// per nesting step of the tree it walks (the IR renderers), and so
+    /// needs a proportionally larger budget to show everything a reader
+    /// bounded by [`MAX_NESTING_DEPTH`] produced.
+    pub fn enter_within(limit: usize) -> Option<Self> {
+        NESTING_DEPTH.with(|d| {
+            let cur = d.get();
+            if cur >= limit {
+                TRUNCATED_SUBTREES.with(|t| t.set(t.get() + 1));
+                None
+            } else {
+                d.set(cur + 1);
+                Some(DepthGuard(()))
+            }
+        })
+    }
+}
+
+/// Number of subtrees truncated by [`DepthGuard::enter`] returning `None`
+/// on this thread since the last [`reset_truncated_subtrees`] call.
+pub fn truncated_subtrees() -> usize {
+    TRUNCATED_SUBTREES.with(std::cell::Cell::get)
+}
+
+/// Reset the truncation counter. Called at the start of a top-level
+/// write/parse so its count reflects only that call, not a previous one
+/// on the same thread.
+pub fn reset_truncated_subtrees() {
+    TRUNCATED_SUBTREES.with(|t| t.set(0));
+}
+
+impl Drop for DepthGuard {
+    fn drop(&mut self) {
+        NESTING_DEPTH.with(|d| d.set(d.get().saturating_sub(1)));
+    }
+}
+
+/// Create a plain Reader (no namespace resolution) configured for OOXML parsing.
+/// Use this for format-specific hot paths (worksheets, slides, document body)
+/// where all elements are in a single known namespace.
+pub fn make_fast_reader(xml: &[u8]) -> quick_xml::Reader<&[u8]> {
+    let mut reader = quick_xml::Reader::from_reader(xml);
+    let config = reader.config_mut();
+    config.trim_text(true);
+    config.check_end_names = false;
+    config.check_comments = false;
+    reader
+}
+
+/// Resolve an `Event::GeneralRef` — an `&name;` or `&#NN;` reference — into
+/// the text it stands for.
+///
+/// quick-xml reports every entity reference as its own event rather than
+/// folding it into the surrounding `Event::Text`, so a reader that only
+/// handles `Event::Text` silently *deletes* them: `AT&amp;T` came out as
+/// `ATT` and `&#8212;` vanished. Character references resolve numerically,
+/// the five XML predefined entities resolve from the spec, and anything
+/// else (a DTD-declared entity we cannot expand) is preserved verbatim as
+/// `&name;` so no characters are lost.
+pub fn resolve_general_ref(e: &quick_xml::events::BytesRef<'_>) -> Result<String> {
+    if let Some(ch) = e.resolve_char_ref()? {
+        return Ok(ch.to_string());
+    }
+    Ok(match e.as_ref() {
+        "lt" => "<".to_string(),
+        "gt" => ">".to_string(),
+        "amp" => "&".to_string(),
+        "apos" => "'".to_string(),
+        "quot" => "\"".to_string(),
+        other => format!("&{other};"),
+    })
+}
+
+/// Read text content between start and end tags using fast Reader.
+///
+/// A trimming reader (see [`make_fast_reader`]) trims every `Event::Text`
+/// on its own, but quick-xml reports each entity reference as a separate
+/// event, so the text either side of `&amp;` arrived as two fragments and
+/// the spaces at the entity boundary were trimmed away: `see A &amp; B`
+/// read as `see A&B`. Trimming is therefore switched off while the content
+/// is read and re-applied here only where a fragment meets a tag (or the
+/// start/end of the content) — never where it meets an entity reference or
+/// CDATA, which are part of the same run of text.
+pub fn read_text_content_fast(reader: &mut quick_xml::Reader<&[u8]>) -> Result<String> {
+    use quick_xml::events::Event;
+    enum Piece {
+        Text(String),
+        Literal(String),
+        Tag,
+    }
+    let trim_start = reader.config().trim_text_start;
+    let trim_end = reader.config().trim_text_end;
+    reader.config_mut().trim_text(false);
+    let mut pieces: Vec<Piece> = Vec::new();
+    let mut depth = 1u32;
+    let result = loop {
+        let event = match reader.read_event() {
+            Ok(e) => e,
+            Err(e) => break Err(e.into()),
+        };
+        match event {
+            Event::Text(e) => {
+                // Unescape borrows when there is nothing to resolve, which
+                // is nearly always.
+                match quick_xml::escape::unescape(&e) {
+                    Ok(t) => pieces.push(Piece::Text(t.into_owned())),
+                    Err(err) => break Err(quick_xml::Error::from(err).into()),
+                }
+            },
+            Event::GeneralRef(e) => match resolve_general_ref(&e) {
+                Ok(t) => pieces.push(Piece::Literal(t)),
+                Err(err) => break Err(err),
+            },
+            Event::CData(e) => pieces.push(Piece::Literal(String::from(&*e))),
+            Event::Start(_) => {
+                depth += 1;
+                pieces.push(Piece::Tag);
+            },
+            Event::End(_) => {
+                depth -= 1;
+                if depth == 0 {
+                    break Ok(());
+                }
+                pieces.push(Piece::Tag);
+            },
+            Event::Empty(_) => pieces.push(Piece::Tag),
+            Event::Eof => break Ok(()),
+            _ => {},
+        }
+    };
+    reader.config_mut().trim_text_start = trim_start;
+    reader.config_mut().trim_text_end = trim_end;
+    result?;
+
+    let is_boundary = |p: Option<&Piece>| matches!(p, None | Some(Piece::Tag));
+    let mut text = String::new();
+    for (i, piece) in pieces.iter().enumerate() {
+        match piece {
+            Piece::Text(t) => {
+                let mut t = t.as_str();
+                if trim_start && is_boundary(i.checked_sub(1).and_then(|j| pieces.get(j))) {
+                    t = t.trim_start_matches(|c: char| c.is_ascii_whitespace());
+                }
+                if trim_end && is_boundary(pieces.get(i + 1)) {
+                    t = t.trim_end_matches(|c: char| c.is_ascii_whitespace());
+                }
+                text.push_str(t);
+            },
+            Piece::Literal(t) => text.push_str(t),
+            Piece::Tag => {},
+        }
+    }
+    Ok(text)
+}
+
+/// Read the text content of the current element as a number without
+/// allocating, for the numeric `<v>` of a spreadsheet cell.
+///
+/// The common shape is exactly one text node followed by the end tag, and
+/// that is parsed straight from the borrowed event. Anything else — an
+/// entity reference, CDATA, a child element, or text that is not a number
+/// — falls back to the owned text so the caller can keep it verbatim.
+pub fn read_number_content_fast(
+    reader: &mut quick_xml::Reader<&[u8]>,
+) -> Result<std::result::Result<f64, String>> {
+    use quick_xml::events::Event;
+    let mut text = String::new();
+    let mut depth = 1u32;
+    loop {
+        match reader.read_event()? {
+            Event::Text(e) => {
+                if text.is_empty() && !e.contains('&') {
+                    if let Ok(n) = fast_float2::parse::<f64, _>(&*e) {
+                        // Consume the end tag; a second text node would
+                        // have been contiguous with this one.
+                        loop {
+                            match reader.read_event()? {
+                                Event::Start(_) => depth += 1,
+                                Event::End(_) => {
+                                    depth -= 1;
+                                    if depth == 0 {
+                                        return Ok(Ok(n));
+                                    }
+                                },
+                                Event::Text(t) => {
+                                    // Not a lone text node after all.
+                                    text.push_str(&e);
+                                    text.push_str(
+                                        &quick_xml::escape::unescape(&t)
+                                            .map_err(quick_xml::Error::from)?,
+                                    );
+                                    break;
+                                },
+                                Event::GeneralRef(t) => {
+                                    text.push_str(&e);
+                                    text.push_str(&resolve_general_ref(&t)?);
+                                    break;
+                                },
+                                Event::CData(t) => {
+                                    text.push_str(&e);
+                                    text.push_str(&t);
+                                    break;
+                                },
+                                Event::Eof => return Ok(Ok(n)),
+                                _ => {},
+                            }
+                        }
+                        continue;
+                    }
+                }
+                text.push_str(&quick_xml::escape::unescape(&e).map_err(quick_xml::Error::from)?);
+            },
+            Event::GeneralRef(e) => {
+                text.push_str(&resolve_general_ref(&e)?);
+            },
+            Event::CData(e) => {
+                text.push_str(&e);
+            },
+            Event::Start(_) => depth += 1,
+            Event::End(_) => {
+                depth -= 1;
+                if depth == 0 {
+                    break;
+                }
+            },
+            Event::Eof => break,
+            _ => {},
+        }
+    }
+    Ok(Err(text))
+}
+
+/// Skip over the current element and all its children using fast Reader.
+pub fn skip_element_fast(reader: &mut quick_xml::Reader<&[u8]>) -> Result<()> {
+    use quick_xml::events::Event;
+    let mut depth = 1u32;
+    loop {
+        match reader.read_event()? {
+            Event::Start(_) => depth += 1,
+            Event::End(_) => {
+                depth -= 1;
+                if depth == 0 {
+                    break;
+                }
+            },
+            Event::Eof => break,
+            _ => {},
+        }
+    }
+    Ok(())
+}
+
+/// Transcode XML bytes to UTF-8 if the XML declaration specifies a non-UTF-8 encoding.
+/// Returns `None` if the data is already UTF-8 (the common case), or `Some(transcoded)`
+/// if transcoding was needed. Callers should use the returned buffer for parsing.
+///
+/// Bytes that are not valid in their declared (or fallback) encoding are
+/// replaced by U+FFFD rather than handed to the XML reader raw: the reader
+/// validates UTF-8 per event and would otherwise fail the whole part on the
+/// first bad byte, losing everything around it. The replacement character
+/// is visible in the output, so the damage is not silent.
+pub fn ensure_utf8(data: &[u8]) -> Option<Vec<u8>> {
+    // UTF-16 must be settled before the valid-UTF-8 check below. A UTF-16
+    // part whose characters are all ASCII is a run of NUL-interleaved bytes,
+    // and NUL is itself valid UTF-8 — so `from_utf8` accepts it, the real
+    // encoding is never noticed, and every tag name arrives split by nulls.
+    // That silently emptied a UTF-16BE `xl/workbook.xml`.
+    if let Some(decoded) = decode_utf16_xml(data) {
+        return Some(decoded);
+    }
+
+    // Quick check: if it's valid UTF-8 already, skip everything
+    if std::str::from_utf8(data).is_ok() {
+        return None;
+    }
+
+    // Look for encoding="..." in the first 200 bytes of the XML declaration
+    let header = &data[..data.len().min(200)];
+    let header_str = String::from_utf8_lossy(header);
+
+    let encoding_name = if let Some(pos) = header_str.find("encoding=") {
+        let rest = &header_str[pos + 9..];
+        let quote = rest.as_bytes().first().copied().unwrap_or(b'"');
+        if quote == b'"' || quote == b'\'' {
+            let inner = &rest[1..];
+            inner.split(quote as char).next().unwrap_or("utf-8")
+        } else {
+            return Some(lossy_utf8(data));
+        }
+    } else {
+        // No encoding declaration, try ISO-8859-1 as fallback for non-UTF-8
+        "iso-8859-1"
+    };
+
+    let Some(encoding) = encoding_rs::Encoding::for_label(encoding_name.as_bytes()) else {
+        return Some(lossy_utf8(data));
+    };
+    if encoding == encoding_rs::UTF_8 {
+        return Some(lossy_utf8(data));
+    }
+
+    let (result, _, had_errors) = encoding.decode(data);
+    if had_errors {
+        return Some(lossy_utf8(data));
+    }
+
+    // Replace the encoding declaration with utf-8 so the XML parser doesn't complain
+    Some(rewrite_encoding_decl(result.into_owned().into_bytes()))
+}
+
+/// Replace every invalid UTF-8 sequence with U+FFFD, warning once per part.
+fn lossy_utf8(data: &[u8]) -> Vec<u8> {
+    log::warn!("XML part is not valid UTF-8; invalid bytes replaced with U+FFFD");
+    String::from_utf8_lossy(data).into_owned().into_bytes()
+}
+
+/// Rewrite an XML declaration's `encoding="..."` value to `utf-8`.
+///
+/// Called after transcoding: leaving the original label in place makes the
+/// bytes self-contradictory, and a strict downstream processor would reject
+/// them.
+fn rewrite_encoding_decl(mut utf8: Vec<u8>) -> Vec<u8> {
+    if let Some(pos) = utf8
+        .windows(9)
+        .position(|w| w.eq_ignore_ascii_case(b"encoding="))
+    {
+        let rest = &utf8[pos + 9..];
+        if let Some(&quote) = rest.first() {
+            if quote == b'"' || quote == b'\'' {
+                if let Some(end) = rest[1..].iter().position(|&b| b == quote) {
+                    let start = pos + 10;
+                    let end = start + end;
+                    utf8.splice(start..end, b"utf-8".iter().copied());
+                }
+            }
+        }
+    }
+    utf8
+}
+
+/// Decode a UTF-16 XML part to UTF-8, or `None` if `data` isn't UTF-16.
+///
+/// Endianness comes from a byte-order mark when one is present. Without a
+/// BOM, XML 1.0 §4.3.3 requires a UTF-16 document to begin with the text
+/// declaration, so the NUL-interleaved `<?` prolog identifies it
+/// unambiguously.
+fn decode_utf16_xml(data: &[u8]) -> Option<Vec<u8>> {
+    let big_endian = match data {
+        [0xFE, 0xFF, ..] => true,
+        [0xFF, 0xFE, ..] => false,
+        // BOM-less: `<?` as UTF-16BE / UTF-16LE code units.
+        [0x00, 0x3C, 0x00, 0x3F, ..] => true,
+        [0x3C, 0x00, 0x3F, 0x00, ..] => false,
+        _ => return None,
+    };
+
+    let encoding = if big_endian {
+        encoding_rs::UTF_16BE
+    } else {
+        encoding_rs::UTF_16LE
+    };
+    // `decode` strips a leading BOM itself, so the result never carries one.
+    let (result, _, had_errors) = encoding.decode(data);
+    if had_errors {
+        return None;
+    }
+
+    Some(rewrite_encoding_decl(result.into_owned().into_bytes()))
+}
+
+#[cfg(test)]
+mod attr_tests {
+    use super::unescape_attr_value;
+    use quick_xml::events::BytesStart;
+
+    /// Parse `<e {attrs}>` and unescape the value of attribute `key`.
+    fn attr_value(attrs: &str, key: &str) -> String {
+        let start = BytesStart::from_content(format!("e {attrs}"), 1);
+        let attr = start
+            .attributes()
+            .map(|a| a.unwrap())
+            .find(|a| a.key.as_ref() == key)
+            .expect("attribute present");
+        unescape_attr_value(&attr).unwrap()
+    }
+
+    #[test]
+    fn test_unescapes_predefined_and_numeric_entities() {
+        assert_eq!(attr_value(r#"v="a &amp; b &lt;x&gt; &#65;""#, "v"), "a & b <x> A");
+    }
+
+    #[test]
+    fn test_passes_plain_value_through_unchanged() {
+        assert_eq!(attr_value(r#"r:id="rId7""#, "r:id"), "rId7");
+    }
+
+    #[test]
+    fn test_unescapes_ampersand_in_hyperlink_target() {
+        assert_eq!(
+            attr_value(r#"Target="https://x/?a=1&amp;b=2""#, "Target"),
+            "https://x/?a=1&b=2"
+        );
+    }
+}
+
+#[cfg(test)]
+mod text_content_tests {
+    use super::*;
+
+    /// Read the content of the first element of `xml` with a trimming reader.
+    fn content(xml: &str) -> String {
+        let mut r = make_fast_reader(xml.as_bytes());
+        loop {
+            if let quick_xml::events::Event::Start(_) = r.read_event().unwrap() {
+                return read_text_content_fast(&mut r).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn test_trimming_reader_keeps_spaces_at_entity_references() {
+        assert_eq!(content("<t>see A &amp; &lt;B&gt; now</t>"), "see A & <B> now");
+        assert_eq!(content("<t>AT&amp;T</t>"), "AT&T");
+        assert_eq!(content("<t>a <![CDATA[x]]> b</t>"), "a x b");
+    }
+
+    #[test]
+    fn test_trimming_reader_still_trims_at_tags() {
+        // Pretty-print whitespace between child elements is not content.
+        assert_eq!(content("<text>\n  <r><t>a</t></r>\n  <r><t>b</t></r>\n</text>"), "ab");
+        // Leading/trailing whitespace of the whole content is trimmed.
+        assert_eq!(content("<t>  x &amp; y  </t>"), "x & y");
+        // The reader's own configuration is restored afterwards.
+        let mut r = make_fast_reader(b"<a><t>x</t></a>");
+        r.read_event().unwrap();
+        read_text_content_fast(&mut r).unwrap();
+        assert!(r.config().trim_text_start && r.config().trim_text_end);
+    }
+}
+
+#[cfg(test)]
+mod root_and_namespace_tests {
+    use super::*;
+    use quick_xml::events::Event;
+
+    #[test]
+    fn test_root_close_must_be_the_whole_local_name() {
+        assert!(check_root_closed(b"<w:document></w:document>", "p", "document").is_ok());
+        assert!(check_root_closed(b"<document></document>", "p", "document").is_ok());
+        // A truncated part whose last end tag merely ends with the root's
+        // local name is still truncated.
+        assert!(check_root_closed(b"<w:document><x></otherdocument>", "p", "document").is_err());
+        assert!(check_root_closed(b"<w:document><x></w:otherdocument>", "p", "document").is_err());
+        assert!(check_root_closed(b"<w:document><x></w :document>", "p", "document").is_err());
+    }
+
+    /// Resolve the namespace of the first start/empty element named
+    /// `local` in `xml`, and test it against `ns` via `matches_start`.
+    fn first_matches(xml: &str, local: &str, ns: &str) -> bool {
+        let mut r = NsReader::from_str(xml);
+        loop {
+            match r.read_resolved_event().unwrap() {
+                (res, Event::Start(e) | Event::Empty(e)) if e.local_name().as_ref() == local => {
+                    return matches_start(&res, &e, ns, local);
+                },
+                (_, Event::Eof) => return false,
+                _ => {},
+            }
+        }
+    }
+
+    /// Every Transitional namespace a parser may check has its ISO/IEC
+    /// 29500 Strict counterpart accepted, and nothing else is.
+    #[test]
+    fn test_strict_namespaces_match_their_transitional_names() {
+        let pairs = [
+            (ns::WML, ns::STRICT_WML),
+            (ns::SML, ns::STRICT_SML),
+            (ns::PML, ns::STRICT_PML),
+            (ns::DRAWING_ML, ns::STRICT_DRAWING),
+            (ns::R, ns::STRICT_R),
+            (ns::CHART, ns::STRICT_CHART),
+            (ns::WORDPROCESSING_DRAWING, ns::STRICT_WORDPROCESSING_DRAWING),
+            (ns::SPREADSHEET_DRAWING, ns::STRICT_SPREADSHEET_DRAWING),
+            (ns::PICTURE, ns::STRICT_PICTURE),
+            (ns::DIAGRAM, ns::STRICT_DIAGRAM),
+        ];
+        for (transitional, strict) in pairs {
+            let doc = format!(r#"<x:e xmlns:x="{strict}"/>"#);
+            assert!(first_matches(&doc, "e", transitional), "{strict}");
+            let doc = format!(r#"<x:e xmlns:x="{transitional}"/>"#);
+            assert!(first_matches(&doc, "e", transitional), "{transitional}");
+        }
+        let other = r#"<x:e xmlns:x="urn:not-ooxml"/>"#;
+        assert!(!first_matches(other, "e", ns::WML));
+    }
+}
+
+#[cfg(test)]
+mod ensure_utf8_tests {
+    use super::ensure_utf8;
+
+    #[test]
+    fn test_valid_utf8_is_left_alone() {
+        assert!(ensure_utf8("<a>caf\u{e9}</a>".as_bytes()).is_none());
+    }
+
+    /// A part declared UTF-8 with one invalid byte in a text node must still
+    /// parse: the reader validates UTF-8 per event, so handing the raw bytes
+    /// over would fail the whole part on that one byte. The bad byte becomes
+    /// U+FFFD and everything around it survives.
+    #[test]
+    fn test_invalid_utf8_under_utf8_declaration_is_replaced_not_dropped() {
+        let mut xml = b"<?xml version=\"1.0\" encoding=\"UTF-8\"?><a>caf".to_vec();
+        xml.push(0xE9); // Latin-1 e-acute, not valid UTF-8
+        xml.extend_from_slice(b" ok</a>");
+        let out = ensure_utf8(&xml).expect("invalid bytes need transcoding");
+        let out = String::from_utf8(out).unwrap();
+        assert_eq!(out, "<?xml version=\"1.0\" encoding=\"UTF-8\"?><a>caf\u{FFFD} ok</a>");
+
+        let mut reader = super::make_fast_reader(out.as_bytes());
+        let mut text = String::new();
+        loop {
+            match reader.read_event().unwrap() {
+                quick_xml::events::Event::Text(t) => text.push_str(&t),
+                quick_xml::events::Event::Eof => break,
+                _ => {},
+            }
+        }
+        assert_eq!(text, "caf\u{FFFD} ok");
+    }
+
+    /// Without a declaration, undeclared 8-bit bytes are read as ISO-8859-1
+    /// (the existing fallback) rather than replaced.
+    #[test]
+    fn test_undeclared_latin1_is_transcoded() {
+        let xml = b"<a>caf\xE9</a>";
+        let out = String::from_utf8(ensure_utf8(xml).unwrap()).unwrap();
+        assert_eq!(out, "<a>caf\u{e9}</a>");
+    }
+}
+
+#[cfg(test)]
+mod salvage_tests {
+    use super::salvage_prefix;
+
+    fn text(r: Option<(Vec<u8>, usize)>) -> Option<(String, usize)> {
+        r.map(|(b, n)| (String::from_utf8(b).unwrap(), n))
+    }
+
+    #[test]
+    fn test_salvage_counts_only_content_children_of_the_named_container() {
+        // Children of a sibling at the same depth, and the shape tree's own
+        // header elements, are not content.
+        let data = b"<d><bg><v/><v/></bg><b><p>a";
+        assert!(
+            salvage_prefix(data, 2, None, &[]).is_some(),
+            "depth alone counts the bg children"
+        );
+        assert!(salvage_prefix(data, 2, Some("b"), &[]).is_none());
+        let tree = b"<s><t><head/><hp/><sp><x>a</x></sp><sp><x>b";
+        let kept = salvage_prefix(tree, 2, Some("t"), &["head", "hp"]).map(|(_, n)| n);
+        assert_eq!(kept, Some(1));
+        let cut_in_first = b"<s><t><head/><hp/><sp><x>a";
+        assert!(salvage_prefix(cut_in_first, 2, Some("t"), &["head", "hp"]).is_none());
+        // A prefixed name matches by its local name.
+        assert!(salvage_prefix(b"<d><w:b><w:p>a</w:p><w:p>", 2, Some("b"), &[]).is_some());
+    }
+
+    #[test]
+    fn test_the_blocks_before_the_damage_are_kept_and_closed() {
+        let data = b"<d xmlns:w=\"u\"><w:body><w:p>a</w:p><w:p>b</w:p><w:p>c";
+        assert_eq!(
+            text(salvage_prefix(data, 2, None, &[])),
+            Some(("<d xmlns:w=\"u\"><w:body><w:p>a</w:p><w:p>b</w:p></w:body></d>".into(), 2))
+        );
+    }
+
+    #[test]
+    fn test_a_mismatched_end_tag_is_damage() {
+        let data = b"<d><b><p>a</p><p>b</q></b></d>";
+        assert_eq!(
+            text(salvage_prefix(data, 2, None, &[])),
+            Some(("<d><b><p>a</p></b></d>".into(), 1))
+        );
+    }
+
+    #[test]
+    fn test_sound_data_and_data_with_no_complete_block_are_not_salvaged() {
+        assert!(salvage_prefix(b"<d><b><p>a</p></b></d>", 2, None, &[]).is_none());
+        assert!(salvage_prefix(b"<d><b><p>a", 2, None, &[]).is_none());
+        assert!(salvage_prefix(b"", 2, None, &[]).is_none());
+    }
+
+    #[test]
+    fn test_an_empty_element_at_the_depth_counts_as_a_block() {
+        assert_eq!(
+            text(salvage_prefix(b"<d><b><p/><p>", 2, None, &[])),
+            Some(("<d><b><p/></b></d>".into(), 1))
+        );
+    }
+}

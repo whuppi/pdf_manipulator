@@ -1,0 +1,509 @@
+//! The wall around the incremental save's refusal list.
+//!
+//! `DocumentEditor::incremental_census` destructures every field of the
+//! editor with no `..`, so a field added without a class does not compile.
+//! `every_edit_field_has_a_kind_test` ties each `carried` and `refused` field
+//! to a test below; each test stages one kind of edit and saves incrementally:
+//! a refused kind fails with the refusal that names it, and a carried kind
+//! saves what a full rewrite of the same edit saves.
+
+use super::support::{open_editor_from_bytes, pdf_from_objects, stream_object};
+use crate::editor::form_fields::FormFieldValue;
+use crate::editor::{DocumentEditor, EditableDocument, SaveOptions};
+use crate::extractors::forms::FormExtractor;
+use crate::geometry::Rect;
+use crate::host::incremental::{write, IncrementalError};
+use crate::host::positioned_write::CountingWriter;
+use crate::object::Object;
+use crate::writer::form_fields::TextFieldWidget;
+use crate::writer::WatermarkAnnotation;
+use crate::PdfDocument;
+
+/// Two pages with one text line each, and the Helvetica they show it in.
+fn two_pages() -> Vec<u8> {
+    pdf_from_objects(&[
+        b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n".to_vec(),
+        b"2 0 obj\n<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>\nendobj\n".to_vec(),
+        b"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 5 0 R \
+          /Resources << /Font << /F1 7 0 R >> >> >>\nendobj\n"
+            .to_vec(),
+        b"4 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 6 0 R \
+          /Resources << /Font << /F1 7 0 R >> >> >>\nendobj\n"
+            .to_vec(),
+        stream_object(5, "", b"BT /F1 12 Tf 10 100 Td (secret one) Tj ET"),
+        stream_object(6, "", b"BT /F1 12 Tf 10 100 Td (page two) Tj ET"),
+        b"7 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n".to_vec(),
+    ])
+}
+
+/// One page with the text field `both`, which carries a tooltip, a maximum
+/// length and a default appearance, and an AcroForm with `/DR` and `/DA`.
+fn form() -> Vec<u8> {
+    pdf_from_objects(&[
+        b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R] \
+          /DA (/Helv 12 Tf 0 g) /DR << /Font << /Helv 6 0 R >> >> >> >>\nendobj\n"
+            .to_vec(),
+        b"2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n".to_vec(),
+        b"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R \
+          /Resources << /Font << /Helv 6 0 R >> >> /Annots [5 0 R] >>\nendobj\n"
+            .to_vec(),
+        stream_object(4, "", b"BT /Helv 12 Tf 10 250 Td (a form) Tj ET"),
+        b"5 0 obj\n<< /Type /Annot /Subtype /Widget /FT /Tx /T (both) /TU (tip) /MaxLen 8 \
+          /Rect [20 20 120 40] /F 4 /P 3 0 R >>\nendobj\n"
+            .to_vec(),
+        b"6 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n".to_vec(),
+    ])
+}
+
+/// The incremental save of `editor`: the bytes, or why there are none.
+fn append(editor: &mut DocumentEditor) -> Result<Vec<u8>, String> {
+    let mut out = CountingWriter::new(Vec::new());
+    match write(editor, &mut out, &SaveOptions::incremental(), &crate::cancel::CancelCheck::none()) {
+        Ok(()) => Ok(out.into_inner()),
+        Err(IncrementalError::Refused(why)) => {
+            assert!(out.into_inner().is_empty(), "a refusal is decided before the first byte");
+            Err(format!("refused: {why}"))
+        },
+        Err(IncrementalError::Failed(e)) => Err(format!("failed: {e}")),
+    }
+}
+
+/// An edit of this kind is refused, and the refusal names `fragment`.
+fn refused(kind: &str, source: &[u8], stage: impl FnOnce(&mut DocumentEditor), fragment: &str) {
+    let mut editor = open_editor_from_bytes(source, "incremental_wall");
+    stage(&mut editor);
+    match append(&mut editor) {
+        Err(why) if why.starts_with("refused: ") => assert!(
+            why.contains(fragment),
+            "{kind}: refused, but not for {fragment:?}: {why}"
+        ),
+        Err(why) => panic!("{kind}: the save failed instead of refusing: {why}"),
+        Ok(_) => panic!("{kind}: the incremental save reported success and dropped the edit"),
+    }
+}
+
+fn operators(doc: &PdfDocument, page: usize) -> Vec<String> {
+    doc.page_operators(page)
+        .expect("the page has operators")
+        .map(|op| format!("{:?}", op.expect("an operator")))
+        .collect()
+}
+
+/// An edit of this kind is carried: the incremental output, reopened, has the
+/// page count, the page operators and what `observe` reads of the edited
+/// objects that a full rewrite of the same edit has, and `observe` reads
+/// something the edit changed.
+fn carried(
+    kind: &str,
+    source: &[u8],
+    stage: impl Fn(&mut DocumentEditor),
+    observe: impl Fn(&PdfDocument) -> String,
+) {
+    let mut appending = open_editor_from_bytes(source, "incremental_wall");
+    stage(&mut appending);
+    let appended = append(&mut appending)
+        .unwrap_or_else(|why| panic!("{kind}: the incremental save did not carry it: {why}"));
+    let mut rewriting = open_editor_from_bytes(source, "incremental_wall");
+    stage(&mut rewriting);
+    let rewritten = rewriting
+        .save_to_bytes_with_options(SaveOptions {
+            compress: false,
+            object_streams: false,
+            ..SaveOptions::full_rewrite()
+        })
+        .expect("the full rewrite saves");
+    let original = PdfDocument::from_bytes(source.to_vec()).expect("the source opens");
+    let appended = PdfDocument::from_bytes(appended).expect("the appended file opens");
+    let rewritten = PdfDocument::from_bytes(rewritten).expect("the rewritten file opens");
+    let pages = rewritten.page_count().unwrap();
+    assert_eq!(appended.page_count().unwrap(), pages, "{kind}: page count");
+    for page in 0..pages {
+        assert_eq!(operators(&appended, page), operators(&rewritten, page), "{kind}: page {page} operators");
+    }
+    assert_eq!(observe(&appended), observe(&rewritten), "{kind}: the edited objects differ from the full save's");
+    assert_ne!(observe(&appended), observe(&original), "{kind}: the edit changed nothing the test reads");
+}
+
+/// The entries `keys` of `dict`, in key order.
+fn entries(dict: &Object, keys: &[&str]) -> String {
+    let dict = dict.as_dict().expect("a dictionary");
+    keys.iter().map(|k| format!("{k}={:?}", dict.get(*k))).collect::<Vec<_>>().join(" ")
+}
+
+fn page_entries(doc: &PdfDocument, page: usize, keys: &[&str]) -> String {
+    entries(&doc.get_page(page).expect("the page loads"), keys)
+}
+
+fn field_entries(doc: &PdfDocument, keys: &[&str]) -> String {
+    let field = FormExtractor::extract_fields(doc)
+        .expect("the fields read")
+        .into_iter()
+        .find(|f| f.full_name == "both")
+        .expect("the field is in the file");
+    entries(&doc.load_object(field.object_ref.expect("the field has an object")).unwrap(), keys)
+}
+
+/// Every `carried` and `refused` field of the editor and the tests that stage
+/// it, as `(test, class, fields)`. A field that no editor call stages is in
+/// `UNSTAGEABLE` instead.
+const KINDS: &[(&str, &str, &[&str])] = &[
+    ("carried_info", "carried", &["modified_info"]),
+    ("carried_page_props", "carried", &["modified_page_props"]),
+    ("carried_objects", "carried", &["modified_objects"]),
+    ("carried_form_field_value", "carried", &["modified_form_fields", "acroform_modified"]),
+    ("carried_form_field_property", "carried", &["modified_form_fields"]),
+    ("carried_form_field_property_removal", "carried", &["modified_form_fields"]),
+    ("refused_remove_page", "refused", &["page_order"]),
+    ("refused_reorder_pages", "refused", &["page_order"]),
+    ("refused_duplicate_page", "refused", &["page_order"]),
+    ("refused_merge", "refused", &["merged_sources"]),
+    ("refused_merge_form", "refused", &["merged_form_fields", "merged_acroform_dr", "merged_acroform_da"]),
+    ("refused_merged_page_rotation", "refused", &["merged_page_props"]),
+    ("refused_page_content", "refused", &["modified_content", "structure_modified"]),
+    ("refused_erase_region", "refused", &["erase_regions"]),
+    ("refused_image_modification", "refused", &["image_modifications"]),
+    ("refused_annotation", "refused", &["modified_annotations"]),
+    ("refused_flatten_annotations", "refused", &["flatten_annotations_pages"]),
+    ("refused_flatten_forms_on_page", "refused", &["flatten_forms_pages"]),
+    ("refused_flatten_forms", "refused", &["remove_acroform"]),
+    ("refused_redaction_mark", "refused", &["redaction_regions"]),
+    (
+        "refused_redaction_applied",
+        "refused",
+        &["apply_redactions_pages", "redacted_pages", "redacted_orphan_ids", "redacted_image_originals"],
+    ),
+    ("refused_embedded_file", "refused", &["embedded_files"]),
+    ("refused_new_form_field", "refused", &["modified_form_fields"]),
+    ("refused_removed_form_field", "refused", &["deleted_form_fields"]),
+];
+
+/// Fields of class `carried` that also have a refused kind: a field that is
+/// carried when it edits an existing form field and refused when it adds one.
+const BOTH: &[&str] = &["modified_form_fields"];
+
+/// Fields no editor call stages today: the refusal names them, nothing can
+/// reach them.
+const UNSTAGEABLE: &[&str] = &["new_objects", "overlay_additions"];
+
+/// No Dart battery sees it: it reads the editor's private fields, through the
+/// census that destructures them, which the bridge does not expose.
+#[test]
+fn every_edit_field_has_a_kind_test() {
+    let editor = open_editor_from_bytes(&two_pages(), "incremental_wall");
+    let census = editor.incremental_census();
+    for (field, class, why) in &census {
+        assert!(!why.is_empty(), "{field} has no reason");
+        if !matches!(*class, "carried" | "refused") {
+            assert!(
+                !KINDS.iter().any(|(_, _, fields)| fields.contains(field)) && !UNSTAGEABLE.contains(field),
+                "{field} is {class}, but a kind test names it"
+            );
+            continue;
+        }
+        let staged = |wanted: &str| {
+            KINDS.iter().any(|(_, c, fields)| *c == wanted && fields.contains(field))
+        };
+        assert!(
+            staged(class) || UNSTAGEABLE.contains(field),
+            "{field} is {class}, and no kind test stages it"
+        );
+        assert!(
+            !BOTH.contains(field) || staged("refused"),
+            "{field} is also refused when it adds a field, and no kind test stages that"
+        );
+    }
+    for (test, class, fields) in KINDS {
+        for field in *fields {
+            assert!(
+                census.iter().any(|(f, c, _)| f == field && (c == class || BOTH.contains(field))),
+                "{test} names {field} as {class}, which the census does not say"
+            );
+        }
+    }
+    for field in UNSTAGEABLE {
+        assert!(
+            census.iter().any(|(f, c, _)| f == field && *c == "refused"),
+            "{field} is unstageable and must be refused"
+        );
+    }
+}
+
+// ── carried ──
+
+/// No Dart battery sees it: the wall pairs each carried field of the editor,
+/// which Dart cannot see, with its own test.
+#[test]
+fn carried_info() {
+    carried(
+        "info",
+        &two_pages(),
+        |e| {
+            e.set_title("Appended");
+            e.set_author("Someone");
+        },
+        |doc| {
+            let info = doc.trailer().as_dict().and_then(|t| t.get("Info")).and_then(|i| i.as_reference());
+            match info {
+                Some(r) => entries(&doc.load_object(r).unwrap(), &["Title", "Author"]),
+                None => "no /Info".into(),
+            }
+        },
+    );
+}
+
+/// No Dart battery sees it: the wall pairs each carried field of the editor,
+/// which Dart cannot see, with its own test.
+#[test]
+fn carried_page_props() {
+    carried(
+        "page props",
+        &two_pages(),
+        |e| {
+            e.set_page_rotation(0, 90).unwrap();
+            e.set_page_media_box(1, [0.0, 0.0, 300.0, 400.0]).unwrap();
+            e.set_page_crop_box(1, [10.0, 10.0, 100.0, 100.0]).unwrap();
+        },
+        |doc| {
+            let keys = ["Rotate", "MediaBox", "CropBox"];
+            format!("{} | {}", page_entries(doc, 0, &keys), page_entries(doc, 1, &keys))
+        },
+    );
+}
+
+/// No Dart battery sees it: staging an object by id is a crate-internal call.
+#[test]
+fn carried_objects() {
+    carried(
+        "objects",
+        &two_pages(),
+        |e| {
+            let mut catalog = e.source().catalog().unwrap().as_dict().unwrap().clone();
+            catalog.insert("Lang".into(), Object::String(b"en-GB".to_vec()));
+            e.insert_modified(1, Object::Dictionary(catalog));
+        },
+        |doc| entries(&doc.catalog().unwrap(), &["Lang", "Pages"]),
+    );
+}
+
+/// No Dart battery sees it: the wall pairs each carried field of the editor,
+/// which Dart cannot see, with its own test.
+#[test]
+fn carried_form_field_value() {
+    carried(
+        "form field value",
+        &form(),
+        |e| e.set_form_field_value("both", FormFieldValue::Text("hello".into())).unwrap(),
+        |doc| field_entries(doc, &["V"]),
+    );
+}
+
+/// No Dart battery sees it: the wall pairs each carried field of the editor,
+/// which Dart cannot see, with its own test.
+#[test]
+fn carried_form_field_property() {
+    carried(
+        "form field property",
+        &form(),
+        |e| {
+            e.set_form_field_tooltip("both", "changed").unwrap();
+            e.set_form_field_max_length("both", 20).unwrap();
+            e.set_form_field_flags("both", 1).unwrap();
+        },
+        |doc| field_entries(doc, &["TU", "MaxLen", "Ff"]),
+    );
+}
+
+/// No Dart battery sees it: the wall pairs each carried field of the editor,
+/// which Dart cannot see, with its own test.
+#[test]
+fn carried_form_field_property_removal() {
+    carried(
+        "form field property removal",
+        &form(),
+        |e| {
+            e.remove_form_field_tooltip("both").unwrap();
+            e.remove_form_field_max_length("both").unwrap();
+        },
+        |doc| field_entries(doc, &["TU", "MaxLen"]),
+    );
+}
+
+// ── refused ──
+
+const REMOVED: &str = "pages were removed or reordered";
+const MERGED: &str = "pages were merged in";
+const DRAWN: &str = "page content was drawn, erased or rebuilt";
+const ANNOTATED: &str = "annotations were changed or flattened";
+const REDACTED: &str = "content was redacted or scrubbed";
+const FIELDS_REMOVED: &str = "form fields were removed";
+
+/// No Dart battery sees it: the wall pairs each refused field of the editor,
+/// which Dart cannot see, with its own test.
+#[test]
+fn refused_remove_page() {
+    refused("remove page", &two_pages(), |e| e.remove_page(0).unwrap(), REMOVED);
+}
+
+/// No Dart battery sees it: the wall pairs each refused field of the editor,
+/// which Dart cannot see, with its own test.
+#[test]
+fn refused_reorder_pages() {
+    refused("reorder pages", &two_pages(), |e| e.move_page(0, 1).unwrap(), REMOVED);
+}
+
+/// No Dart battery sees it: the wall pairs each refused field of the editor,
+/// which Dart cannot see, with its own test.
+#[test]
+fn refused_duplicate_page() {
+    refused("duplicate page", &two_pages(), |e| {
+        e.duplicate_page(0).unwrap();
+    }, REMOVED);
+}
+
+/// No Dart battery sees it: the wall pairs each refused field of the editor,
+/// which Dart cannot see, with its own test.
+#[test]
+fn refused_merge() {
+    refused("merge", &two_pages(), |e| {
+        e.merge_from_bytes(&two_pages()).unwrap();
+    }, MERGED);
+}
+
+/// No Dart battery sees it: the wall pairs each refused field of the editor,
+/// which Dart cannot see, with its own test.
+#[test]
+fn refused_merge_form() {
+    refused("merge form", &two_pages(), |e| {
+        e.merge_from_bytes(&form()).unwrap();
+    }, MERGED);
+}
+
+/// No Dart battery sees it: the wall pairs each refused field of the editor,
+/// which Dart cannot see, with its own test.
+#[test]
+fn refused_merged_page_rotation() {
+    refused(
+        "merged page rotation",
+        &two_pages(),
+        |e| {
+            e.merge_from_bytes(&two_pages()).unwrap();
+            e.set_page_rotation(2, 90).unwrap();
+        },
+        MERGED,
+    );
+}
+
+/// No Dart battery sees it: the wall pairs each refused field of the editor,
+/// which Dart cannot see, with its own test.
+#[test]
+fn refused_page_content() {
+    refused(
+        "page content",
+        &two_pages(),
+        |e| e.set_page_content(0, crate::elements::StructureElement::default()).unwrap(),
+        DRAWN,
+    );
+}
+
+/// No Dart battery sees it: the wall pairs each refused field of the editor,
+/// which Dart cannot see, with its own test.
+#[test]
+fn refused_erase_region() {
+    refused("erase region", &two_pages(), |e| e.erase_region(0, [0.0, 0.0, 50.0, 50.0]).unwrap(), DRAWN);
+}
+
+/// No Dart battery sees it: the wall pairs each refused field of the editor,
+/// which Dart cannot see, with its own test.
+#[test]
+fn refused_image_modification() {
+    refused(
+        "image modification",
+        &two_pages(),
+        |e| e.reposition_image(0, "Im1", 10.0, 10.0).unwrap(),
+        DRAWN,
+    );
+}
+
+/// No Dart battery sees it: the wall pairs each refused field of the editor,
+/// which Dart cannot see, with its own test.
+#[test]
+fn refused_annotation() {
+    refused(
+        "annotation",
+        &two_pages(),
+        |e| {
+            let mark = WatermarkAnnotation::new("DRAFT").with_rect(Rect::new(10.0, 10.0, 100.0, 40.0));
+            e.add_page_annotation(0, mark).unwrap();
+        },
+        ANNOTATED,
+    );
+}
+
+/// No Dart battery sees it: the wall pairs each refused field of the editor,
+/// which Dart cannot see, with its own test.
+#[test]
+fn refused_flatten_annotations() {
+    refused("flatten annotations", &two_pages(), |e| e.flatten_page_annotations(0).unwrap(), ANNOTATED);
+}
+
+/// No Dart battery sees it: the wall pairs each refused field of the editor,
+/// which Dart cannot see, with its own test.
+#[test]
+fn refused_flatten_forms_on_page() {
+    refused("flatten forms on page", &form(), |e| e.flatten_forms_on_page(0).unwrap(), ANNOTATED);
+}
+
+/// No Dart battery sees it: the wall pairs each refused field of the editor,
+/// which Dart cannot see, with its own test.
+#[test]
+fn refused_flatten_forms() {
+    refused("flatten forms", &form(), |e| e.flatten_forms().unwrap(), FIELDS_REMOVED);
+}
+
+/// No Dart battery sees it: the wall pairs each refused field of the editor,
+/// which Dart cannot see, with its own test.
+#[test]
+fn refused_redaction_mark() {
+    refused("redaction mark", &two_pages(), |e| e.add_redaction(0, [5.0, 90.0, 100.0, 120.0], None).unwrap(), REDACTED);
+}
+
+/// No Dart battery sees it: the wall pairs each refused field of the editor,
+/// which Dart cannot see, with its own test.
+#[test]
+fn refused_redaction_applied() {
+    refused(
+        "redaction applied",
+        &two_pages(),
+        |e| {
+            e.add_redaction(0, [5.0, 90.0, 100.0, 120.0], None).unwrap();
+            e.apply_redactions_destructive(crate::redaction::RedactionOptions::default()).unwrap();
+        },
+        REDACTED,
+    );
+}
+
+/// No Dart battery sees it: the wall pairs each refused field of the editor,
+/// which Dart cannot see, with its own test.
+#[test]
+fn refused_embedded_file() {
+    refused("embedded file", &two_pages(), |e| e.embed_file("a.txt", b"hello".to_vec()).unwrap(), "files were embedded");
+}
+
+/// No Dart battery sees it: the wall pairs each refused field of the editor,
+/// which Dart cannot see, with its own test.
+#[test]
+fn refused_new_form_field() {
+    refused(
+        "new form field",
+        &form(),
+        |e| drop(e.add_form_field(0, TextFieldWidget::new("extra", Rect::new(20.0, 60.0, 100.0, 20.0))).unwrap()),
+        "form fields or objects were added",
+    );
+}
+
+/// No Dart battery sees it: the wall pairs each refused field of the editor,
+/// which Dart cannot see, with its own test.
+#[test]
+fn refused_removed_form_field() {
+    refused("removed form field", &form(), |e| e.remove_form_field("both").unwrap(), FIELDS_REMOVED);
+}

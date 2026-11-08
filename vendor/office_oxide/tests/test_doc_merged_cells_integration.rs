@@ -1,0 +1,323 @@
+//! Integration tests for merged table cells in legacy `.doc` files.
+//!
+//! The document is built **in code** by a minimal synthetic `.doc` writer
+//! (`tests/common/mod.rs`) — no third-party fixture blob is committed
+//! (AGENTS.md rule #4). It is a 4-row table with horizontally merged cells
+//! (`col_span`) and one vertically merged cell (`row_span`):
+//!
+//! ```text
+//! +---------------+---------------+
+//! | A (col=3)     | B (col=2)     |
+//! +---+---+-------+-------+-------+
+//! | C (row=2) | D | E (col=2) | F |
+//! |          +---+-------+---+---+
+//! |          | G | H (col=2) | I |
+//! +---+---+---------------+---+---+
+//! | K (col=5)                     |
+//! +-------------------------------+
+//! ```
+//!
+//! The column grid is the union of every row's `rgdxaCenter` boundaries
+//! (here `[0, 1000, 2000, 3000, 4000, 5000]` in twips). A cell's `col_span`
+//! is the number of grid edges inside its own boundary interval, which
+//! yields `colspan="3"` (cell A) and `colspan="2"` (cell B). Cell C carries
+//! `fVertMerge | fVertRestart` (0x0060); the first cell of row 2 carries only
+//! `fVertMerge` (0x0020), so it is absorbed into C, which spans rows 1-2.
+
+mod common;
+
+use common::{Para, build_doc, cell_grpprl, open_doc, row_grpprl};
+use office_oxide::ir::{Element, InlineContent, Table, TableCell};
+
+/// Locate the first `Element::Table` in the document's single section.
+fn first_table(ir: &office_oxide::ir::DocumentIR) -> Option<&Table> {
+    ir.sections
+        .iter()
+        .flat_map(|s| s.elements.iter())
+        .find_map(|e| match e {
+            Element::Table(t) => Some(t),
+            _ => None,
+        })
+}
+
+/// Concatenate the text inside a cell; interior paragraphs join with `\n`.
+fn cell_text(cell: &TableCell) -> String {
+    let mut out = String::new();
+    for (i, el) in cell.content.iter().enumerate() {
+        if i > 0 {
+            out.push('\n');
+        }
+        if let Element::Paragraph(p) = el {
+            for ic in &p.content {
+                if let InlineContent::Text(t) = ic {
+                    out.push_str(&t.text);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// `(text, col_span, row_span)` for one cell.
+fn cell_shape(cell: &TableCell) -> (String, u32, u32) {
+    (cell_text(cell), cell.col_span, cell.row_span)
+}
+
+/// Build a synthetic merged-cell table `.doc`.
+fn synthetic_merged_doc() -> Vec<u8> {
+    let mut paras = Vec::new();
+
+    // Row 0: A spans cols 0-3, B spans cols 3-5.
+    let r0_centers = [0i16, 3000, 5000];
+    paras.push(Para {
+        text: "A",
+        terminator: '\u{7}',
+        grpprl: cell_grpprl(),
+    });
+    paras.push(Para {
+        text: "B",
+        terminator: '\u{7}',
+        grpprl: cell_grpprl(),
+    });
+    paras.push(Para {
+        text: "",
+        terminator: '\u{7}',
+        grpprl: row_grpprl(&r0_centers, &[0, 0]),
+    });
+
+    // Row 1: C (vert merge start), D, E (cols 2-4), F.
+    let r1_centers = [0i16, 1000, 2000, 4000, 5000];
+    paras.push(Para {
+        text: "C",
+        terminator: '\u{7}',
+        grpprl: cell_grpprl(),
+    });
+    paras.push(Para {
+        text: "D",
+        terminator: '\u{7}',
+        grpprl: cell_grpprl(),
+    });
+    paras.push(Para {
+        text: "E",
+        terminator: '\u{7}',
+        grpprl: cell_grpprl(),
+    });
+    paras.push(Para {
+        text: "F",
+        terminator: '\u{7}',
+        grpprl: cell_grpprl(),
+    });
+    paras.push(Para {
+        text: "",
+        terminator: '\u{7}',
+        grpprl: row_grpprl(&r1_centers, &[0x0060, 0, 0, 0]),
+    });
+
+    // Row 2: first cell continues C (absorbed), then G, H (cols 2-4), I.
+    let r2_centers = [0i16, 1000, 2000, 4000, 5000];
+    paras.push(Para {
+        text: "",
+        terminator: '\u{7}',
+        grpprl: cell_grpprl(),
+    });
+    paras.push(Para {
+        text: "G",
+        terminator: '\u{7}',
+        grpprl: cell_grpprl(),
+    });
+    paras.push(Para {
+        text: "H",
+        terminator: '\u{7}',
+        grpprl: cell_grpprl(),
+    });
+    paras.push(Para {
+        text: "I",
+        terminator: '\u{7}',
+        grpprl: cell_grpprl(),
+    });
+    paras.push(Para {
+        text: "",
+        terminator: '\u{7}',
+        grpprl: row_grpprl(&r2_centers, &[0x0020, 0, 0, 0]),
+    });
+
+    // Row 3: K spans the whole five-column grid.
+    let r3_centers = [0i16, 5000];
+    paras.push(Para {
+        text: "K",
+        terminator: '\u{7}',
+        grpprl: cell_grpprl(),
+    });
+    paras.push(Para {
+        text: "",
+        terminator: '\u{7}',
+        grpprl: row_grpprl(&r3_centers, &[0]),
+    });
+
+    build_doc(&paras)
+}
+
+#[test]
+fn test_doc_merged_cells_have_four_rows() {
+    let bytes = synthetic_merged_doc();
+    let doc = open_doc(&bytes);
+    let ir = doc.to_ir();
+
+    let table = first_table(&ir).expect("expected an Element::Table in the IR");
+    assert_eq!(table.rows.len(), 4, "the merged table has four rows");
+}
+
+#[test]
+fn test_doc_horizontal_merges_set_col_span() {
+    let bytes = synthetic_merged_doc();
+    let doc = open_doc(&bytes);
+    let ir = doc.to_ir();
+
+    let table = first_table(&ir).expect("expected a table");
+
+    // Row 0: A spans the first three grid columns, B the remaining two.
+    let shapes: Vec<_> = table.rows[0].cells.iter().map(cell_shape).collect();
+    assert_eq!(shapes, vec![("A".to_string(), 3, 1), ("B".to_string(), 2, 1)]);
+
+    // Row 1: E spans the two middle grid columns; C/D/F are single-column.
+    let shapes: Vec<_> = table.rows[1].cells.iter().map(cell_shape).collect();
+    assert_eq!(
+        shapes,
+        vec![
+            ("C".to_string(), 1, 2),
+            ("D".to_string(), 1, 1),
+            ("E".to_string(), 2, 1),
+            ("F".to_string(), 1, 1),
+        ]
+    );
+
+    // Row 2: the vertical-merge continuation cell of C is absorbed, so the
+    // row has only three cells (G, H, I). H spans two grid columns.
+    let shapes: Vec<_> = table.rows[2].cells.iter().map(cell_shape).collect();
+    assert_eq!(shapes.len(), 3, "the vertical-merge continuation cell is skipped");
+    assert_eq!(shapes[0], ("G".to_string(), 1, 1));
+    assert_eq!(shapes[1], ("H".to_string(), 2, 1));
+    assert_eq!(shapes[2], ("I".to_string(), 1, 1));
+
+    // Row 3: K spans the whole five-column grid.
+    let shapes: Vec<_> = table.rows[3].cells.iter().map(cell_shape).collect();
+    assert_eq!(shapes, vec![("K".to_string(), 5, 1)]);
+}
+
+#[test]
+fn test_doc_vertical_merge_sets_row_span() {
+    let bytes = synthetic_merged_doc();
+    let doc = open_doc(&bytes);
+    let ir = doc.to_ir();
+
+    let table = first_table(&ir).expect("expected a table");
+    let c = &table.rows[1].cells[0];
+    assert_eq!(cell_text(c), "C");
+    assert_eq!(c.row_span, 2, "C merges with the empty cell in row 2");
+    assert_eq!(c.col_span, 1);
+}
+
+/// A vertical merge continues the cell above it in the same column, not the
+/// cell with the same index. Row 0 has `X` over two grid columns and `Y`, which
+/// starts a vertical merge; row 1 has three cells and the third continues `Y`.
+fn vertical_merge_between_rows_of_different_widths() -> Vec<u8> {
+    let cell = |text| Para {
+        text,
+        terminator: '\u{7}',
+        grpprl: cell_grpprl(),
+    };
+    let row_end = |centers: &[i16], rgfs: &[u16]| Para {
+        text: "",
+        terminator: '\u{7}',
+        grpprl: row_grpprl(centers, rgfs),
+    };
+    build_doc(&[
+        cell("X"),
+        cell("Y"),
+        row_end(&[0, 2000, 3000], &[0, 0x0060]),
+        cell("P"),
+        cell("Q"),
+        cell(""),
+        row_end(&[0, 1000, 2000, 3000], &[0, 0, 0x0020]),
+    ])
+}
+
+#[test]
+fn test_doc_vertical_merge_matches_the_cell_above_by_column_position() {
+    let doc = open_doc(&vertical_merge_between_rows_of_different_widths());
+    let ir = doc.to_ir();
+    let table = first_table(&ir).expect("a table");
+    let shapes = |row: usize| -> Vec<_> { table.rows[row].cells.iter().map(cell_shape).collect() };
+    assert_eq!(
+        shapes(0),
+        vec![("X".to_string(), 2, 1), ("Y".to_string(), 1, 2)],
+        "Y is two rows tall"
+    );
+    assert_eq!(
+        shapes(1),
+        vec![("P".to_string(), 1, 1), ("Q".to_string(), 1, 1)],
+        "the continuation under Y is absorbed and nothing else is"
+    );
+}
+
+fn plain_cell(text: &'static str) -> Para {
+    Para {
+        text,
+        terminator: '\u{7}',
+        grpprl: cell_grpprl(),
+    }
+}
+
+fn row_end_of(centers: &[i16], rgfs: &[u16]) -> Para {
+    Para {
+        text: "",
+        terminator: '\u{7}',
+        grpprl: row_grpprl(centers, rgfs),
+    }
+}
+
+#[test]
+fn test_doc_vertical_merge_continuation_must_cover_the_same_columns() {
+    // The second cell of row 1 sits under the merged cell but covers only half
+    // of it, so it is an ordinary cell and is not swallowed.
+    let bytes = build_doc(&[
+        plain_cell("a"),
+        plain_cell("merged"),
+        row_end_of(&[0, 1000, 3000], &[0, 0x0060]),
+        plain_cell("b"),
+        plain_cell("c"),
+        plain_cell("d"),
+        row_end_of(&[0, 1000, 2000, 3000], &[0, 0x0020, 0]),
+    ]);
+    let ir = open_doc(&bytes).to_ir();
+    let table = first_table(&ir).expect("a table");
+    let texts: Vec<String> = table.rows[1].cells.iter().map(cell_text).collect();
+    assert_eq!(texts, vec!["b", "c", "d"], "nothing in row 1 is dropped");
+    assert!(
+        table
+            .rows
+            .iter()
+            .flat_map(|r| &r.cells)
+            .all(|c| c.row_span == 1)
+    );
+}
+
+#[test]
+fn test_doc_vertical_merge_continuation_text_is_kept_in_the_merged_cell() {
+    // Word leaves a continuation empty; a damaged file can put text in one, and
+    // that text is added to the merged cell instead of being dropped.
+    let bytes = build_doc(&[
+        plain_cell("top"),
+        row_end_of(&[0, 1000], &[0x0060]),
+        plain_cell("second"),
+        row_end_of(&[0, 1000], &[0x0020]),
+        plain_cell(""),
+        row_end_of(&[0, 1000], &[0x0020]),
+    ]);
+    let ir = open_doc(&bytes).to_ir();
+    let table = first_table(&ir).expect("a table");
+    assert_eq!(table.rows[0].cells.len(), 1);
+    assert_eq!(table.rows[0].cells[0].row_span, 3);
+    assert_eq!(cell_text(&table.rows[0].cells[0]), "top\nsecond");
+    assert!(table.rows[1].cells.is_empty() && table.rows[2].cells.is_empty());
+}
