@@ -209,11 +209,8 @@ void ensureCargoVersion(Uri packageRoot) {
   ).firstMatch(probe.stdout as String);
   if (versionMatch == null) return;
   final detected = versionMatch.group(1)!;
-  final have = _semver(detected);
-  final want = _semver(required);
-  if (have == null || want == null) return;
-
-  final cmp = _cmpSemver(have, want);
+  final cmp = compareRustToPin(detected, required);
+  if (cmp == null) return;
   if (cmp < 0) {
     // Two clearly-labelled options, each command on its own line so it is
     // obvious what to copy. rustup is one cross-platform tool — the exact
@@ -239,6 +236,17 @@ void ensureCargoVersion(Uri packageRoot) {
       '    rustup toolchain install $required && rustup default $required',
     );
   }
+}
+
+/// Below zero when the Rust [detected] is older than the [pin], zero when it
+/// is the pin's release, above zero when newer; null when either does not
+/// parse. The pin names a release, `1.93`, and every patch of it, `1.93.1`,
+/// is that release, so only as many fields as the pin has are compared.
+int? compareRustToPin(String detected, String pin) {
+  final have = _semver(detected);
+  final want = _semver(pin);
+  if (have == null || want == null) return null;
+  return _cmpSemver(have.take(want.length).toList(), want);
 }
 
 List<int>? _semver(String v) {
