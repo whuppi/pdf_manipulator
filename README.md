@@ -715,12 +715,12 @@ Two knobs decide the size — **`keep`** (which capabilities go in) and **`build
 
 | Engine | Native | Web — raw (gzipped) |
 |---|---|---|
-| Full · `speed` (default) | 22.7 MB | 18.7 MB (7.7 MB) |
-| Full · `size` | 16.7 MB | 15.1 MB (6.6 MB) |
-| Core only · `speed` | 6.7 MB | 5.6 MB (2.1 MB) |
-| Core only · `size` | 5.4 MB | 4.7 MB (1.8 MB) |
+| Full · `speed` (default) | 25.5 MB | 23.5 MB (9.0 MB) |
+| Full · `size` | 17.5 MB | 15.9 MB (7.0 MB) |
+| Core only · `speed` | 8.7 MB | 8.1 MB (2.8 MB) |
+| Core only · `size` | 6.1 MB | 5.4 MB (2.1 MB) |
 
-The top row is the default; the bottom row is the smallest — core + `size`, about three quarters off. `keep` does the heavy lifting (full → core is about 71% of the native library gone); `build: size` shaves another ~20–25% on top. `size` trades a little runtime speed for the bytes: the cost lands on rendering and image work, and is negligible for parse, edit, and metadata.
+The top row is the default; the bottom row is the smallest — core + `size`, about three quarters off. `keep` does the heavy lifting (full → core is about 66% of the native library gone); `build: size` shaves about 30% more on top. `size` trades a little runtime speed for the bytes: the cost lands on rendering and image work, and is negligible for parse, edit, and metadata.
 
 A custom engine — only the capabilities you keep — compiles on your machine. There is nothing to set up in advance: if a piece is missing, the build stops with the exact instruction. What it will ask for:
 
@@ -777,12 +777,12 @@ How do you know what to keep? Each capability covers a small set of methods. Cor
 
 | Capability | Keep it if you call | Also brings | Adds (native) |
 |---|---|---|---|
-| `core` | everything else — merge, split, forms, watermark, encrypt, build… | — | always included (~6.7 MB) |
-| `render` | `doc.render()`, `doc.bitmap()`, `doc.extractImages()`, `editor.reduceImages()`, `pdf.compress()`, `editor.redact()`, `editor.markRedaction()`, `editor.applyRedactions()` | — | +4.8 MB |
-| `signatures` | `pdf.sign()`, `doc.signatures()`, `doc.verifySignatures()` | — | +1.0 MB |
+| `core` | everything else — merge, split, forms, watermark, encrypt, build… | — | always included (~8.7 MB) |
+| `render` | `doc.render()`, `doc.bitmap()`, `doc.extractImages()`, `editor.reduceImages()`, `pdf.compress()`, `editor.redact()`, `editor.markRedaction()`, `editor.applyRedactions()` | — | +2.4 MB |
+| `signatures` | `pdf.sign()`, `doc.signatures()`, `doc.verifySignatures()` | — | +1.3 MB |
 | `pdfa` | `doc.validatePdfA()`, `doc.validatePdfUa()`, `editor.convertToPdfA()` | — | +0.1 MB |
-| `extract` | `doc.extractText()`, `doc.text()`, `doc.search()`, `doc.classifyPages()`, `doc.classifyDocument()` | — | +3.2 MB |
-| `office` | `pdf.convertToOffice()`, `pdf.convertFromOffice()` (DOCX / PPTX / XLSX) | `extract`, automatically | +2.9 MB on top of `extract` |
+| `extract` | `doc.extractText()`, `doc.text()`, `doc.search()`, `doc.classifyPages()`, `doc.classifyDocument()` | — | +3.5 MB |
+| `office` | `pdf.convertToOffice()`, `pdf.convertFromOffice()` (DOCX / PPTX / XLSX) | `extract`, automatically | +5.4 MB on top of `extract` |
 
 Dependencies are handled for you: `keep: [office]` switches on `extract` as well. Costs are measured one capability at a time, and capabilities share some code — so a combination can total a little less than the sum of its rows.
 
@@ -898,7 +898,7 @@ final mode = await pdf.ensureInitialized(); // or just check
 
 Forcing a mode the browser cannot run, or Asyncify when your app did not ship its WASM (no entry in `pdf_oxide_manifest.json`), throws `PdfUnsupported` when the `Pdf` initializes (`ensureInitialized`, or its first operation); it never falls back silently. A missing or unreadable `pdf_oxide_manifest.json` is the same error, naming the file and the setup command.
 
-**Self-hosting the assets.** Serve `.wasm` files as `application/wasm` with compression on: a static host picks the compression from the extension, and the parts total 8.1 MB gzipped (10.2 MB with Asyncify). Keep every file beside `executor_worker.js`. A service worker that precaches assets reads `pdf_oxide_manifest.json` and caches the parts it lists. The page checks each part's size and SHA-256 against the manifest.
+**Self-hosting the assets.** Serve `.wasm` files as `application/wasm` with compression on: a static host picks the compression from the extension, and the parts total 9.0 MB gzipped (11.4 MB with Asyncify). Keep every file beside `executor_worker.js`. A service worker that precaches assets reads `pdf_oxide_manifest.json` and caches the parts it lists. The page checks each part's size and SHA-256 against the manifest.
 
 **Enable streaming on older browsers.** Chrome 137+ / Firefox 139+ already stream via JSPI with no setup. For older browsers that have `SharedArrayBuffer`, two server headers switch the fallback from disk-copy (OPFS) to streaming (Atomics):
 
@@ -936,7 +936,7 @@ hooks:
 
 Setup then also provides the Asyncify wasm's parts, `pdf_oxide_asyncify_bg.0.wasm` and onward, next to the normal one and listed in `pdf_oxide_manifest.json`: downloaded for the full engine, built from source for a `keep:` subset. A browser fetches only the parts of the module its mode runs, so JSPI, Atomics and OPFS visitors never download the larger one; auto-detection picks Asyncify only where OPFS cannot run.
 
-The trade-off, plainly: the Asyncify module is about a third larger than the normal one (the full engine: 28.1 MB against 20.8 MB, 10.2 MB against 8.1 MB gzipped), because most of the engine can be in the middle of a read when it stops. Every module ships as parts of 16 MiB, so neither reaches the 25 MiB per-file limit of Cloudflare Pages and Workers static assets. The instrumented engine also runs slower, and every read is a round trip to the page: on a 300 MB text PDF, opening and extracting 50 pages took 93 s with Asyncify against 41 s with OPFS (the copy included), and merging two such files 16–19 s against 9–10 s. Turn it on when streaming matters more than those costs, and measure your own files.
+The trade-off, plainly: the Asyncify module is about a third larger than the normal one (the full engine: 31.9 MB against 23.5 MB, 11.4 MB against 9.0 MB gzipped), because most of the engine can be in the middle of a read when it stops. Every module ships as parts of 16 MiB, so neither reaches the 25 MiB per-file limit of Cloudflare Pages and Workers static assets. The instrumented engine also runs slower, and every read is a round trip to the page: on a 300 MB text PDF, opening and extracting 50 pages took 93 s with Asyncify against 41 s with OPFS (the copy included), and merging two such files 16–19 s against 9–10 s. Turn it on when streaming matters more than those costs, and measure your own files.
 
 </details>
 
