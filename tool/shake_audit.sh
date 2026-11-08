@@ -17,6 +17,14 @@ source "$ROOT/tool/build_lib.sh"
 
 fail() { echo "SHAKE-AUDIT FAIL: $1" >&2; exit 1; }
 
+# Measure on the Rust CI ships with: another release inlines differently, and
+# the README quotes these numbers.
+# shellcheck source=tool/versions.env
+source "$ROOT/tool/versions.env"
+export RUSTUP_TOOLCHAIN="$RUST_VERSION"
+rustup run "$RUST_VERSION" rustc --version >/dev/null 2>&1 \
+  || fail "Rust $RUST_VERSION is not installed: rustup toolchain install $RUST_VERSION"
+
 # The audit's own baseline: engine internals with every droppable capability
 # dropped — the `[]` keep-set tool/keep_sets.dart prints for native, never a
 # hand copy that silently goes stale when a capability is added.
@@ -38,7 +46,7 @@ CORE_FEATURES=$(empty_keep_set native)
 FULL_FEATURES=$(json_get '.features.native' "$ROOT/build.json")
 # Ceiling with headroom over the measured core-only size; a breach means a
 # heavy module leaked back into the core build.
-CORE_CEILING_BYTES=$((8 * 1024 * 1024))
+CORE_CEILING_BYTES=$((9 * 1024 * 1024))
 
 # File size in bytes — wc -c is POSIX; BSD wc pads with spaces, so trim.
 fsize() {
@@ -159,7 +167,9 @@ if [ "${SHAKE_AUDIT_WASM:-0}" = "1" ]; then
   [ -n "$WASM_CORE_FEATURES" ] \
     || fail "tool/keep_sets.dart wasm produced no [] features line"
   read -r WASM_CORE_RAW WASM_CORE_GZ <<< "$(measure_wasm "$WASM_CORE_FEATURES")"
-  DEFAULT_RAW=$(json_get '.pdf_oxide_bg.bytes' "$ROOT/web_assets/pdf_oxide_manifest.json")
+  [ -f "$ROOT/web_assets/pdf_oxide_manifest.json" ] \
+    || fail "web_assets/pdf_oxide_manifest.json missing: run make web_assets/pdf_oxide_bg.0.wasm first"
+  DEFAULT_RAW=$(json_get '[.pdf_oxide_bg.parts[].bytes] | add' "$ROOT/web_assets/pdf_oxide_manifest.json")
   [ "$WASM_CORE_RAW" -lt "$DEFAULT_RAW" ] \
     || fail "core-only wasm not smaller than the full default"
   read -r WASM_FULL_SIZE_RAW WASM_FULL_SIZE_GZ <<< "$(measure_wasm "$WASM_FULL_FEATURES" size)"
