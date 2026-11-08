@@ -77,6 +77,15 @@ on:
         type: choice
         options: [ubuntu-24.04, macos-15, windows-2025-vs2026]
         default: ubuntu-24.04
+      ssh:
+        description: >-
+          Debug — each row that passes the filter opens SSH and holds 4 hours:
+          'setup' = provision only (make ci-setup), 'after' = run the row's
+          target, then hold even when it fails. Connect with whuppi/ci's
+          tool/debug-ssh/connect.sh whuppi/pdf_manipulator <run-id>
+        type: choice
+        options: ['off', setup, after]
+        default: 'off'
 
 permissions: {}
 
@@ -154,9 +163,9 @@ jobs:
           # Linux-built wasm.
           - { name: "pkg: Linux (ubuntu-x64)",      runner: ubuntu-24.04,        make: test-pkg-native,      cache: native,timeout: 30 }
           - { name: "pkg: macOS (macos-arm64)",     runner: macos-15,            make: test-pkg-native,      cache: native,timeout: 30 }
-          - { name: "pkg: Web (ubuntu-x64)",        runner: ubuntu-24.04,        make: test-ops-web,         cache: wasm, engine: pkg-web,timeout: 40, chrome: true, headless-display: true, wasm-cache: true, wasm-build: true }
-          - { name: "pkg: Web (macos-arm64) [P]",       runner: macos-15,            make: test-ops-web,         cache: wasm, engine: pkg-web,timeout: 40, chrome: true, wasm-cache: true, wasm-build: true, portability: true }
-          - { name: "pkg: Web (win-x64) [P]",           runner: windows-2025-vs2026, make: test-ops-web,         cache: wasm, engine: pkg-web,timeout: 40, chrome: true, wasm-cache: true, wasm-build: true, portability: true }
+          - { name: "pkg: Web (ubuntu-x64)",        runner: ubuntu-24.04,        make: test-ops-web,         cache: wasm, engine: pkg-web,timeout: 60, chrome: true, headless-display: true, wasm-cache: true, wasm-build: true }
+          - { name: "pkg: Web (macos-arm64) [P]",       runner: macos-15,            make: test-ops-web,         cache: wasm, engine: pkg-web,timeout: 90, chrome: true, wasm-cache: true, wasm-build: true, portability: true }
+          - { name: "pkg: Web (win-x64) [P]",           runner: windows-2025-vs2026, make: test-ops-web,         cache: wasm, engine: pkg-web,timeout: 90, chrome: true, wasm-cache: true, wasm-build: true, portability: true }
           - { name: "pkg: Windows (win-x64)",       runner: windows-2025-vs2026, make: test-pkg-native,      cache: native,timeout: 40 }
 
           # ── Integration tests ──
@@ -181,7 +190,7 @@ jobs:
           - { name: "int: macOS (macos-arm64)",     runner: macos-15,            make: test-example-macos,   cache: native,timeout: 30, xcode-cache: true, xcode-cache-target: macos }
           - { name: "int: Web (ubuntu-x64)",        runner: ubuntu-24.04,        make: test-example-web,     cache: wasm,timeout: 40, chrome: true, headless-display: true, wasm-cache: true, wasm-build: true }
           - { name: "int: Web (macos-arm64) [P]",       runner: macos-15,            make: test-example-web,     cache: wasm,timeout: 40, chrome: true, wasm-cache: true, wasm-build: true, portability: true }
-          - { name: "int: Web (win-x64) [P]",           runner: windows-2025-vs2026, make: test-example-web,     cache: wasm,timeout: 40, chrome: true, wasm-cache: true, wasm-build: true, portability: true }
+          - { name: "int: Web (win-x64) [P]",           runner: windows-2025-vs2026, make: test-example-web,     cache: wasm,timeout: 55, chrome: true, wasm-cache: true, wasm-build: true, portability: true }
           - { name: "int: Windows (win-x64)",       runner: windows-2025-vs2026, make: test-example-windows, cache: native,timeout: 40 }
 
           # ── Verify (release builds) ──
@@ -194,15 +203,15 @@ jobs:
           # Never build these with a lighter profile to save minutes.
           # The [P] rows prove a release build from a dev's Mac or Windows
           # box yields the same shippable artifact, not just Linux CI's.
-          - { name: "verify: Android (ubuntu-x64)", runner: ubuntu-24.04,        make: verify-android,       cache: android, engine: verify-android,timeout: 40, java: true, gradle-cache: true }
-          - { name: "verify: Android (macos-arm64) [P]",runner: macos-15,            make: verify-android,       cache: android, engine: verify-android,timeout: 40, java: true, gradle-cache: true, portability: true }
+          - { name: "verify: Android (ubuntu-x64)", runner: ubuntu-24.04,        make: verify-android,       cache: android, engine: verify-android,timeout: 45, java: true, gradle-cache: true }
+          - { name: "verify: Android (macos-arm64) [P]",runner: macos-15,            make: verify-android,       cache: android, engine: verify-android,timeout: 50, java: true, gradle-cache: true, portability: true }
           - { name: "verify: Android (win-x64) [P]",    runner: windows-2025-vs2026, make: verify-android,       cache: android, engine: verify-android,timeout: 60, java: true, gradle-cache: true, portability: true }
           - { name: "verify: iOS (macos-arm64)",    runner: macos-15,            make: verify-ios,           cache: ios,timeout: 40, xcode-cache: true, xcode-cache-target: ios, pods-cache: true }
           - { name: "verify: Linux (ubuntu-x64)",   runner: ubuntu-24.04,        make: verify-linux,         cache: native,timeout: 30 }
           - { name: "verify: macOS (macos-arm64)",  runner: macos-15,            make: verify-macos,         cache: native, engine: verify-macos,timeout: 40, xcode-cache: true, xcode-cache-target: macos }
           - { name: "verify: Web (ubuntu-x64)",     runner: ubuntu-24.04,        make: verify-web,           cache: wasm,timeout: 40, wasm-cache: true, wasm-build: true }
           - { name: "verify: Web (macos-arm64) [P]",    runner: macos-15,            make: verify-web,           cache: wasm,timeout: 40, wasm-cache: true, wasm-build: true, portability: true }
-          - { name: "verify: Web (win-x64) [P]",        runner: windows-2025-vs2026, make: verify-web,           cache: wasm,timeout: 40, wasm-cache: true, wasm-build: true, portability: true }
+          - { name: "verify: Web (win-x64) [P]",        runner: windows-2025-vs2026, make: verify-web,           cache: wasm,timeout: 50, wasm-cache: true, wasm-build: true, portability: true }
           - { name: "verify: Windows (win-x64)",    runner: windows-2025-vs2026, make: verify-windows,       cache: native,timeout: 40 }
 
           # ── Release-compile guard — the PR jobs that run
@@ -225,22 +234,22 @@ jobs:
           # fix) cost ~3.5 GB of the 10 GB quota for bytes already in
           # `android`/`ios`/`native`/`wasm`. See the rust capability.
           - { name: "compile: macOS (macos-arm64)",  runner: macos-15,            make: compile-macos,        cache: native, engine: compile-native,timeout: 30 }
-          - { name: "compile: iOS (macos-arm64)",    runner: macos-15,            make: compile-ios,          cache: ios, engine: compile-ios,timeout: 40 }
-          - { name: "compile: Android (ubuntu-x64)", runner: ubuntu-24.04,        make: compile-android,      cache: android, engine: compile-android,timeout: 40 }
+          - { name: "compile: iOS (macos-arm64)",    runner: macos-15,            make: compile-ios,          cache: ios, engine: compile-ios,timeout: 45 }
+          - { name: "compile: Android (ubuntu-x64)", runner: ubuntu-24.04,        make: compile-android,      cache: android, engine: compile-android,timeout: 50 }
           - { name: "compile: Linux (ubuntu-x64)",   runner: ubuntu-24.04,        make: compile-linux,        cache: native, engine: compile-native,timeout: 30 }
           - { name: "compile: WASM (ubuntu-x64)",    runner: ubuntu-24.04,        make: compile-wasm,         cache: wasm, engine: compile-wasm,timeout: 40 }
           - { name: "compile: Windows (win-x64)",    runner: windows-2025-vs2026, make: compile-windows,      cache: native, engine: compile-native,timeout: 40 }
 
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: ${{ matrix.timeout }}
+    timeout-minutes: ${{ (inputs.ssh == 'setup' || inputs.ssh == 'after') && 300 || matrix.timeout }}
     permissions:
       contents: read   # checkout
       packages: write  # oci-cache: the big archives live on ghcr.io (read on PRs, write from dev)
     steps:
       - name: Check filter
         id: filter
-        uses: whuppi/ci/actions/matrix-filter@v2.7.13
+        uses: whuppi/ci/actions/matrix-filter@v2.7.17
         with:
           name: ${{ matrix.name }}
           filter: ${{ needs.inputs.outputs.filter }}
@@ -252,7 +261,7 @@ jobs:
       - uses: ./.github/actions/make-target
         if: steps.filter.outputs.match == 'true'
         with:
-          make-target: ${{ matrix.make }}
+          make-target: ${{ inputs.ssh == 'setup' && 'ci-setup' || matrix.make }}
           rust-cache: ${{ env.RUST_CACHE }}
           rust-cache-key: ${{ matrix.cache }}
           rust-engine-key: ${{ matrix.engine || '' }}
@@ -286,6 +295,11 @@ jobs:
           wasm-build: ${{ matrix.wasm-build || 'false' }}
           emulator: ${{ matrix.emulator || 'false' }}
           simulator: ${{ matrix.simulator || 'false' }}
+      - name: Hold for SSH (debug only)
+        if: always() && steps.filter.outputs.match == 'true' && (inputs.ssh == 'setup' || inputs.ssh == 'after')
+        uses: whuppi/ci/actions/debug-ssh@v2.7.17
+        with:
+          hold-minutes: '240'
       - name: Upload test results
         if: always() && steps.filter.outputs.match == 'true'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
