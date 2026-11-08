@@ -123,6 +123,7 @@ S1; the files stay byte-identical to upstream and just never fire.
 | Before committing any Rust patch | [S7 — Verify our-code warnings](#s7--verify-our-code-warnings) |
 | Preview the pub.dev changelog | [S8 — Preview changelog](#s8--preview-changelog-before-pubdev-publish) |
 | Add a test fixture | [S9 — Add a test fixture](#s9--add-a-test-fixture) |
+| Before a release, and with every S1 | [S10 — Take fixes from other forks](#s10--take-fixes-from-other-forks) |
 
 ---
 
@@ -729,6 +730,61 @@ are generated ONCE externally and committed under
 `test/fixtures/third_party/` with full provenance in the file header
 (see `tp_encrypted.dart`). Deliberately broken byte sequences are
 hand-authored in `test/fixtures/handwritten.dart`.
+
+---
+
+## S10 — Take fixes from other forks
+
+Other people fork the engines we vendor and fix bugs upstream has not
+taken yet. Our fork usually has the same bugs. Read their work before a
+release and with every S1, and port what applies.
+
+### 1. List the forks that changed something
+
+```sh
+for r in yfedoseev/pdf_oxide yfedoseev/office_oxide linebender/tiny-skia whuppi/pdf_manipulator; do
+  def=$(gh api repos/$r -q .default_branch); echo "=== $r"
+  gh api --paginate "repos/$r/forks?per_page=100" \
+    -q '.[]|select(.pushed_at > .created_at)|"\(.full_name) \(.default_branch)"' |
+  while read f b; do
+    c=$(gh api "repos/$r/compare/$def...${f%%/*}:$b" -q '"\(.ahead_by) \(.behind_by)"' 2>/dev/null) || continue
+    [ "${c%% *}" != 0 ] && echo "$f [$b] ahead=${c%% *} behind=${c##* }"
+  done
+done
+```
+
+Skip our own forks (`whuppi/*`), and read the commits of the rest:
+`gh api "repos/<upstream>/compare/<default>...<owner>:<branch>" -q '.commits[].commit.message'`,
+then the diff of each fix under `src/` (`.files[]|.filename, .patch`).
+A rename of a repository answers 301; `gh api` follows it.
+
+### 2. Decide each fix
+
+| The fix | Do |
+|---|---|
+| Our fork has the same code and the same bug | port it (step 3) |
+| Upstream took it after our base tag | the next S1 brings it; nothing now |
+| The bug is not at our base tag (upstream added it later) | open a task to take the fix with the next S1 past that tag |
+| It touches code we replaced or do not ship (bindings, other languages, a feature we rewrote) | skip it |
+| A feature, not a fix | open a task if users would want it; never port it unasked |
+
+Prove "our fork has the bug" with a test before porting; a reading of the
+code is not enough, since our patches may already cover it.
+
+### 3. Port it as an S2 patch
+
+- The change goes between `pdf_manipulator patch` markers (S2), in our
+  own words and our code style, never a copied commit.
+- The test fails on our fork before the patch and passes after it. Prefer
+  a Dart battery test on a hand-written fixture (S9); a Rust test only
+  where the fork-test rules of S2 allow one.
+- Credit the fork in the commit body, `Same fix as <owner>/<repo>@<sha>`,
+  never in a code comment.
+- A user-visible fix gets a `Fixed` bullet in `CHANGELOG.pre.md`, the
+  symptom first, as for any fix.
+- Forks of this package (`whuppi/pdf_manipulator`'s forks) are read the
+  same way; their fixes are ported into `lib/` or the engine, with the
+  same test and credit.
 
 ---
 
