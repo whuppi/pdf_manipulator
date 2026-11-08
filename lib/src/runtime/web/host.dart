@@ -358,8 +358,12 @@ class WebExecutorBooter implements ExecutorBooter {
   /// temporary listener is detached before the worker is handed out;
   /// an idle ready worker sends nothing, so no message can be lost.
   Future<WebExecutor> _bootWorker() async {
+    final clock = Stopwatch()..start();
+    final marks = <String, int>{};
+    void mark(String phase) => marks[phase] = clock.elapsedMilliseconds;
     final mode = await resolveMode();
     final entry = (await _manifestOf(_baseUrl)).modules[wasmModuleOf(mode)]!;
+    mark('manifest');
     // Every worker holds a liveness lock for its lifetime, in every
     // mode: it is the death signal that reclaims its files. Only OPFS mode
     // also gives the worker a directory under the same name.
@@ -417,6 +421,7 @@ class WebExecutorBooter implements ExecutorBooter {
       });
 
       final wasmModule = await _wasmModule(wasmModuleOf(mode), entry);
+      mark('module');
       // The worker announces `booted` once its message handler is
       // attached; posting before that drops the message silently
       // (the blob bootstrap's dynamic import is not part of module
@@ -426,6 +431,7 @@ class WebExecutorBooter implements ExecutorBooter {
       // a wall clock here would only fail healthy boots on slow
       // networks. Timeouts are never load-bearing.
       await booted.future;
+      mark('script');
       final init = JSObject()
         ..[LaneMsgFields.type] = LaneMsg.init.toJS
         ..['ioMode'] = mode.name.toJS
@@ -451,6 +457,8 @@ class WebExecutorBooter implements ExecutorBooter {
       // arrive as worker error messages; a 21MB wasm on a slow network
       // takes as long as it takes and is not a failure.
       await ready.future;
+      mark('ready');
+      _recordBoot(mode, marks);
       return WebExecutor._(worker, opfsDir, lockName, mode)..attach();
     } catch (_) {
       // A worker that never readied wrote no files (writing requires
@@ -462,6 +470,22 @@ class WebExecutorBooter implements ExecutorBooter {
       unawaited(sub?.cancel() ?? Future<void>.value());
       unawaited(errSub?.cancel() ?? Future<void>.value());
     }
+  }
+
+  static final List<String> _recentBoots = [];
+
+  /// The last boots of this page, oldest first: each phase's end in ms since
+  /// the boot began (`manifest`: mode and manifest, `module`: the compiled
+  /// module, compiled or awaited, `script`: the worker's script announced,
+  /// `ready`: the engine initialised). Internal: a test prints them when a
+  /// boot was slow, so the phase that took the time is named.
+  static List<String> get recentBoots => List.unmodifiable(_recentBoots);
+
+  static void _recordBoot(PdfIoMode mode, Map<String, int> marks) {
+    _recentBoots.add(
+      '${mode.name}: ${[for (final m in marks.entries) '${m.key} ${m.value}'].join(', ')} ms',
+    );
+    if (_recentBoots.length > 40) _recentBoots.removeAt(0);
   }
 
   static bool get _hasJspi {
@@ -580,9 +604,19 @@ class WebExecutorBooter implements ExecutorBooter {
     if (compiled != null) return compiled;
     final here = '$_baseUrl $key';
     final compiling = _compilesInFlight.putIfAbsent(here, () async {
+      final clock = Stopwatch()..start();
       try {
-        return _cachedModules[key] = await _compileParts(_baseUrl, entry);
-      } catch (_) {
+        final compiled = _cachedModules[key] = await _compileParts(
+          _baseUrl,
+          entry,
+        );
+        _recentBoots.add('compile $module: ${clock.elapsedMilliseconds} ms');
+        return compiled;
+      } catch (error) {
+        _recentBoots.add(
+          'compile $module failed after ${clock.elapsedMilliseconds} ms: '
+          '$error (each worker compiles its own)',
+        );
         return null;
       }
     });

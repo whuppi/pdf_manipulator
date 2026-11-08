@@ -500,6 +500,9 @@ void registerWebPlatformTests({
       for (final slow in ExecutorPool.recentSlowTransitions) {
         printOnFailure('slow transition: $slow');
       }
+      for (final boot in WebExecutorBooter.recentBoots) {
+        printOnFailure('boot: $boot');
+      }
       expect(
         ExecutorPool.totalSlowTransitions,
         0,
