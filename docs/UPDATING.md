@@ -561,10 +561,17 @@ What pdf's release adds on top:
 ```
 1. Add ## X.Y.Z at top of CHANGELOG.md
 2. PR to dev → squash and merge (dev ignores stable changelog — no release triggered)
-3. PR from dev → prod → create a merge commit (NOT squash, NOT rebase)
-4. (automatic) gate → discover → compile → upload
-5. (manual) approve "publish" environment → pub.dev
+3. PR from dev → prod: it shows out-of-date → Update branch (merge, NOT rebase)
+4. PR from dev → prod → create a merge commit (NOT squash, NOT rebase)
+5. (automatic) gate → discover → compile → upload
+6. (manual) approve "publish" environment → pub.dev
 ```
+
+Step 3 is normal at every release. The previous promotion's merge commit is
+on prod only, so prod is one commit ahead of dev, and prod requires an
+up-to-date branch. Update branch merges that commit into dev; it changes no
+file. The merge button of the dev → prod PR defaults to "Squash and merge":
+pick "Create a merge commit", or merge with `gh pr merge --merge`.
 
 ### Manual re-trigger
 
