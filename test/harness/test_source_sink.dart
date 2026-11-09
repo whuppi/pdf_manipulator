@@ -15,6 +15,7 @@
 //     allocator check inside the Rust harness would close this gap —
 //     tracked in CAPABILITY_ROADMAP.
 
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:pdf_manipulator/src/types/data_source.dart';
@@ -27,14 +28,19 @@ const maxReadChunk = 64 * 1024;
 const maxWriteChunk = 256 * 1024;
 
 class TestSource implements DataSource {
-  TestSource(this._data);
+  TestSource(this._data, {this.onRead});
   final Uint8List _data;
+
+  /// Called on every [readAt], before the bytes are returned. Tests
+  /// count reads and mark moments in an op through it.
+  final void Function(int offset, int count)? onRead;
 
   @override
   int get length => _data.length;
 
   @override
   Uint8List readAt(int offset, int count) {
+    onRead?.call(offset, count);
     if (count > maxReadChunk) {
       throw StateError(
         'O(1) SOURCE violation: readAt requested $count bytes '
@@ -48,13 +54,28 @@ class TestSource implements DataSource {
     // before postMessage transfer to avoid detaching the backing buffer.
     return Uint8List.sublistView(_data, offset, end);
   }
+
+  @override
+  void close() {}
 }
 
 class TestSink implements DataSink {
   final _buf = BytesBuilder(copy: false);
 
+  /// How many times the library aborted this sink.
+  int aborts = 0;
+
   @override
-  void write(Uint8List chunk) {
+  FutureOr<void> close() {}
+
+  @override
+  FutureOr<void> abort(Object reason) {
+    aborts++;
+    _buf.clear();
+  }
+
+  @override
+  FutureOr<void> write(Uint8List chunk) {
     if (chunk.length > maxWriteChunk) {
       throw StateError(
         'O(1) SINK violation: write received ${chunk.length} bytes '
@@ -66,6 +87,46 @@ class TestSink implements DataSink {
 
   Uint8List takeBytes() => _buf.takeBytes();
   int get length => _buf.length;
+}
+
+/// A [TestSink] that keeps the order of what happens to it, for the abort
+/// contract: one abort, one close, no write after the abort. A write that
+/// fails is the injected failure of an op.
+class CountingSink extends TestSink {
+  /// [failOnWrite] is the 1-based write that throws; none when null.
+  /// [onFirstWrite] runs as the first write arrives, for a test that cancels
+  /// its task from inside the op.
+  CountingSink({this.failOnWrite, this.onFirstWrite});
+
+  final int? failOnWrite;
+  final void Function()? onFirstWrite;
+
+  /// `write`, `abort` and `close`, in the order they arrived.
+  final events = <String>[];
+  int writes = 0;
+  int closes = 0;
+  int writesAfterAbort = 0;
+
+  @override
+  FutureOr<void> write(Uint8List chunk) {
+    if (aborts > 0) writesAfterAbort++;
+    events.add('write');
+    if (++writes == 1) onFirstWrite?.call();
+    if (writes == failOnWrite) throw StateError('the sink failed');
+    return super.write(chunk);
+  }
+
+  @override
+  FutureOr<void> abort(Object reason) {
+    events.add('abort');
+    return super.abort(reason);
+  }
+
+  @override
+  FutureOr<void> close() {
+    events.add('close');
+    closes++;
+  }
 }
 
 DataSource src(Uint8List bytes) => TestSource(bytes);

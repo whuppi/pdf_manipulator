@@ -8,7 +8,7 @@
 // Wire format (must match binary_codec.rs):
 //   Request:  [op_len u8][op utf8][field_count u16 LE][fields...]
 //   Response: [status u8][field_count u16 LE][fields...]
-//             status 0 → [msg_len u32 LE][msg utf8]
+//             status 0 → [kind u8][field_count u16 LE][fields...]
 //   Field:    [key_len u8][key utf8][type u8][value]
 //   Types:    0=null 1=i32 2=i64 3=f64 4=bool 5=string 6=bytes
 //             7=int_list 8=float_list 9=string_list 10=map_list
@@ -17,6 +17,8 @@
 
 import 'dart:convert';
 import 'dart:typed_data';
+
+import 'package:pdf_manipulator/src/bridge/protocol/binary_codec.dart';
 
 /// Reads the op name from request bytes. Returns null on malformed
 /// input — the engine owns parse errors, peeks never throw.
@@ -178,18 +180,27 @@ int? _valueLength(Uint8List bytes, int pos, int type) {
 }
 
 /// Builds a cancelled response (status 2) — used by lanes to
-/// complete jobs they own after a kill, matching
+/// complete jobs they own once the lane has ended, matching
 /// `ResponseWriter::cancelled` on the Rust side.
 Uint8List buildCancelledResponse() => Uint8List.fromList(const [2]);
 
 /// Builds an error response carrying [message] — used by lanes for
-/// transport-layer failures (worker init failed, pre-copy failed).
-/// Layout matches `ResponseWriter::error`:
-/// `[0][msg_len u32 LE][msg]`.
-Uint8List buildErrorResponse(String message) {
+/// transport-layer failures (worker init failed, pre-copy failed). [kind]
+/// is the error the caller decodes it as.
+/// Layout matches `ResponseWriter::error_kind`:
+/// `[0][kind][field_count 1 LE][message field]`.
+Uint8List buildErrorResponse(
+  String message, {
+  WireErrorKind kind = WireErrorKind.engine,
+}) {
   final msg = utf8.encode(message);
   final out = BytesBuilder(copy: false)
     ..addByte(0)
+    ..addByte(kind.code)
+    ..add(const [1, 0]) // field_count = 1 LE
+    ..addByte('message'.length)
+    ..add(utf8.encode('message'))
+    ..addByte(5) // string type
     ..add(_u32le(msg.length))
     ..add(msg);
   return out.takeBytes();

@@ -1,6 +1,6 @@
 // CHARTER — this battery alone proves: the form surface beyond filling a
 // value. Reading fields and their properties from a document
-// (`PdfDoc.formFields`), changing a field's properties in an edit session
+// (`PdfDocument.formFields`), changing a field's properties in an edit session
 // (tooltip, bounds, max length, alignment, colours, appearance, flags,
 // removal) and reading the change back after save, and exporting the
 // filled values as FDF / XFDF. Filling and flattening values, and the
@@ -9,7 +9,7 @@
 //
 // Diet: dart-pdf form fixtures (`form_fields`, `form_fields_props`) and
 // the handwritten AcroForm micro fixtures. Every property change is
-// proven by reading it back through `PdfDoc.formFields` after save, and
+// proven by reading it back through `PdfDocument.formFields` after save, and
 // visual ones by rendering.
 
 import 'dart:convert';
@@ -21,13 +21,17 @@ import 'package:pdf_manipulator/pdf_manipulator.dart';
 import 'package:test/test.dart';
 
 import '../../fixtures/generated/fixtures.dart';
+import '../../fixtures/handwritten.dart';
+import '../../harness/extract_text.dart';
+import '../../harness/form_fields.dart';
+import '../../harness/render_pages.dart';
 import '../../harness/test_source_sink.dart';
 import '../../harness/timeouts.dart';
 
 void registerFormTests(Pdf Function() createPdf) {
   group('form', () {
     test('the form fixture opens with its declared page count', () async {
-      final doc = await createPdf().open(src(fFormFields));
+      final doc = await createPdf().open(PdfInput(src(fFormFields)));
       expect(doc.pageCount, fFormFieldsTruth.pages);
       await doc.dispose();
     }, timeout: t(1));
@@ -36,14 +40,14 @@ void registerFormTests(Pdf Function() createPdf) {
 
     test('formFields exposes names and the text field default value', () async {
       final pdf = createPdf();
-      final doc = await pdf.open(src(fFormFields));
-      final fields = await doc.formFields;
+      final doc = await pdf.open(PdfInput(src(fFormFields)));
+      final fields = await doc.formFields();
       expect(
         fields.map((f) => f.name).toSet(),
         fFormFieldsTruth.fieldNames.toSet(),
       );
       final fullname = fields.firstWhere((f) => f.name == 'fullname');
-      expect(fullname.type, PdfFormFieldType.text);
+      expect(fullname.kind, PdfFormFieldKind.textField);
       final value = fullname.value;
       expect(value, isA<PdfTextValue>());
       expect((value as PdfTextValue).text, fFormFieldsTruth.textFieldDefault);
@@ -54,8 +58,8 @@ void registerFormTests(Pdf Function() createPdf) {
       'formFields exposes maxLength and tooltip on the props fixture',
       () async {
         final pdf = createPdf();
-        final doc = await pdf.open(src(fFormFieldsProps));
-        final city = await doc.formField('city');
+        final doc = await pdf.open(PdfInput(src(fFormFieldsProps)));
+        final city = await formFieldNamed(doc, 'city');
         expect(city, isNotNull);
         expect(city!.maxLength, fFormFieldsPropsTruth.cityMaxLength);
         expect(city.tooltip, fFormFieldsPropsTruth.cityTooltip);
@@ -66,17 +70,17 @@ void registerFormTests(Pdf Function() createPdf) {
 
     test('a checkbox field is typed checkbox', () async {
       final pdf = createPdf();
-      final doc = await pdf.open(src(fFormFieldsProps));
-      final ok = await doc.formField('ok');
+      final doc = await pdf.open(PdfInput(src(fFormFieldsProps)));
+      final ok = await formFieldNamed(doc, 'ok');
       expect(ok, isNotNull);
-      expect(ok!.type, PdfFormFieldType.checkbox);
+      expect(ok!.kind, PdfFormFieldKind.checkbox);
       await doc.dispose();
     }, timeout: t(1));
 
     test('formField returns null for a name that does not exist', () async {
       final pdf = createPdf();
-      final doc = await pdf.open(src(fFormFieldsProps));
-      expect(await doc.formField('nope'), isNull);
+      final doc = await pdf.open(PdfInput(src(fFormFieldsProps)));
+      expect(await formFieldNamed(doc, 'nope'), isNull);
       await doc.dispose();
     }, timeout: t(1));
 
@@ -84,27 +88,59 @@ void registerFormTests(Pdf Function() createPdf) {
 
     test('setFormFieldTooltip roundtrips through save', () async {
       final pdf = createPdf();
-      final editor = await pdf.edit(src(fFormFieldsProps));
-      await editor.setFormFieldTooltip('city', 'Updated tooltip');
+      final editor = await pdf.edit(PdfInput(src(fFormFieldsProps)));
+      await editor.field('city').setTooltip('Updated tooltip');
       final sink = TestSink();
       await editor.save(sink);
       await editor.dispose();
-      final doc = await pdf.open(src(sink.takeBytes()));
-      final city = await doc.formField('city');
+      final doc = await pdf.open(PdfInput(src(sink.takeBytes())));
+      final city = await formFieldNamed(doc, 'city');
       expect(city!.tooltip, 'Updated tooltip');
+      await doc.dispose();
+    }, timeout: t(1));
+
+    test('a tooltip and a max length set to null are removed', () async {
+      final pdf = createPdf();
+      final editor = await pdf.edit(PdfInput(src(fFormFieldsProps)));
+      await editor.field('city').setTooltip('Set first');
+      await editor.field('city').setMaxLength(7);
+      await editor.field('city').setTooltip(null);
+      await editor.field('city').setMaxLength(null);
+      final sink = TestSink();
+      await editor.save(sink);
+      await editor.dispose();
+      final doc = await pdf.open(PdfInput(src(sink.takeBytes())));
+      final city = await formFieldNamed(doc, 'city');
+      expect(city!.tooltip, isNull, reason: 'the tooltip is gone');
+      expect(city.maxLength, isNull, reason: 'the limit is gone');
+      await doc.dispose();
+    }, timeout: t(1));
+
+    test('a colour set to null is removed and the field still saves', () async {
+      final pdf = createPdf();
+      final editor = await pdf.edit(PdfInput(src(fFormFieldsProps)));
+      await editor.field('notes').setBackgroundColor(PdfColor.red);
+      await editor.field('notes').setBorderColor(PdfColor.red);
+      await editor.field('notes').setBackgroundColor(null);
+      await editor.field('notes').setBorderColor(null);
+      final sink = TestSink();
+      await editor.save(sink);
+      await editor.dispose();
+      final doc = await pdf.open(PdfInput(src(sink.takeBytes())));
+      expect(await formFieldNamed(doc, 'notes'), isNotNull);
       await doc.dispose();
     }, timeout: t(1));
 
     test('setFormFieldBounds roundtrips through save', () async {
       final pdf = createPdf();
-      final editor = await pdf.edit(src(fFormFieldsProps));
+      final editor = await pdf.edit(PdfInput(src(fFormFieldsProps)));
       const bounds = PdfRect(x: 10, y: 20, width: 100, height: 30);
-      await editor.setFormFieldBounds('city', bounds);
+      await editor.field('city').setBounds(bounds);
       final sink = TestSink();
       await editor.save(sink);
       await editor.dispose();
-      final doc = await pdf.open(src(sink.takeBytes()));
-      final city = await doc.formField('city');
+      final doc = await pdf.open(PdfInput(src(sink.takeBytes())));
+      final city = await formFieldNamed(doc, 'city');
       expect(city!.bounds!.x, closeTo(bounds.x, 0.01));
       expect(city.bounds!.y, closeTo(bounds.y, 0.01));
       expect(city.bounds!.width, closeTo(bounds.width, 0.01));
@@ -114,13 +150,13 @@ void registerFormTests(Pdf Function() createPdf) {
 
     test('setFormFieldMaxLength roundtrips through save', () async {
       final pdf = createPdf();
-      final editor = await pdf.edit(src(fFormFieldsProps));
-      await editor.setFormFieldMaxLength('city', 5);
+      final editor = await pdf.edit(PdfInput(src(fFormFieldsProps)));
+      await editor.field('city').setMaxLength(5);
       final sink = TestSink();
       await editor.save(sink);
       await editor.dispose();
-      final doc = await pdf.open(src(sink.takeBytes()));
-      final city = await doc.formField('city');
+      final doc = await pdf.open(PdfInput(src(sink.takeBytes())));
+      final city = await formFieldNamed(doc, 'city');
       expect(
         city!.maxLength,
         5,
@@ -131,14 +167,14 @@ void registerFormTests(Pdf Function() createPdf) {
 
     test('setFormFieldAlignment roundtrips through save', () async {
       final pdf = createPdf();
-      final editor = await pdf.edit(src(fFormFieldsProps));
-      await editor.setFormFieldAlignment('city', PdfTextAlignment.center);
+      final editor = await pdf.edit(PdfInput(src(fFormFieldsProps)));
+      await editor.field('city').setAlignment(PdfAlignment.center);
       final sink = TestSink();
       await editor.save(sink);
       await editor.dispose();
-      final doc = await pdf.open(src(sink.takeBytes()));
-      final city = await doc.formField('city');
-      expect(city!.alignment, PdfTextAlignment.center);
+      final doc = await pdf.open(PdfInput(src(sink.takeBytes())));
+      final city = await formFieldNamed(doc, 'city');
+      expect(city!.alignment, PdfAlignment.center);
       await doc.dispose();
     }, timeout: t(1));
 
@@ -146,16 +182,16 @@ void registerFormTests(Pdf Function() createPdf) {
       'setFormFieldReadOnly and setFormFieldRequired roundtrip through save',
       () async {
         final pdf = createPdf();
-        final editor = await pdf.edit(src(fFormFieldsProps));
-        await editor.setFormFieldReadOnly('city', true);
-        await editor.setFormFieldRequired('city', true);
+        final editor = await pdf.edit(PdfInput(src(fFormFieldsProps)));
+        await editor.field('city').setReadOnly(true);
+        await editor.field('city').setRequired(true);
         final sink = TestSink();
         await editor.save(sink);
         await editor.dispose();
-        final doc = await pdf.open(src(sink.takeBytes()));
-        final city = await doc.formField('city');
-        expect(city!.readOnly, isTrue);
-        expect(city.required, isTrue);
+        final doc = await pdf.open(PdfInput(src(sink.takeBytes())));
+        final city = await formFieldNamed(doc, 'city');
+        expect(city!.isReadOnly, isTrue);
+        expect(city.isRequired, isTrue);
         await doc.dispose();
       },
       timeout: t(1),
@@ -163,18 +199,18 @@ void registerFormTests(Pdf Function() createPdf) {
 
     test('setFormFieldFlags sets readOnly and required together', () async {
       final pdf = createPdf();
-      final editor = await pdf.edit(src(fFormFieldsProps));
-      await editor.setFormFieldFlags('city', {
+      final editor = await pdf.edit(PdfInput(src(fFormFieldsProps)));
+      await editor.field('city').setFlags({
         PdfFormFieldFlag.readOnly,
         PdfFormFieldFlag.required,
       });
       final sink = TestSink();
       await editor.save(sink);
       await editor.dispose();
-      final doc = await pdf.open(src(sink.takeBytes()));
-      final city = await doc.formField('city');
-      expect(city!.readOnly, isTrue);
-      expect(city.required, isTrue);
+      final doc = await pdf.open(PdfInput(src(sink.takeBytes())));
+      final city = await formFieldNamed(doc, 'city');
+      expect(city!.isReadOnly, isTrue);
+      expect(city.isRequired, isTrue);
       await doc.dispose();
     }, timeout: t(1));
 
@@ -182,27 +218,27 @@ void registerFormTests(Pdf Function() createPdf) {
       'setFormFieldFlags(multiline) leaves the field listed and flattenable',
       () async {
         final pdf = createPdf();
-        final editor = await pdf.edit(src(fFormFieldsProps));
-        await editor.setFormFieldFlags('notes', {PdfFormFieldFlag.multiline});
+        final editor = await pdf.edit(PdfInput(src(fFormFieldsProps)));
+        await editor.field('notes').setFlags({PdfFormFieldFlag.multiline});
         final sink1 = TestSink();
         await editor.save(sink1);
         await editor.dispose();
         final saved = sink1.takeBytes();
 
-        final check = await pdf.open(src(saved));
+        final check = await pdf.open(PdfInput(src(saved)));
         expect(
-          await check.formField('notes'),
+          await formFieldNamed(check, 'notes'),
           isNotNull,
           reason: 'a raw flag bit must not drop the field from the list',
         );
         await check.dispose();
 
-        final editor2 = await pdf.edit(src(saved));
+        final editor2 = await pdf.edit(PdfInput(src(saved)));
         await editor2.flattenForms();
         final sink2 = TestSink();
         await editor2.save(sink2);
         await editor2.dispose();
-        final flatDoc = await pdf.open(src(sink2.takeBytes()));
+        final flatDoc = await pdf.open(PdfInput(src(sink2.takeBytes())));
         expect(flatDoc.pageCount, fFormFieldsPropsTruth.pages);
         await flatDoc.dispose();
       },
@@ -211,19 +247,19 @@ void registerFormTests(Pdf Function() createPdf) {
 
     test('removeFormField removes the field and leaves the others', () async {
       final pdf = createPdf();
-      final editor = await pdf.edit(src(fFormFieldsProps));
-      await editor.removeFormField('city');
+      final editor = await pdf.edit(PdfInput(src(fFormFieldsProps)));
+      await editor.field('city').remove();
       final sink = TestSink();
       await editor.save(sink);
       await editor.dispose();
-      final doc = await pdf.open(src(sink.takeBytes()));
+      final doc = await pdf.open(PdfInput(src(sink.takeBytes())));
       expect(
-        await doc.formField('city'),
+        await formFieldNamed(doc, 'city'),
         isNull,
         reason: 'a removed field must not be listed',
       );
-      expect(await doc.formField('ok'), isNotNull);
-      expect(await doc.formField('notes'), isNotNull);
+      expect(await formFieldNamed(doc, 'ok'), isNotNull);
+      expect(await formFieldNamed(doc, 'notes'), isNotNull);
       await doc.dispose();
     }, timeout: t(1));
 
@@ -232,28 +268,28 @@ void registerFormTests(Pdf Function() createPdf) {
       final pdf = createPdf();
       final baseline = await _renderFirstPage(pdf, fFormFieldsProps);
 
-      final editor = await pdf.edit(src(fFormFieldsProps));
-      await editor.setFormFieldBackgroundColor(
-        'notes',
-        const PdfColor(0.9, 0.9, 0.2),
-      );
-      await editor.setFormFieldBorderColor('notes', const PdfColor(1, 0, 0));
-      await editor.setFormFieldBorderWidth('notes', 2);
-      await editor.setFormFieldAppearance(
-        'notes',
-        font: 'Helv',
-        fontSize: 14,
-        color: const PdfColor(0, 0, 1),
-      );
-      await editor.setFormFieldValue('notes', 'Styled');
+      final editor = await pdf.edit(PdfInput(src(fFormFieldsProps)));
+      await editor
+          .field('notes')
+          .setBackgroundColor(const PdfColor(0.9, 0.9, 0.2));
+      await editor.field('notes').setBorderColor(const PdfColor(1, 0, 0));
+      await editor.field('notes').setBorderWidth(2);
+      await editor
+          .field('notes')
+          .setAppearance(
+            font: 'Helv',
+            fontSize: 14,
+            color: const PdfColor(0, 0, 1),
+          );
+      await editor.field('notes').setValue(PdfFormFieldValue.text('Styled'));
       await editor.flattenForms();
       final sink = TestSink();
       await editor.save(sink);
       await editor.dispose();
       final flattened = sink.takeBytes();
 
-      final doc = await pdf.open(src(flattened));
-      final text = await doc.extract(pages: const PdfPages.all());
+      final doc = await pdf.open(PdfInput(src(flattened)));
+      final text = await extractTextToString(doc, pages: const PdfPages.all());
       expect(text, contains('Styled'));
       await doc.dispose();
 
@@ -271,13 +307,13 @@ void registerFormTests(Pdf Function() createPdf) {
       'exportFormData(xfdf) exports the filled field as a parsed pair',
       () async {
         final pdf = createPdf();
-        final editor = await pdf.edit(src(fFormFields));
-        await editor.setFormFieldValue('fullname', 'Ada');
+        final editor = await pdf.edit(PdfInput(src(fFormFields)));
+        await editor.field('fullname').setValue(PdfFormFieldValue.text('Ada'));
         final sink = TestSink();
         await editor.save(sink);
         await editor.dispose();
 
-        final doc = await pdf.open(src(sink.takeBytes()));
+        final doc = await pdf.open(PdfInput(src(sink.takeBytes())));
         final xfdfSink = TestSink();
         await doc.exportFormData(xfdfSink, format: PdfFormDataFormat.xfdf);
         await doc.dispose();
@@ -292,13 +328,13 @@ void registerFormTests(Pdf Function() createPdf) {
       'exportFormData(fdf) exports the filled field as a parsed pair',
       () async {
         final pdf = createPdf();
-        final editor = await pdf.edit(src(fFormFields));
-        await editor.setFormFieldValue('fullname', 'Ada');
+        final editor = await pdf.edit(PdfInput(src(fFormFields)));
+        await editor.field('fullname').setValue(PdfFormFieldValue.text('Ada'));
         final sink = TestSink();
         await editor.save(sink);
         await editor.dispose();
 
-        final doc = await pdf.open(src(sink.takeBytes()));
+        final doc = await pdf.open(PdfInput(src(sink.takeBytes())));
         final fdfSink = TestSink();
         await doc.exportFormData(fdfSink, format: PdfFormDataFormat.fdf);
         await doc.dispose();
@@ -308,20 +344,134 @@ void registerFormTests(Pdf Function() createPdf) {
       },
       timeout: t(1),
     );
+
+    // ── Choice values ──
+
+    /// Applies [edit] to the choice fixture's editor, saves, and returns the
+    /// fields of the result by name.
+    Future<Map<String, PdfFormField>> choiceFieldsAfter(
+      Future<void> Function(PdfEditor editor) edit,
+    ) async {
+      final pdf = createPdf();
+      final editor = await pdf.edit(PdfInput(src(choiceFormPdf)));
+      await edit(editor);
+      final sink = TestSink();
+      await editor.save(sink);
+      await editor.dispose();
+      final doc = await pdf.open(PdfInput(src(sink.takeBytes())));
+      final fields = {for (final f in await doc.formFields()) f.name: f};
+      await doc.dispose();
+      return fields;
+    }
+
+    test('a combo box and a list box take one option', () async {
+      final fields = await choiceFieldsAfter((editor) async {
+        await editor
+            .field('combo')
+            .setValue(const PdfFormFieldValue.choice('green'));
+        await editor
+            .field('list')
+            .setValue(const PdfFormFieldValue.choice('blue'));
+      });
+      expect(fields['combo']!.kind, PdfFormFieldKind.comboBox);
+      expect(fields['combo']!.value, const PdfChoiceValue('green'));
+      expect(fields['list']!.kind, PdfFormFieldKind.listBox);
+      expect(fields['list']!.value, const PdfChoiceValue('blue'));
+    }, timeout: t(1));
+
+    test('a multi-select list box takes several options', () async {
+      final fields = await choiceFieldsAfter(
+        (editor) => editor
+            .field('multi')
+            .setValue(const PdfFormFieldValue.choices(['blue', 'red'])),
+      );
+      expect(
+        fields['multi']!.value,
+        const PdfMultiChoiceValue(['blue', 'red']),
+      );
+    }, timeout: t(1));
+
+    test('no value clears a choice field', () async {
+      final fields = await choiceFieldsAfter((editor) async {
+        await editor.field('list').setValue(const PdfFormFieldValue.none());
+        await editor.field('combo').setValue(const PdfFormFieldValue.none());
+      });
+      expect(fields['list']!.value, isA<PdfNoValue>());
+      expect(fields['combo']!.value, isA<PdfNoValue>());
+    }, timeout: t(1));
+
+    test('an editable combo box takes text that is no option', () async {
+      final fields = await choiceFieldsAfter(
+        (editor) => editor
+            .field('free')
+            .setValue(const PdfFormFieldValue.choice('typed by hand')),
+      );
+      expect(fields['free']!.value, const PdfChoiceValue('typed by hand'));
+    }, timeout: t(1));
+
+    test(
+      'a value the field does not offer throws and changes nothing',
+      () async {
+        final pdf = createPdf();
+        final editor = await pdf.edit(PdfInput(src(choiceFormPdf)));
+        for (final (name, value) in [
+          ('combo', const PdfFormFieldValue.choice('purple')),
+          ('list', const PdfFormFieldValue.choice('purple')),
+          ('multi', const PdfFormFieldValue.choices(['red', 'purple'])),
+          ('multi', const PdfFormFieldValue.choices(['red', 'red'])),
+          ('list', const PdfFormFieldValue.choices(['red'])),
+          ('combo', const PdfFormFieldValue.choices(['red'])),
+          ('nothing', const PdfFormFieldValue.choice('red')),
+        ]) {
+          await expectLater(
+            editor.field(name).setValue(value),
+            throwsA(isA<PdfEngineFailed>()),
+            reason: '$name: $value',
+          );
+        }
+        expect(await editor.isModified(), isFalse);
+        await editor.dispose();
+      },
+      timeout: t(1),
+    );
+
+    test('a choice value of a text field throws', () async {
+      final pdf = createPdf();
+      final editor = await pdf.edit(PdfInput(src(fFormFields)));
+      await expectLater(
+        editor.field('fullname').setValue(const PdfFormFieldValue.choice('x')),
+        throwsA(isA<PdfEngineFailed>()),
+      );
+      await editor.dispose();
+    }, timeout: t(1));
+
+    test('a set choice is drawn in the rendered page', () async {
+      final pdf = createPdf();
+      final editor = await pdf.edit(PdfInput(src(choiceFormPdf)));
+      await editor
+          .field('multi')
+          .setValue(const PdfFormFieldValue.choices(['green', 'amber']));
+      await editor.flattenForms();
+      final sink = TestSink();
+      await editor.save(sink);
+      await editor.dispose();
+      final doc = await pdf.open(PdfInput(src(sink.takeBytes())));
+      final text = await extractTextToString(doc, pages: const PdfPages.all());
+      await doc.dispose();
+      expect(text, allOf(contains('green'), contains('amber')));
+    }, timeout: t(1));
   });
 }
 
 /// Renders [bytes]' first page at thumbnail size and decodes it, for the
 /// form styling test that must prove pixels changed after save + reopen.
 Future<img.Image> _renderFirstPage(Pdf pdf, Uint8List bytes) async {
-  final doc = await pdf.open(src(bytes));
-  final frames = <RenderedPage>[];
-  await for (final page in doc.render(
+  final doc = await pdf.open(PdfInput(src(bytes)));
+  final frames = await renderToMemory(
+    doc,
     pages: const PdfPages.single(0),
-    size: const PdfRenderSize.thumbnail(200),
-  )) {
-    frames.add(page);
-  }
+    size: const PdfRenderSize.fit(maxWidth: 200, maxHeight: 200),
+  );
   await doc.dispose();
   return img.decodePng(frames.single.data)!;
 }

@@ -4,3 +4,6 @@
 [submodule "vendor/office_oxide"]
 	path = vendor/office_oxide
 	url = https://github.com/whuppi/office_oxide.git
+[submodule "vendor/tiny_skia"]
+	path = vendor/tiny_skia
+	url = https://github.com/whuppi/tiny-skia.git

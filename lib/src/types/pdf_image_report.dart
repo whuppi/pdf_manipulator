@@ -1,113 +1,135 @@
 import 'package:meta/meta.dart';
+import 'package:pdf_manipulator/src/types/equality.dart';
+import 'package:pdf_manipulator/src/types/pdf_wire.dart';
 
 /// How an image's samples are stored.
-enum PdfImageEncoding {
+enum PdfImageEncoding implements PdfWire {
   /// A lossless container (Flate, LZW, RunLength, ASCII, or none).
-  raw,
+  raw('raw'),
 
   /// DCTDecode.
-  jpeg,
+  jpeg('jpeg'),
 
   /// JPXDecode (JPEG 2000).
-  jpx,
+  jpx('jpx'),
 
   /// CCITTFaxDecode.
-  ccitt,
+  ccitt('ccitt'),
 
   /// JBIG2Decode.
-  jbig2,
+  jbig2('jbig2'),
 
   /// A filter the engine does not know.
-  unknown,
+  unknown('unknown');
+
+  const PdfImageEncoding(this.wire);
+
+  @override
+  final String wire;
 }
 
 /// What an image's decoded samples mean.
-enum PdfImageColor {
+enum PdfImageColor implements PdfWire {
   /// A stencil mask or a 1-bit gray image.
-  bilevel,
+  bilevel('bilevel'),
 
   /// One component.
-  gray,
+  gray('gray'),
 
   /// Three components.
-  rgb,
+  rgb('rgb'),
 
   /// Four components.
-  cmyk,
+  cmyk('cmyk'),
 
   /// Lab, Separation, DeviceN, Pattern, or an unparsable base.
-  other,
+  other('other');
+
+  const PdfImageColor(this.wire);
+
+  @override
+  final String wire;
 }
 
-/// What `PdfEditor.reduceImages` did to one image.
-enum PdfImageAction {
+/// What `PdfEdits.reduceImages` did to one image.
+enum PdfImageAction implements PdfWire {
   /// Bytes unchanged.
-  kept,
+  kept('kept'),
 
   /// Same pixel size, new encoding.
-  recompressed,
+  recompressed('recompressed'),
 
   /// Fewer pixels, new encoding.
-  downsampled,
+  downsampled('downsampled');
+
+  const PdfImageAction(this.wire);
+
+  @override
+  final String wire;
 }
 
 /// Why an image was kept as stored.
-enum PdfImageKeepReason {
+enum PdfImageKeepReason implements PdfWire {
   /// JPEG 2000: not decoded in this build, never re-encoded.
-  unsupportedJpx,
+  unsupportedJpx('unsupportedJpx'),
 
   /// JBIG2: no encoder.
-  unsupportedJbig2,
+  unsupportedJbig2('unsupportedJbig2'),
 
   /// A filter the engine cannot undo.
-  unsupportedFilter,
+  unsupportedFilter('unsupportedFilter'),
 
   /// Lab, Separation, DeviceN, Pattern.
-  unsupportedColor,
+  unsupportedColor('unsupportedColor'),
 
   /// A `/Mask` stream (stencil) hangs off the image.
-  unsupportedStencilMask,
+  unsupportedStencilMask('unsupportedStencilMask'),
 
   /// A `/Mask` colour-key array hangs off the image.
-  unsupportedColorKeyMask,
+  unsupportedColorKeyMask('unsupportedColorKeyMask'),
 
   /// A JPX opacity channel.
-  unsupportedSmaskInData,
+  unsupportedSmaskInData('unsupportedSmaskInData'),
 
   /// Narrower or shorter than the policy's `minPixels`.
-  tooSmall,
+  tooSmall('tooSmall'),
 
   /// Drawn with a degenerate transform, or not at all.
-  noPlacement,
+  noPlacement('noPlacement'),
 
   /// At or under its target resolution.
-  withinResolution,
+  withinResolution('withinResolution'),
 
   /// Nothing the policy allows could make it smaller.
-  alreadyOptimal,
+  alreadyOptimal('alreadyOptimal'),
 
-  /// Re-encoding did not save the policy's `minSavings` share of the bytes.
-  belowMinSavings,
+  /// Re-encoding did not save the policy's `minSavingsRatio` share of the bytes.
+  belowMinSavings('belowMinSavings'),
 
   /// The stored samples could not be decoded, so nothing was rewritten.
-  undecodable,
+  undecodable('undecodable');
+
+  const PdfImageKeepReason(this.wire);
+
+  @override
+  final String wire;
 }
 
-/// One image XObject's outcome from `PdfEditor.reduceImages`.
+/// One image XObject's outcome from `PdfEdits.reduceImages`.
 @immutable
-class PdfImageOutcome {
+final class PdfImageOutcome {
   /// Creates an outcome row.
   const PdfImageOutcome({
     required this.objectId,
     required this.encoding,
     required this.color,
-    required this.indexed,
-    required this.bits,
+    required this.isIndexed,
+    required this.bitsPerComponent,
     required this.width,
     required this.height,
     required this.hasSoftMask,
-    required this.uses,
-    required this.ppiMin,
+    required this.placementCount,
+    required this.minPpi,
     required this.action,
     required this.keepReason,
     required this.bytesBefore,
@@ -126,10 +148,10 @@ class PdfImageOutcome {
   final PdfImageColor color;
 
   /// Whether the stored samples were palette indices.
-  final bool indexed;
+  final bool isIndexed;
 
   /// Bits per component before the operation.
-  final int bits;
+  final int bitsPerComponent;
 
   /// Pixel width before.
   final int width;
@@ -141,11 +163,11 @@ class PdfImageOutcome {
   final bool hasSoftMask;
 
   /// Placements across the document's pages, forms included.
-  final int uses;
+  final int placementCount;
 
   /// Effective resolution of the most demanding placement; `null` when
   /// no placement had a usable transform.
-  final double? ppiMin;
+  final double? minPpi;
 
   /// What happened.
   final PdfImageAction action;
@@ -167,6 +189,46 @@ class PdfImageOutcome {
   final int heightAfter;
 
   @override
+  bool operator ==(Object other) =>
+      other is PdfImageOutcome &&
+      other.objectId == objectId &&
+      other.encoding == encoding &&
+      other.color == color &&
+      other.isIndexed == isIndexed &&
+      other.bitsPerComponent == bitsPerComponent &&
+      other.width == width &&
+      other.height == height &&
+      other.hasSoftMask == hasSoftMask &&
+      other.placementCount == placementCount &&
+      other.minPpi == minPpi &&
+      other.action == action &&
+      other.keepReason == keepReason &&
+      other.bytesBefore == bytesBefore &&
+      other.bytesAfter == bytesAfter &&
+      other.widthAfter == widthAfter &&
+      other.heightAfter == heightAfter;
+
+  @override
+  int get hashCode => Object.hash(
+    objectId,
+    encoding,
+    color,
+    isIndexed,
+    bitsPerComponent,
+    width,
+    height,
+    hasSoftMask,
+    placementCount,
+    minPpi,
+    action,
+    keepReason,
+    bytesBefore,
+    bytesAfter,
+    widthAfter,
+    heightAfter,
+  );
+
+  @override
   String toString() =>
       'PdfImageOutcome(#$objectId ${width}x$height ${encoding.name}/'
       '${color.name} → ${action.name}'
@@ -174,10 +236,10 @@ class PdfImageOutcome {
       '$bytesBefore → $bytesAfter bytes)';
 }
 
-/// The result of `PdfEditor.reduceImages`: one row per image XObject
+/// The result of `PdfEdits.reduceImages`: one row per image XObject
 /// drawn on the document's pages, in ascending object number.
 @immutable
-class PdfImageReport {
+final class PdfImageReport {
   /// Creates a report.
   const PdfImageReport(this.images);
 
@@ -193,6 +255,13 @@ class PdfImageReport {
 
   /// Stored bytes after, summed over every row.
   int get bytesAfter => images.fold(0, (sum, o) => sum + o.bytesAfter);
+
+  @override
+  bool operator ==(Object other) =>
+      other is PdfImageReport && listsEqual(other.images, images);
+
+  @override
+  int get hashCode => Object.hashAll(images);
 
   @override
   String toString() =>

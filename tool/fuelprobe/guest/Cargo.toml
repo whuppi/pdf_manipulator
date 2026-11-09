@@ -1,0 +1,31 @@
+[package]
+name = "fuelprobe-guest"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+# The wasm build's feature set (build.json) plus the probe hooks: `fuel-probe`
+# makes every CancelCheck poll call the host's `fuelprobe.poll`, `test-support`
+# opens the entry points host::probe re-exports.
+pdf_oxide = { path = "../../../vendor/pdf_oxide", default-features = false, features = [
+    "wasm",
+    "icc",
+    "legacy-crypto",
+    "rendering",
+    "signatures",
+    "pdfa",
+    "office",
+    "extract",
+    "test-support",
+    "fuel-probe",
+] }
+# The fixtures' streams are deflated as they are generated.
+flate2 = { version = "1.1", default-features = false, features = ["zlib-rs"] }
+
+[profile.release]
+# Debug assertions stay off, as in the shipped wasm; the guest measures that code.
+opt-level = 3
+debug = false
+
+[workspace]

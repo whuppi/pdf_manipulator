@@ -21,6 +21,10 @@
 #
 # Env:
 #   DART   SDK command — defaults to "fvm dart", like the Makefile.
+# The 48 builds go to their own target dir, `vendor/pdf_oxide/target/keep-sets`,
+# so they never mix with the test build's artifacts. When the run ends, pass or
+# fail, the script removes that dir's `incremental` folders and every file
+# older than the run's start, so the dir holds only this run's output.
 # Run from the package root.
 # ────────────────────────────────────────────────────────────────────
 set -euo pipefail
@@ -31,6 +35,9 @@ cd "$PKG_ROOT"
 
 # shellcheck source=tool/build_lib.sh
 source "$SCRIPT_DIR/build_lib.sh"
+
+KEEP_SETS_TARGET="${PKG_ROOT:?}/vendor/pdf_oxide/target/keep-sets"
+export CARGO_TARGET_DIR="$KEEP_SETS_TARGET"
 
 DART="${DART:-fvm dart}"
 TARGET="${1:-all}"
@@ -44,7 +51,23 @@ case "$TARGET" in
 esac
 
 WORKDIR="$(mktemp -d)"
-trap 'rm -rf "$WORKDIR"' EXIT
+RUN_START="$WORKDIR/run-start"
+touch "$RUN_START"
+
+# Runs on every exit, so a failed or interrupted run leaves no more behind than
+# a passing one: the log dir goes, and the keep-sets target keeps only the
+# files this run wrote, without the incremental caches.
+cleanup() {
+  if [ -d "$KEEP_SETS_TARGET" ]; then
+    find "${KEEP_SETS_TARGET:?}" -type d -name incremental -prune -exec rm -rf {} +
+    find "${KEEP_SETS_TARGET:?}" -type f ! -newer "$RUN_START" \
+      ! -name CACHEDIR.TAG ! -name .rustc_info.json -delete
+    find "${KEEP_SETS_TARGET:?}" -mindepth 1 -type d -empty -delete
+    echo "keep-sets target: $(($(du -sk "$KEEP_SETS_TARGET" | cut -f1) / 1024)) MiB after pruning"
+  fi
+  rm -rf "${WORKDIR:?}"
+}
+trap cleanup EXIT
 
 FAILED=0
 TOTAL=0

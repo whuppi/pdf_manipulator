@@ -4,7 +4,7 @@
 // It IS a Future (awaitable, then-able, zero migration pain) plus
 // one verb: cancel().
 //
-// Unhandled-error physics (load-bearing):
+// Unhandled-error rules (load-bearing):
 //   - A cancelled outcome (PdfCancelled) is a normal lifecycle event
 //     — task.cancel(), pdf.dispose() mid-flight. It must NEVER
 //     surface as an unhandled zone error when the caller
@@ -29,13 +29,14 @@ export 'package:pdf_manipulator/src/types/cancel_hook.dart' show CancelHook;
 /// with [cancel].
 ///
 /// ```dart
-/// final task = doc.extract(pages: PdfPages.all);
+/// final task = pdf.read(source, (doc) => doc.extractText(sink));
 /// task.cancel();          // soft-cancel — idempotent
 /// await task;             // → throws PdfCancelled
 /// ```
 ///
-/// Cancelling after completion is a no-op. A cancelled task resolves
-/// with [PdfCancelled] — never with a partial result.
+/// Cancelling after completion is a no-op. A task the cancel stopped
+/// resolves with [PdfCancelled], never with a partial result; a task that
+/// finished before the cancel landed resolves with its result.
 class PdfTask<T> implements Future<T> {
   /// INTERNAL — built by the bridge around a tracked operation
   /// future and its cancel hook. Not for consumer construction.
@@ -60,9 +61,9 @@ class PdfTask<T> implements Future<T> {
   /// INTERNAL — wraps a multi-step flow in one cancellable task.
   ///
   /// [body] receives the task's hook; it runs each engine step with
-  /// `hook.guard(step)` so cancel() always lands on the step that is
-  /// currently in flight (re-binding replaces the previous step's
-  /// action; a cancelled hook cancels the next step on sight).
+  /// `hook.guard(step)` so cancel() always lands on every step in
+  /// flight (a finished step unregisters itself; a cancelled hook
+  /// cancels the next step on sight).
   @internal
   static PdfTask<T> group<T>(Future<T> Function(CancelHook hook) body) {
     final hook = CancelHook();
@@ -74,8 +75,31 @@ class PdfTask<T> implements Future<T> {
   bool _listened = false;
 
   /// Requests cancellation of this operation. Idempotent; a no-op
-  /// once the task has completed. The task resolves with
-  /// [PdfCancelled].
+  /// once the task has completed.
+  ///
+  /// If the engine had not finished when the cancel landed, the task
+  /// resolves with [PdfCancelled]. If it finished first, the task resolves
+  /// with its result, as if cancel had not been called. One exception: an
+  /// operation that opens a document, editor or builder and finished first
+  /// is closed by the library, and the task resolves with [PdfCancelled].
+  ///
+  /// A stopped operation changed nothing: an edit that [PdfCancelled] ends
+  /// leaves its editor exactly as it was, and a sink it was handed is
+  /// aborted (`DataSink.abort`), so it holds no partial output. A combinator
+  /// (`read`, `rewrite`, `buildTo`, `readOnce`, `editOnce` and the one-call
+  /// operations such as `merge`) resolves with [PdfCancelled] whenever
+  /// cancel was called before it finished, and aborts its output sink even
+  /// when the save into it had finished.
+  ///
+  /// A running op stops within one page (one image for image reduction, one
+  /// rule batch for validation), on native and on the web, in every I/O mode.
+  /// On the web every running op carries a cancel flag the engine reads: a
+  /// word of a `SharedArrayBuffer` where the page has one (a page has it only
+  /// when it is cross-origin isolated), and otherwise a blob URL that cancel
+  /// revokes and the worker polls about every 10 ms. A source read or sink
+  /// write the op is waiting on is answered as cancelled at once, and so is
+  /// an OPFS pre-copy waiting on the source. `Pdf.dispose` is not needed to
+  /// stop an op.
   void cancel() => _hook.cancel();
 
   /// Whether [cancel] has been requested (the task may still be
@@ -127,11 +151,11 @@ class PdfTask<T> implements Future<T> {
 /// INTERNAL — step composition for multi-step flows (see
 /// [PdfTask.group]).
 extension CancelHookGuard on CancelHook {
-  /// Runs one step under this hook: cancel() on the group cancels
-  /// whichever step is currently guarded.
+  /// Runs one step under this hook: cancel() on the group cancels every
+  /// step still in flight; a finished step is unregistered.
   @internal
   Future<T> guard<T>(PdfTask<T> task) {
-    bind(task.cancel);
-    return task;
+    final unregister = register(task.cancel);
+    return task.whenComplete(unregister);
   }
 }

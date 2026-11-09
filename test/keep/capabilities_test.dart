@@ -4,6 +4,7 @@
 
 // io-exempt: build-time tooling tests — the parity guards read README.md
 // and the engine's Cargo.toml from disk; keep never runs in a browser.
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:pdf_manipulator/src/hook/build_constants.dart';
@@ -231,6 +232,25 @@ void main() {
                 'engine manifest says $engineDepends',
           );
         }
+      }
+    });
+  });
+
+  group('executor design', () {
+    test('no feature string of build.json holds `parallel`', () {
+      // One thread per executor is what keeps an executor's caches its own;
+      // upstream's `parallel` feature fans a job out over a thread pool.
+      final features =
+          (jsonDecode(File('build.json').readAsStringSync())
+                  as Map<String, Object?>)['features']!
+              as Map<String, Object?>;
+      expect(features.keys, containsAll(['native', 'wasm']));
+      for (final MapEntry(:key, :value) in features.entries) {
+        expect(
+          (value! as String).split(','),
+          isNot(contains('parallel')),
+          reason: 'the $key feature string holds `parallel`',
+        );
       }
     });
   });

@@ -17,10 +17,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'device_profiles.dart';
 
 /// Signature of a journey body: drive the app, assert outcomes.
-typedef JourneyBody = Future<void> Function(
-  WidgetTester tester,
-  DeviceProfile device,
-);
+typedef JourneyBody =
+    Future<void> Function(WidgetTester tester, DeviceProfile device);
 
 /// Register [body] as a test for every profile in [matrix].
 ///

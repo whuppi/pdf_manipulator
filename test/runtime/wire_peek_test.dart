@@ -84,11 +84,19 @@ void main() {
       expect(buildCancelledResponse(), [2]);
     });
 
-    test('error response matches ResponseWriter::error layout', () {
+    test('error response matches ResponseWriter::error_kind layout', () {
       final bytes = buildErrorResponse('boom');
-      expect(bytes[0], 0);
-      expect(ByteData.sublistView(bytes, 1, 5).getUint32(0, Endian.little), 4);
-      expect(String.fromCharCodes(bytes.sublist(5)), 'boom');
+      expect(bytes[0], 0); // status = error
+      expect(bytes[1], 0); // kind = Engine
+      expect(ByteData.sublistView(bytes, 2, 4).getUint16(0, Endian.little), 1);
+      expect(bytes[4], 7); // key length of "message"
+      expect(String.fromCharCodes(bytes.sublist(5, 12)), 'message');
+      expect(bytes[12], 5); // string type
+      expect(
+        ByteData.sublistView(bytes, 13, 17).getUint32(0, Endian.little),
+        4,
+      );
+      expect(String.fromCharCodes(bytes.sublist(17)), 'boom');
     });
   });
 }

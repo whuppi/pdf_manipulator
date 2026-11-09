@@ -1,0 +1,46 @@
+# Loops tool/check_cancel_polls.sh finds without a poll, one per line:
+#   <path under vendor/pdf_oxide>::<fn>#<n>  # bounded: <why>
+# `bounded` is the only class: a loop that cannot take long on any input, or
+# that a poll would leave half done, or that no host op reaches. A loop that
+# scales with the document polls instead, and the script refuses any other
+# word after the `#`.
+src/compliance/pdf_x/validator.rs::validate_annotations#1  # bounded: only PdfXValidator reaches it, and no file of src/host names pdf_x
+src/compliance/pdf_x/validator.rs::validate_annotations#2  # bounded: only PdfXValidator reaches it, and no file of src/host names pdf_x
+src/compliance/pdf_x/validator.rs::validate_colors#1  # bounded: only PdfXValidator reaches it, and no file of src/host names pdf_x
+src/compliance/pdf_x/validator.rs::validate_fonts#1  # bounded: only PdfXValidator reaches it, and no file of src/host names pdf_x
+src/compliance/pdf_x/validator.rs::validate_page_boxes#1  # bounded: only PdfXValidator reaches it, and no file of src/host names pdf_x
+src/compliance/pdf_x/validator.rs::validate_transparency#1  # bounded: only PdfXValidator reaches it, and no file of src/host names pdf_x
+src/document.rs::check_for_circular_references#1  # bounded: no host op reaches it; no call chain by function name from src/host/ops, dispatch or bridge_api
+src/document.rs::extract_all_text#1  # bounded: no host op reaches it; no call chain by function name from src/host/ops, dispatch or bridge_api
+src/document.rs::extract_images_to_files#1  # bounded: no host op reaches it; no call chain by function name from src/host/ops, dispatch or bridge_api
+src/document.rs::identify_multi_row_labels#1  # bounded: no host op reaches it; no call chain by function name from src/host/ops, dispatch or bridge_api
+src/document.rs::merge_sub_superscript_spans#1  # bounded: no host op reaches it; no call chain by function name from src/host/ops, dispatch or bridge_api
+src/document.rs::parse_font_size_from_da#1  # bounded: the fonts, entries or samples of one resource dictionary or one function, not of the document
+src/document.rs::prepare_search#1  # bounded: no host op reaches it; no call chain by function name from src/host/ops, dispatch or bridge_api
+src/document.rs::remove_repeated_text#1  # bounded: no host op reaches it; no call chain by function name from src/host/ops, dispatch or bridge_api
+src/document.rs::remove_repeated_text#2  # bounded: no host op reaches it; no call chain by function name from src/host/ops, dispatch or bridge_api
+src/document.rs::to_html_all#1  # bounded: no host op reaches it; no call chain by function name from src/host/ops, dispatch or bridge_api
+src/document.rs::to_plain_text_all#1  # bounded: no host op reaches it; no call chain by function name from src/host/ops, dispatch or bridge_api
+src/editor/document_editor.rs::collect_copy_work#1  # bounded: no host op reaches it; no call chain by function name from src/host/ops, dispatch or bridge_api
+src/editor/document_editor.rs::embed_fallback_text_appearance#1  # bounded: the fonts, entries or samples of one resource dictionary or one function, not of the document
+src/editor/document_editor.rs::write_image_mods_content#1  # bounded: no host op reaches it; no call chain by function name from src/host/ops, dispatch or bridge_api
+src/editor/dom.rs::to_svg#1  # bounded: no host op reaches it; no call chain by function name from src/host/ops, dispatch or bridge_api
+src/editor/resource_manager.rs::register_font#1  # bounded: the fonts, entries or samples of one resource dictionary or one function, not of the document
+src/host/dispatch.rs::edit_rotate_pages#1  # bounded: all or nothing: a field store per page of a list check_pages already walked under a poll, and a cancel between two stores would leave the editor half edited
+src/host/dispatch.rs::edit_set_crop_box#1  # bounded: all or nothing: a field store per page of a list check_pages already walked under a poll, and a cancel between two stores would leave the editor half edited
+src/host/dispatch.rs::edit_set_media_box#1  # bounded: all or nothing: a field store per page of a list check_pages already walked under a poll, and a cancel between two stores would leave the editor half edited
+src/host/dispatch.rs::edit_set_rotation#1  # bounded: all or nothing: a field store per page of a list check_pages already walked under a poll, and a cancel between two stores would leave the editor half edited
+src/host/dispatch.rs::rects#1  # bounded: the fonts, entries or samples of one resource dictionary or one function, not of the document
+src/host/redact_scrub.rs::font_entries#1  # bounded: the fonts, entries or samples of one resource dictionary or one function, not of the document
+src/host/redact_scrub.rs::xobject_refs#1  # bounded: the fonts, entries or samples of one resource dictionary or one function, not of the document
+src/host/resource_prune.rs::process#1  # bounded: its operator stream is built by open with a cancel every 4096 operators (with_cancel) and the op? below returns the error
+src/rendering/page_renderer.rs::execute_operator_stream#1  # bounded: its operator stream is built by render_bands_open with a cancel every 16 operators (with_cancel_every)
+src/rendering/page_renderer.rs::parse_type0_transfer_function#1  # bounded: the fonts, entries or samples of one resource dictionary or one function, not of the document
+src/rendering/page_renderer.rs::share_truetype_cmaps#1  # bounded: the fonts, entries or samples of one resource dictionary or one function, not of the document
+src/rendering/page_renderer.rs::share_truetype_cmaps#2  # bounded: the fonts, entries or samples of one resource dictionary or one function, not of the document
+src/rendering/separation_renderer.rs::execute_separation_operators#1  # bounded: no host op reaches it; no call chain by function name from src/host/ops, dispatch or bridge_api
+src/rendering/separation_renderer.rs::scan_operators_for_inks#1  # bounded: no host op reaches it; no call chain by function name from src/host/ops, dispatch or bridge_api
+src/xref_reconstruction.rs::reconstruct_minimal_trailer#1  # bounded: at most 4096 objects (MAX_SCAN)
+src/xref_reconstruction.rs::recover_from_objstms#1  # bounded: at most 4096 objects (MAX_SCAN)
+src/xref_reconstruction.rs::synthesize_catalog_from_pages#1  # bounded: at most 4096 objects (MAX_SCAN)
+src/host/font_budget.rs::set_fits#1  # bounded: it stops at the first font past the cache budget (1 MiB), so it visits at most that many bytes of fonts, never the document

@@ -1,8 +1,13 @@
 /// Typed error hierarchy for PDF operations.
 ///
+/// A [PdfError] is a runtime failure: it reaches the caller through the
+/// task, and a `switch` over it is exhaustive. A programmer mistake is an
+/// [ArgumentError] or a [StateError], thrown before any I/O and outside this
+/// hierarchy.
+///
 /// ```dart
 /// try {
-///   final doc = await Pdf.open(bytes);
+///   final doc = await pdf.open(PdfInput(source));
 /// } on PdfPasswordRequired {
 ///   // prompt user for password
 /// } on PdfCorrupted catch (e) {
@@ -20,16 +25,10 @@ sealed class PdfError implements Exception {
   String toString() => '$runtimeType: $message';
 }
 
-/// An argument passed to a PDF operation was invalid.
-class PdfInvalidArgument extends PdfError {
-  /// Creates an invalid-argument error.
-  const PdfInvalidArgument(super.message);
-}
-
 /// A file-system or network I/O error during a PDF operation.
-class PdfIoError extends PdfError {
+class PdfIoFailed extends PdfError {
   /// Creates an I/O error.
-  const PdfIoError(super.message, {this.cause});
+  const PdfIoFailed(super.message, {this.cause});
 
   /// The underlying exception, if any.
   final Object? cause;
@@ -44,25 +43,19 @@ class PdfCorrupted extends PdfError {
   final Object? cause;
 }
 
-/// Text or content extraction failed.
-class PdfExtractionFailed extends PdfError {
-  /// Creates an extraction-failure error.
-  const PdfExtractionFailed(super.message);
-}
-
 /// The PDF engine encountered an internal error.
-class PdfEngineError extends PdfError {
+class PdfEngineFailed extends PdfError {
   /// Creates an engine error.
-  const PdfEngineError(super.message, {this.cause});
+  const PdfEngineFailed(super.message, {this.cause});
 
   /// The underlying exception, if any.
   final Object? cause;
 }
 
 /// A page index was outside the valid range.
-class PdfPageRangeError extends PdfError {
+class PdfPageOutOfRange extends PdfError {
   /// Creates a page-range error.
-  const PdfPageRangeError({required this.page, required this.pageCount})
+  const PdfPageOutOfRange({required this.page, required this.pageCount})
     : super('Page $page out of range ($pageCount pages)');
 
   /// The requested page index.
@@ -72,10 +65,19 @@ class PdfPageRangeError extends PdfError {
   final int pageCount;
 }
 
-/// A text search operation failed.
-class PdfSearchError extends PdfError {
-  /// Creates a search error.
-  const PdfSearchError(super.message);
+/// A name the operation looks up is not in the document: [kind] says what
+/// was looked for (`attachment`, `image`) and [name] is the name that was
+/// given.
+class PdfNotFound extends PdfError {
+  /// Creates a not-found error.
+  const PdfNotFound({required this.kind, required this.name})
+    : super('No $kind named "$name"');
+
+  /// What was looked for: `attachment` or `image`.
+  final String kind;
+
+  /// The name that was looked for.
+  final String name;
 }
 
 /// The requested operation is not supported by this engine.
@@ -97,12 +99,23 @@ class PdfWrongPassword extends PdfError {
 }
 
 /// An encryption or decryption error.
-class PdfCryptoError extends PdfError {
+class PdfCryptoFailed extends PdfError {
   /// Creates a crypto error.
-  const PdfCryptoError(super.message, {this.cause});
+  const PdfCryptoFailed(super.message, {this.cause});
 
   /// The underlying exception, if any.
   final Object? cause;
+}
+
+/// An incremental save cannot carry the staged edits: they remove
+/// content the original bytes would keep, change page content, or the
+/// source is encrypted, repaired or certified against the change. Nothing
+/// was written to the sink; save with `PdfSave.full()`
+/// instead. Carried on the wire as error kind incrementalRefused,
+/// never matched by message text.
+class PdfIncrementalRefused extends PdfError {
+  /// Creates an incremental-refused error.
+  const PdfIncrementalRefused(super.message);
 }
 
 /// The operation was cancelled — its `Pdf` instance was disposed, or

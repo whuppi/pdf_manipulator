@@ -1,11 +1,10 @@
-// FFI bindings for the Rust lane surface (lane_table.rs).
+// FFI bindings for the Rust executor surface (executor_table.rs).
 //
-// Dumb by design — shared brain, dumb edges: every symbol is one
-// Router/Lane verb or one channel-buffer helper. No logic lives on
-// either side of this file.
+// A direct translation: every symbol is one lease-adapter verb or one
+// channel-buffer helper. No logic lives on either side of this file.
 //
-// Lane keys are opaque u64s — Rust looks them up in a locked table,
-// so a call racing a kill finds nothing instead of touching freed
+// Executor keys are opaque u64s — Rust looks them up in a locked table,
+// so a call racing a terminate finds nothing instead of touching freed
 // memory. Keys are never reused.
 //
 // INTERNAL — used by lane.dart only.
@@ -18,7 +17,7 @@ import 'dart:ffi' as ffi;
 // ── allo-isolate bootstrap ───────────────────────────────────────
 
 /// Registers the Dart post-C-object callback for allo-isolate.
-/// Called once per process before the first lane spawn.
+/// Called once per process before the first executor boot.
 @ffi.Native<
   ffi.Void Function(
     ffi.Pointer<
@@ -33,38 +32,68 @@ external void storeDartPostCobject(
   postCObject,
 );
 
-// ── Lane lifecycle ───────────────────────────────────────────────
+// ── Executor lifecycle ───────────────────────────────────────────────
 
-/// Creates a lane. Returns its opaque key. Never blocks: under
-/// global thread-budget pressure the lane starts later, FIFO.
-@ffi.Native<ffi.Uint64 Function()>(symbol: 'lane_spawn')
-external int laneSpawn();
+/// Creates an executor. Returns its opaque key. Never blocks: under
+/// global thread-budget pressure the executor starts later, FIFO.
+@ffi.Native<ffi.Uint64 Function()>(symbol: 'executor_boot')
+external int executorBoot();
 
-/// Kills a lane and everything on it. Instant; after it returns no
-/// notify callback will ever fire for this lane.
-@ffi.Native<ffi.Void Function(ffi.Uint64)>(symbol: 'lane_kill')
-external void laneKill(int laneKey);
+/// Starts a new lease on an executor and returns its id (from 1, per executor,
+/// never reused), or 0 when the executor is gone, has a job outstanding or a
+/// held channel registered, or died. From then on a message under an older
+/// lease is dropped.
+@ffi.Native<ffi.Uint64 Function(ffi.Uint64)>(symbol: 'executor_lease_begin')
+external int executorLeaseBegin(int executorKey);
 
-/// Cancels one job on a lane. Instant, idempotent.
-@ffi.Native<ffi.Void Function(ffi.Uint64, ffi.Uint64)>(
-  symbol: 'lane_job_cancel',
+/// Replaces the executor's engine state with a fresh one. The answer is
+/// posted to [resultPort] exactly once: a success once the executor has
+/// reset, or the error that refused it.
+@ffi.Native<ffi.Void Function(ffi.Uint64, ffi.Uint64, ffi.Int64)>(
+  symbol: 'executor_reset',
 )
-external void laneJobCancel(int laneKey, int jobId);
+external void executorReset(int executorKey, int lease, int resultPort);
+
+/// Terminates an executor and everything on it. Instant; after it returns no
+/// notify callback will ever fire for this executor.
+@ffi.Native<ffi.Void Function(ffi.Uint64)>(symbol: 'executor_terminate')
+external void executorTerminate(int executorKey);
+
+/// Cancels one job on an executor. Instant, idempotent. Returns 1 when the
+/// job had not started: the executor skips it, so it can complete at once.
+/// Under a lease that is not current it changes nothing and returns 0.
+@ffi.Native<ffi.Uint8 Function(ffi.Uint64, ffi.Uint64, ffi.Uint64)>(
+  symbol: 'executor_job_cancel',
+)
+external int executorJobCancel(int executorKey, int lease, int jobId);
+
+/// 1 once the executor's engine panicked and the executor stopped serving.
+@ffi.Native<ffi.Uint8 Function(ffi.Uint64)>(symbol: 'executor_is_dead')
+external int executorIsDead(int executorKey);
+
+/// The most bytes the executor's thread has held since its last reset, as of the
+/// last job or reset it answered; 0 once the executor is gone.
+@ffi.Native<ffi.Uint64 Function(ffi.Uint64)>(symbol: 'executor_heap_peak')
+external int executorHeapPeak(int executorKey);
 
 /// Releases one held channel (its handle was disposed). The caller
 /// frees the buffer only AFTER this returns.
-@ffi.Native<ffi.Void Function(ffi.Uint64, ffi.Pointer<ffi.Uint8>)>(
-  symbol: 'lane_channel_release',
+@ffi.Native<ffi.Void Function(ffi.Uint64, ffi.Uint64, ffi.Pointer<ffi.Uint8>)>(
+  symbol: 'executor_hold_release',
 )
-external void laneChannelRelease(int laneKey, ffi.Pointer<ffi.Uint8> buf);
+external void executorHoldRelease(
+  int executorKey,
+  int lease,
+  ffi.Pointer<ffi.Uint8> buf,
+);
 
-/// Started lane threads, process-wide. Diagnostics and tests only.
-@ffi.Native<ffi.Uint32 Function()>(symbol: 'lane_live_count')
-external int laneLiveCount();
+/// Started executor threads, process-wide. Diagnostics and tests only.
+@ffi.Native<ffi.Uint32 Function()>(symbol: 'executor_live_count')
+external int executorLiveCount();
 
 // ── Job submission ───────────────────────────────────────────────
 
-/// Submits one job. The result is posted to [resultPort] exactly
+/// Submits one job under [lease]. The result is posted to [resultPort] exactly
 /// once — success bytes, an engine error, or a cancelled error.
 /// That post is the ONLY signal after which the job's buffers may be
 /// freed.
@@ -74,6 +103,7 @@ external int laneLiveCount();
 /// [sinkCount] entries.
 @ffi.Native<
   ffi.Void Function(
+    ffi.Uint64,
     ffi.Uint64,
     ffi.Uint64,
     ffi.Pointer<ffi.Uint8>,
@@ -88,9 +118,10 @@ external int laneLiveCount();
     ffi.Pointer<ffi.Pointer<ffi.NativeFunction<ffi.Void Function()>>>,
     ffi.Int64,
   )
->(symbol: 'lane_submit')
-external void laneSubmit(
-  int laneKey,
+>(symbol: 'executor_submit')
+external void executorSubmit(
+  int executorKey,
+  int lease,
   int jobId,
   ffi.Pointer<ffi.Uint8> requestPtr,
   int requestLen,

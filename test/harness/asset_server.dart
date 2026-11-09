@@ -1,7 +1,7 @@
 // Hybrid isolate asset server for web tests.
 //
 // dart test -p chrome serves test code but NOT the package root.
-// This server makes web_assets/ (lane_worker.js, *.wasm, glue JS)
+// This server makes web_assets/ (executor_worker.js, *.wasm, glue JS)
 // fetchable from the browser test via http://localhost:<port>/web_assets/...
 //
 // Usage:

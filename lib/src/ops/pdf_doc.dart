@@ -1,57 +1,39 @@
-// PdfDoc — read-only queries on a parsed PDF document.
+// PdfDocument — read-only queries on a parsed PDF document.
 //
 // Open once, query many times, dispose when done. The Rust engine
 // keeps the parsed PDF in memory (handle map) until dispose is called.
-// Read-only — no mutations here. Use PdfEditor for mutations,
-// PdfStandalone for one-shot export ops.
+// Read-only — no mutations here. Use PdfEditor for mutations, `Pdf` for
+// the ops that need no handle.
+//
+// PdfDocument is the view a scope body gets; PdfDocumentHandle is the one
+// `Pdf.open` returns, and the only one that can be disposed.
 
-import 'package:pdf_manipulator/src/ops/pdf.dart';
-import 'package:pdf_manipulator/src/types/data_sink.dart';
-import 'package:pdf_manipulator/src/types/errors.dart';
-import 'package:pdf_manipulator/src/types/pdf_attachment.dart';
-import 'package:pdf_manipulator/src/types/pdf_enums.dart';
-import 'package:pdf_manipulator/src/types/pdf_form_field.dart';
-import 'package:pdf_manipulator/src/types/pdf_task.dart';
-import 'package:pdf_manipulator/src/types/pdf_image.dart';
-import 'package:pdf_manipulator/src/types/pdf_page_info.dart';
-import 'package:pdf_manipulator/src/types/pdf_pages.dart';
-import 'package:pdf_manipulator/src/types/pdf_params.dart';
-import 'package:pdf_manipulator/src/types/pdf_signature.dart';
-import 'package:pdf_manipulator/src/types/pdf_xfa_info.dart';
-import 'package:pdf_manipulator/src/types/search_result.dart';
-import 'package:pdf_manipulator/src/bridge/pdf_bridge.dart';
-import 'package:pdf_manipulator/src/keep/record_use_shim.dart';
+part of 'pdf.dart';
 
-/// A parsed PDF document — live handle to the Rust engine.
+/// A parsed PDF document — what a [Pdf.read] body queries.
 ///
-/// Created by [Pdf.open]. The document is parsed once and stays in
-/// memory until [dispose] is called. All read operations reuse the
-/// already-parsed structure — no re-opening.
-class PdfDoc {
+/// The document is parsed once and stays in memory until its owner lets go.
+/// All read operations reuse the already-parsed structure — no re-opening.
+///
+/// The facts the open read anyway are sync fields; everything per page is
+/// a read of its own ([pageInfo], [extractText], [search] and the rest,
+/// declared on [PdfReads]).
+base class PdfDocument extends PdfReads {
   /// Internal constructor — use [Pdf.open] to create instances.
-  PdfDoc.internal(
+  @internal
+  PdfDocument.internal(
     this._handle, {
     required this.pageCount,
     required this.version,
-    required this.pages,
-    this.title,
-    this.author,
-    this.subject,
-    this.keywords,
-    this.producer,
-    this.creator,
-    this.creationDate,
-    this.isEncrypted = false,
-    this.requiresPassword = false,
-    this.isTagged = false,
-    this.encryptionAlgorithm,
-    this.permissions,
-  });
+    required this.isTagged,
+    required this.metadata,
+    required this.encryption,
+  }) : super._();
 
   final BridgeDocHandle _handle;
   bool _disposed = false;
 
-  // ── Metadata (populated at open time) ──
+  // ── Metadata (read at open time) ──
 
   /// Total number of pages in the document.
   final int pageCount;
@@ -59,186 +41,60 @@ class PdfDoc {
   /// PDF version string (e.g. "1.7", "2.0").
   final String version;
 
-  /// Per-page metadata (dimensions, rotation, label).
-  final List<PdfPageInfo> pages;
-
-  /// Document title from metadata, if present.
-  final String? title;
-
-  /// Document author from metadata, if present.
-  final String? author;
-
-  /// Document subject from metadata, if present.
-  final String? subject;
-
-  /// Document keywords from metadata, if present.
-  final String? keywords;
-
-  /// Document producer (the software that produced the PDF), if present.
-  final String? producer;
-
-  /// Document creator (the source application), if present.
-  final String? creator;
-
-  /// Document creation date as a raw PDF date string
-  /// (e.g. `D:20240101120000Z`), if present.
-  final String? creationDate;
-
-  /// Whether the document is encrypted.
-  final bool isEncrypted;
-
-  /// Whether a password is required to open the document.
-  final bool requiresPassword;
-
   /// Whether the document contains tagged (accessible) structure.
   final bool isTagged;
 
-  /// Encryption algorithm used, if the document is encrypted.
-  final PdfEncryptionAlgorithm? encryptionAlgorithm;
+  /// What the document's info dictionary carries.
+  final PdfMetadata metadata;
 
-  /// Permission flags, if the document is encrypted.
-  final PdfPermissions? permissions;
+  /// How the document is encrypted, or null when it is not encrypted.
+  final PdfEncryptionInfo? encryption;
 
-  void _check() {
-    if (_disposed) throw StateError('This PdfDoc has been disposed');
-  }
-
-  // ── Read operations (reuse the already-parsed document) ──
-
-  /// Extracts text from the specified [pages] in the given [format].
-  PdfTask<String> extract({
-    required PdfPages pages,
-    PdfExtractionFormat format = PdfExtractionFormat.auto,
+  @override
+  PdfTask<T> _run<T>(
+    PdfTask<T> Function(BridgeDocHandle handle) read, {
+    DataSink? output,
   }) {
-    KeepRecord.op('extract');
-    _check();
-    return _handle.extract(pages: pages, format: format);
+    if (_disposed) throw StateError('This PdfDocument has been disposed');
+    return read(_handle);
+  }
+}
+
+/// A [PdfDocument] you own: the handle [Pdf.open] returns.
+///
+/// Call [dispose] when you are done, on every path including errors. For one
+/// read, use [Pdf.read], which opens the document, runs your code and always
+/// closes it. A handle you forget is released when the garbage collector
+/// frees it, and in debug mode the leak is logged with where it was opened;
+/// that is a backstop, not a plan.
+final class PdfDocumentHandle extends PdfDocument implements _Handle {
+  /// Internal constructor — use [Pdf.open] to create instances.
+  @internal
+  PdfDocumentHandle.internal(
+    super.handle, {
+    required super.pageCount,
+    required super.version,
+    required super.isTagged,
+    required super.metadata,
+    required super.encryption,
+    required Future<void> Function() release,
+  }) : _close = _closing(handle.dispose, release),
+       super.internal() {
+    HandleBackstop.attach(this, 'PdfDocumentHandle', _close);
   }
 
-  /// Searches for [query] text across the specified [pages].
-  PdfTask<List<SearchResult>> search({
-    required String query,
-    required PdfPages pages,
-  }) {
-    KeepRecord.op('extract');
-    _check();
-    return _handle.search(query: query, pages: pages);
-  }
+  final Future<void> Function() _close;
 
-  /// Renders the specified [pages] as rasterized images.
-  Stream<RenderedPage> render({required PdfPages pages, PdfRenderSize? size}) {
-    KeepRecord.op('render');
-    _check();
-    return _handle.render(pages: pages, size: size);
-  }
+  @override
+  void _scopeTo(CancelHook hook) => _handle.scope = hook;
 
-  /// Extracts embedded images from the specified [pages].
-  Stream<PdfImage> extractImages({required PdfPages pages}) {
-    _check();
-    return _handle.extractImages(pages: pages);
-  }
-
-  /// Returns metadata for all digital signatures in the document.
-  PdfTask<List<PdfSignatureInfo>> get signatures {
-    KeepRecord.op('signatures');
-    _check();
-    return _handle.signatures;
-  }
-
-  /// Verifies all digital signatures — returns true if all are valid.
-  PdfTask<bool> verifySignatures() {
-    KeepRecord.op('signatures');
-    _check();
-    return _handle.verifySignatures();
-  }
-
-  /// Validates PDF/A conformance at the given [level] (1, 2, or 3).
-  PdfTask<PdfValidationResult> validatePdfA({int level = 2}) {
-    KeepRecord.op('pdfa');
-    _check();
-    return _handle.validatePdfA(level: level);
-  }
-
-  /// Validates PDF/UA (accessibility) conformance at the given [level].
-  PdfTask<bool> validatePdfUa({int level = 1}) {
-    KeepRecord.op('pdfa');
-    _check();
-    return _handle.validatePdfUa(level: level);
-  }
-
-  /// Returns bookmark-based split boundaries for the document.
-  PdfTask<List<PdfBookmarkSplit>> planSplitByBookmarks() {
-    _check();
-    return _handle.planSplitByBookmarks();
-  }
-
-  /// Classifies a single [page] by its content type (text, image, mixed).
-  PdfTask<PdfPageClassification> classifyPage(int page) {
-    KeepRecord.op('extract');
-    _check();
-    return _handle.classifyPage(page);
-  }
-
-  /// Classifies the entire document by its overall content type.
-  PdfTask<PdfDocumentClassification> classifyDocument() {
-    KeepRecord.op('extract');
-    _check();
-    return _handle.classifyDocument();
-  }
-
-  /// Reads every AcroForm field of the document.
-  PdfTask<List<PdfFormField>> get formFields {
-    _check();
-    return _handle.formFields;
-  }
-
-  /// Reads the AcroForm field named [name], or `null` when no field has
-  /// that fully qualified name.
-  PdfTask<PdfFormField?> formField(String name) {
-    _check();
-    return formFields.map((fields) {
-      for (final field in fields) {
-        if (field.name == name) return field;
-      }
-      return null;
-    });
-  }
-
-  /// Exports every AcroForm field's current value to [output] in [format].
-  PdfTask<void> exportFormData(
-    DataSink output, {
-    PdfFormDataFormat format = PdfFormDataFormat.xfdf,
-  }) {
-    _check();
-    return _handle.exportFormData(output, format: format.name);
-  }
-
-  /// What the document's XFA packet declares, or `null` when the document
-  /// has no XFA form.
-  PdfTask<PdfXfaInfo?> get xfa {
-    _check();
-    return _handle.xfa;
-  }
-
-  /// Lists the files embedded in the document, metadata only.
-  PdfTask<List<PdfAttachment>> get attachments {
-    _check();
-    return _handle.attachments;
-  }
-
-  /// Writes the embedded file named [name] to [output]. An unknown name
-  /// throws [PdfEngineError].
-  PdfTask<void> extractAttachment(String name, DataSink output) {
-    _check();
-    return _handle.extractAttachment(name, output);
-  }
-
-  // ── Lifecycle ──
-
-  /// Releases the parsed document handle. Idempotent.
+  /// Releases the parsed document, and the source when the input owns it.
+  /// Idempotent.
+  @override
   Future<void> dispose() async {
     if (_disposed) return;
     _disposed = true;
-    await _handle.dispose();
+    HandleBackstop.detach(this);
+    await _close();
   }
 }

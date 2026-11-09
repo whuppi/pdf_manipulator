@@ -39,6 +39,59 @@ updates:
     open-pull-requests-limit: 5
     cooldown:
       default-days: 7
+  - package-ecosystem: "pub"
+    directory: "/example_trimmed"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    target-branch: "dev"
+    commit-message:
+      prefix: "chore"
+    labels:
+      - "dependencies"
+    groups:
+      deps:
+        patterns:
+          - "*"
+    open-pull-requests-limit: 5
+    cooldown:
+      default-days: 7
+  - package-ecosystem: "pub"
+    directory: "/example/test_support"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    target-branch: "dev"
+    commit-message:
+      prefix: "chore"
+    labels:
+      - "dependencies"
+    groups:
+      deps:
+        patterns:
+          - "*"
+    open-pull-requests-limit: 5
+    cooldown:
+      default-days: 7
+  # The bench's `pdf_document` pin is exact, so each pdf_document release
+  # opens a PR, and `bench.yml` runs the comparison on it.
+  - package-ecosystem: "pub"
+    directory: "/tool/bench"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    target-branch: "dev"
+    commit-message:
+      prefix: "chore"
+    labels:
+      - "dependencies"
+    groups:
+      deps:
+        patterns:
+          - "*"
+    open-pull-requests-limit: 5
+    cooldown:
+      default-days: 7
   # No github-actions ecosystem here on purpose. EVERY action `uses:` ref —
   # whuppi/ci and third-party, workflows AND composite action.yml — is owned by
   # the single `action-refs` sweep in whuppi/ci's upgrade-check.yml (opt-in via

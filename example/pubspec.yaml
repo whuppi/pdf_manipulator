@@ -12,6 +12,13 @@ dependencies:
   pdf_manipulator:
     path: ../
 
+# The web smoke test runs in every web mode, Asyncify included, so the app
+# ships the Asyncify engine; a browser fetches it only in that mode.
+hooks:
+  user_defines:
+    pdf_manipulator:
+      asyncify: true
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

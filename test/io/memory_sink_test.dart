@@ -24,5 +24,19 @@ void main() {
     test('an empty sink yields empty bytes', () {
       expect(MemorySink().takeBytes(), isEmpty);
     });
+
+    test('takeString decodes the chunks as UTF-8 and drains', () {
+      final sink = MemorySink()
+        ..write(Uint8List.fromList([0xC3]))
+        ..write(Uint8List.fromList([0xA9, 0x21]));
+      expect(sink.takeString(), 'é!');
+      expect(sink.takeString(), isEmpty);
+    });
+
+    test('close holds nothing: the bytes are still there', () {
+      final sink = MemorySink()..write(Uint8List.fromList([1, 2]));
+      sink.close();
+      expect(sink.takeBytes(), equals([1, 2]));
+    });
   });
 }

@@ -58,6 +58,7 @@ native, so this command never needs flags:
         keep: [render]   # or `keep: auto` to scan your app's source;
                          # absent = every capability
         build: speed     # speed (default) | size | debug
+        asyncify: false  # true also provides the Asyncify engine (web only)
 
 Native targets pick this block up automatically during `flutter build`.
 ''';
@@ -174,6 +175,9 @@ Future<void> _setupWeb(bool force) async {
   if (plan.isCustom) {
     stdout.writeln('keep: features [${plan.features}]');
   }
+  if (cfg.asyncify) {
+    stdout.writeln('asyncify: also providing the Asyncify engine');
+  }
   final destDir = Directory('web/pdf_manipulator');
   final count = await build.resolveWeb(
     wasmFeaturesOverride: plan.isCustom ? plan.features : null,
@@ -182,6 +186,7 @@ Future<void> _setupWeb(bool force) async {
     destDir: destDir,
     force: force,
     engineBuild: cfg.build,
+    asyncify: cfg.asyncify,
   );
   stdout.writeln(
     count > 0

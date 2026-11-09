@@ -19,8 +19,8 @@ import 'package:test/test.dart';
 
 /// A throwaway app calling exactly ONE capability.
 ///
-/// `extract` is a real detector marker (`PdfDoc.extract`); `extractText` is
-/// not, and an app calling only that yields an EMPTY keep-set — which happens
+/// `extractText` is a real detector marker (`PdfDocument.extractText`); `extract`
+/// is not, and an app calling only that yields an EMPTY keep-set — which happens
 /// to satisfy "is custom" and "has no signatures" too, so a fixture using it
 /// passes this test vacuously.
 ///
@@ -38,8 +38,8 @@ import 'package:pdf_manipulator/pdf_manipulator.dart';
 
 final pdf = Pdf();
 
-Future<void> readIt(PdfDoc doc) async {
-  await doc.extract();
+Future<void> readIt(PdfDocument doc, DataSink out) async {
+  await doc.extractText(out);
 }
 ''');
   return app;
@@ -191,8 +191,8 @@ void main() {
       File('${app.path}/lib/.generated/api.dart').writeAsStringSync('''
 import 'package:pdf_manipulator/pdf_manipulator.dart';
 
-Future<void> check(PdfDoc doc) async {
-  await doc.signatures;
+Future<void> check(PdfDocument doc) async {
+  await doc.signatures();
 }
 ''');
       // Tool-owned, and `lib/build/` which is the app's own code, not output.
@@ -204,8 +204,8 @@ Future<void> check(PdfDoc doc) async {
       File('${app.path}/lib/build/maker.dart').writeAsStringSync('''
 import 'package:pdf_manipulator/pdf_manipulator.dart';
 
-Future<void> shrink(PdfDoc doc) async {
-  await doc.render(pages: PdfPages.all());
+Future<void> shrink(PdfDocument doc) async {
+  await doc.render((page) => MemorySink(), pages: PdfPages.all());
 }
 ''');
 
@@ -237,8 +237,8 @@ Future<void> shrink(PdfDoc doc) async {
     File('${app.path}/tools/report.dart').writeAsStringSync('''
 import 'package:pdf_manipulator/pdf_manipulator.dart';
 
-Future<void> check(PdfDoc doc) async {
-  await doc.signatures;
+Future<void> check(PdfDocument doc) async {
+  await doc.signatures();
 }
 ''');
 
