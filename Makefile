@@ -127,7 +127,9 @@ format:
 #                      - API walls (test/guards): no handle outside _own, no
 #                        void write on a sink but MemorySink, no enum index
 #                        on the wire, one-shot membership, build pairing,
-#                        README table
+#                        README table, a documentation comment on every
+#                        public API element pub.dev counts (implicit
+#                        constructors included)
 #                      - changelog bullets stay one sentence: at most 60 words
 #                        (80 for a Breaking bullet), tool/check_changelog_shape.sh;
 #                        migration coverage, tool/check_migration.sh and
