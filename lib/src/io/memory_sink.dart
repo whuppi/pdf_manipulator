@@ -17,6 +17,9 @@ import '../types/data_sink.dart';
 /// The whole output is held in memory. For large outputs, write to a file
 /// sink instead so the output streams to disk rather than piling up in RAM.
 final class MemorySink implements DataSink {
+  /// Creates an empty sink.
+  MemorySink();
+
   final _buffer = BytesBuilder(copy: false);
 
   @override
