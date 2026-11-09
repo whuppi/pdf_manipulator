@@ -1,6 +1,6 @@
 // Builds one wasm variant to a temp dir and prints `raw=<bytes> gz=<bytes>`.
 //
-//   dart run tool/measure_wasm.dart <features> [build]
+//   dart tool/measure_wasm.dart <features> [build]
 //     features  cargo feature string, e.g. "wasm,rendering,signatures,..."
 //     build     the engine build mode (`speed`, `size`, `debug`), as the
 //               app's `build:` user-define names it; omit for speed.
@@ -18,7 +18,7 @@ import 'package:pdf_manipulator/src/hook/engine_compiler.dart';
 
 Future<void> main(List<String> args) async {
   if (args.isEmpty) {
-    stderr.writeln('usage: dart run tool/measure_wasm.dart <features> [build]');
+    stderr.writeln('usage: dart tool/measure_wasm.dart <features> [build]');
     exit(2);
   }
   Logger.root.onRecord.listen((r) => stderr.writeln(r.message));

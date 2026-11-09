@@ -481,12 +481,15 @@ SHAKE_AUDIT_WASM=1 make shake-audit     # + core-only wasm raw/gzipped
 SHAKE_AUDIT_CAPS=1 make shake-audit     # + per-capability costs (5 builds)
 make verify-readme-sizes                # README numbers vs the record
 make sizes-gate                         # all of the above, strict: no number unmeasured
+make sizes-part-<part>                  # one part: guarantee, size-full, size-core,
+                                        #   wasm, cap-<render|signatures|pdfa|extract|office>
 ```
 
-The Sizes workflow runs `make sizes-gate` on macOS arm64, the platform the
-README quotes, on every PR that touches the engine, the hook, the build
-config or the README, weekly, and on demand. When it is red, take the
-measured numbers from its `shake-sizes` artifact into the README. The
+The Sizes workflow runs each part on its own macOS arm64 runner, the
+platform the README quotes, then merges the records and runs
+`make sizes-verify`. It runs on every PR that touches the engine, the hook,
+the build config or the README, weekly, and on demand. When it is red, take
+the measured numbers from its `shake-sizes` artifact into the README. The
 README's size table and capability costs come from these modes. Sizes are quoted
 in decimal MB (1 MB = 1,000,000 bytes).
 

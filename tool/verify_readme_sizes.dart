@@ -7,12 +7,16 @@
 // the README never passes for it. There is no stored expectation list that
 // could itself go stale.
 //
-//   dart run tool/verify_readme_sizes.dart            # verify
-//   dart run tool/verify_readme_sizes.dart --strict   # SKIPs become failures
+//   dart tool/verify_readme_sizes.dart            # verify
+//   dart tool/verify_readme_sizes.dart --strict   # SKIPs become failures
+//
+// Plain `dart`, never `dart run`: `dart run` runs the package's build hooks,
+// which compile the native engine from source at version 0.0.0.
 //
 // Measured claims:
 //   * native and wasm sizes of every keep-set and build mode, the trim
-//     percentage and each capability's cost — read from
+//     percentage and each capability's build, whose cost is that build less
+//     core's — read from
 //     tool/.shake_sizes.json, which `make shake-audit` (the single
 //     builder/measurer) writes. Missing/stale file → run the audit first.
 //   * the default and Asyncify wasm engines, raw and gzipped, of the whole
@@ -161,19 +165,31 @@ void main(List<String> args) {
     }
   }
 
-  // ── each capability's cost: the last cell of its row ──
+  // ── each capability's cost: the last cell of its row. A cost is the
+  // capability's build less the build it adds to: core, or core+extract for
+  // office, which requires extract. ──
   cell('core size', '| `core` |', 3, [
     core,
   ], (v) => 'always included (~${v[0]})');
-  for (final (capability, key, suffix) in [
-    ('render', 'capRender', ''),
-    ('signatures', 'capSignatures', ''),
-    ('pdfa', 'capPdfa', ''),
-    ('extract', 'capExtract', ''),
-    ('office', 'capOffice', ' on top of `extract`'),
+  int? cost(String key, int? base) {
+    final total = measured(key);
+    return total == null || base == null ? null : total - base;
+  }
+
+  final extractTotal = measured('nativeCoreExtract');
+  for (final (capability, size, suffix) in [
+    ('render', cost('nativeCoreRender', core), ''),
+    ('signatures', cost('nativeCoreSignatures', core), ''),
+    ('pdfa', cost('nativeCorePdfa', core), ''),
+    ('extract', cost('nativeCoreExtract', core), ''),
+    (
+      'office',
+      cost('nativeCoreExtractOffice', extractTotal),
+      ' on top of `extract`',
+    ),
   ]) {
     cell('$capability cost', '| `$capability` |', 3, [
-      measured(key),
+      size,
     ], (v) => '+${v[0]}$suffix');
   }
 
