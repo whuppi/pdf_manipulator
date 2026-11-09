@@ -1,0 +1,37 @@
+src/cancel.rs::CURRENT  thread  the running job's cancel check, entered by handle_request for the job's life; its guard restores the previous one
+src/compliance/converter.rs::CONVERTER_FONTDB  machine  the PDF/A converter's font database: the host's system fonts and bundled Liberation faces, built once and read only
+src/content/parser.rs::MAX_OPERATORS_OVERRIDE  upstream-binding  the operator cap, set only by `set_max_ops_per_stream`, which the python, ffi and wasm.rs bindings call
+src/converters/office/mod.rs::REGISTERED_FONTS  thread  font names one office conversion registered; reset_conversion_context empties it when a lane starts
+src/converters/office/mod.rs::UNICODE_FALLBACK_CJK_FONT  thread  the CJK font name one office conversion registered; reset_conversion_context empties it
+src/converters/office/mod.rs::UNICODE_FALLBACK_FONT  thread  the Unicode font name one office conversion registered; reset_conversion_context empties it
+src/crypto/active.rs::ACTIVE  upstream-binding  the crypto provider, installed once by `set_provider` from the bindings; the host never calls it
+src/crypto/active.rs::ACTIVE_POLICY  upstream-binding  the crypto policy, installed once by `set_policy` from the bindings; the host never calls it
+src/crypto/active.rs::INVENTORY  upstream-binding  a bitset of crypto algorithm ids the process used, no document data; only the bindings read it
+src/document.rs::RECURSION_DEPTH  thread  the depth of one thread's object resolution; zero between calls
+src/document.rs::RESOLVING_STACK  thread  the objects one thread is resolving, a recursion guard; empty between calls
+src/extractors/text.rs::PRESERVE_UNMAPPED_GLYPHS  upstream-binding  the U+FFFD switch, set only by `set_preserve_unmapped_glyphs` from the bindings
+src/extractors/warnings.rs::DROPPED  thread  the count of warnings one thread's sink dropped; emptied with the sink when a lane starts
+src/extractors/warnings.rs::WARNING_SINK  thread  the warnings one thread raised; a lane's own, emptied when it starts and on reset
+src/fonts/unicode_fallback.rs::CACHED_BYTES  machine  the bytes of a system Unicode font, read once from the host's font files
+src/fonts/unicode_fallback.rs::CACHED_CJK_BYTES  machine  the bytes of a system CJK font, read once from the host's font files
+src/host/bridge_api.rs::SOURCE_FAILURE  thread  the message of the first read the host's source failed in the running op; handle_request empties it when an op starts and takes it when the op ends
+src/host/caches.rs::DEFAULT  upstream-binding  the EngineCaches used when none is installed: the python, ffi and wasm.rs bindings and upstream tests; an executor always installs its own
+src/host/caches.rs::INSTALLED  executor  the pointer to the EngineCaches the current executor thread installed
+src/host/heap.rs::MINE  executor  what the current thread holds and its peak
+src/host/heap.rs::OWNED  executor  how many process-owned calls the current thread is inside
+src/host/heap.rs::PROCESS_LIVE  machine  what the whole process holds, a counter that holds no data
+src/host/heap.rs::PROCESS_PEAK  machine  the most the whole process held, a counter that holds no data
+src/host/native/executor_table.rs::BUDGET  registry  the executor thread budget and its waiters
+src/host/native/executor_table.rs::NEXT_EXECUTOR_KEY  registry  the next executor key
+src/host/native/executor_table.rs::TABLE  registry  the table of live executors by key
+src/html_css/html/tokenizer.rs::NAMED_ENTITIES  machine  the HTML named-entity table, built once from literals
+src/pipeline/reading_order/xycut.rs::SMOOTH_SCRATCH  thread  a buffer one thread clears and refills on every call
+src/python.rs::PYO3_LOG_RESET_HANDLE  upstream-binding  the Python logging handle, set only by the python binding
+src/rendering/band.rs::FILLS  thread  a count of the fills one thread handed to the rasteriser, compared around a drawing and reset when a lane starts
+src/rendering/page_renderer.rs::EMPTY  machine  an empty set of layer names, a constant
+src/rendering/page_renderer.rs::GRAY_FALLBACK  machine  the name object DeviceGray, a constant
+src/rendering/text_rasterizer.rs::CJK_FALLBACK  machine  the CJK face found in the machine's fonts, kept for the process
+src/rendering/text_rasterizer.rs::FACE_CACHE  machine  the machine's font faces under a byte budget; inserts run in heap::process_owned
+src/rendering/text_rasterizer.rs::FONT_BYTES_CACHE  machine  the machine's font files under a byte budget; inserts run in heap::process_owned
+src/rendering/text_rasterizer.rs::RENDER_CJK_FALLBACK_FACE  machine  the bundled CJK face, parsed once
+src/rendering/text_rasterizer.rs::SYSTEM_FONTDB  machine  the host's system font database plus the bundled CJK face, built once

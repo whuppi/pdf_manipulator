@@ -1,0 +1,1654 @@
+//! Conversion fidelity for XLSX and PPTX → `DocumentIR`.
+//!
+//! Fixtures are built in code (AGENTS.md rule #4). Each test pins a defect
+//! where the parser read a value correctly and the converter — or the
+//! writer — then reported something else.
+
+use std::io::Cursor;
+
+use office_oxide::core::opc::{OpcWriter, PartName};
+use office_oxide::core::relationships::rel_types;
+use office_oxide::ir::*;
+use office_oxide::{Document, DocumentFormat};
+
+// ---------------------------------------------------------------------------
+// XLSX fixture builder
+// ---------------------------------------------------------------------------
+
+const CT_WB: &str = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml";
+const CT_WS: &str = "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml";
+const CT_STYLES: &str = "application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml";
+const CT_COMMENTS: &str =
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.comments+xml";
+const CT_CORE: &str = "application/vnd.openxmlformats-package.core-properties+xml";
+
+/// One sheet: display name, optional `state`, and the `<sheetData>` body.
+struct Sheet<'a> {
+    name: &'a str,
+    state: Option<&'a str>,
+    body: &'a str,
+    /// Extra XML appended after `</sheetData>` (hyperlinks, pageSetup, …).
+    extra: &'a str,
+}
+
+impl<'a> Sheet<'a> {
+    fn new(name: &'a str, body: &'a str) -> Self {
+        Self {
+            name,
+            state: None,
+            body,
+            extra: "",
+        }
+    }
+}
+
+struct Xlsx<'a> {
+    sheets: Vec<Sheet<'a>>,
+    styles: Option<&'a str>,
+    comments: Option<&'a str>,
+    core: Option<&'a str>,
+}
+
+impl<'a> Xlsx<'a> {
+    fn new(sheets: Vec<Sheet<'a>>) -> Self {
+        Self {
+            sheets,
+            styles: None,
+            comments: None,
+            core: None,
+        }
+    }
+
+    fn styles(mut self, inner: &'a str) -> Self {
+        self.styles = Some(inner);
+        self
+    }
+
+    /// Attach a comments part to the *first* sheet.
+    fn comments(mut self, inner: &'a str) -> Self {
+        self.comments = Some(inner);
+        self
+    }
+
+    fn core(mut self, inner: &'a str) -> Self {
+        self.core = Some(inner);
+        self
+    }
+
+    fn ir(self) -> DocumentIR {
+        self.doc().to_ir()
+    }
+
+    fn doc(self) -> Document {
+        let mut w = OpcWriter::new(Cursor::new(Vec::new())).unwrap();
+        let wb = PartName::new("/xl/workbook.xml").unwrap();
+        w.add_package_rel(rel_types::OFFICE_DOCUMENT, "xl/workbook.xml");
+
+        let mut sheet_tags = String::new();
+        for (i, s) in self.sheets.iter().enumerate() {
+            let file = format!("worksheets/sheet{}.xml", i + 1);
+            let rid = w.add_part_rel(&wb, rel_types::WORKSHEET, &file);
+            let state = s
+                .state
+                .map(|st| format!(r#" state="{st}""#))
+                .unwrap_or_default();
+            sheet_tags.push_str(&format!(
+                r#"<sheet name="{}" sheetId="{}" r:id="{rid}"{state}/>"#,
+                s.name,
+                i + 1
+            ));
+            let ws_part = PartName::new(&format!("/xl/{file}")).unwrap();
+            let xml = format!(
+                r#"<?xml version="1.0"?><worksheet
+                     xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+                     xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+                   <sheetData>{}</sheetData>{}</worksheet>"#,
+                s.body, s.extra
+            );
+            w.add_part(&ws_part, CT_WS, xml.as_bytes()).unwrap();
+
+            if i == 0 {
+                if let Some(inner) = self.comments {
+                    let part = PartName::new("/xl/comments1.xml").unwrap();
+                    let xml = format!(
+                        r#"<?xml version="1.0"?><comments
+                             xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+                           {inner}</comments>"#
+                    );
+                    w.add_part(&part, CT_COMMENTS, xml.as_bytes()).unwrap();
+                    w.add_part_rel(&ws_part, rel_types::COMMENTS, "../comments1.xml");
+                }
+            }
+        }
+
+        let wb_xml = format!(
+            r#"<?xml version="1.0"?><workbook
+                 xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+                 xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+               <sheets>{sheet_tags}</sheets></workbook>"#
+        );
+        w.add_part(&wb, CT_WB, wb_xml.as_bytes()).unwrap();
+
+        if let Some(inner) = self.styles {
+            let part = PartName::new("/xl/styles.xml").unwrap();
+            let xml = format!(
+                r#"<?xml version="1.0"?><styleSheet
+                     xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+                   {inner}</styleSheet>"#
+            );
+            w.add_part(&part, CT_STYLES, xml.as_bytes()).unwrap();
+            w.add_part_rel(&wb, rel_types::STYLES, "styles.xml");
+        }
+
+        if let Some(inner) = self.core {
+            let part = PartName::new("/docProps/core.xml").unwrap();
+            let xml = format!(
+                r#"<?xml version="1.0"?><cp:coreProperties
+                     xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties"
+                     xmlns:dc="http://purl.org/dc/elements/1.1/"
+                     xmlns:dcterms="http://purl.org/dc/terms/">{inner}</cp:coreProperties>"#
+            );
+            w.add_part(&part, CT_CORE, xml.as_bytes()).unwrap();
+            w.add_package_rel(rel_types::CORE_PROPERTIES, "docProps/core.xml");
+        }
+
+        let bytes = w.finish().unwrap().into_inner();
+        Document::from_reader(Cursor::new(bytes), DocumentFormat::Xlsx).expect("parse xlsx")
+    }
+}
+
+/// Serialise a writer to bytes through an in-memory cursor.
+fn to_bytes(wb: &office_oxide::xlsx::write::XlsxWriter) -> Vec<u8> {
+    let mut buf = Cursor::new(Vec::new());
+    wb.write_to(&mut buf).expect("write xlsx");
+    buf.into_inner()
+}
+
+fn only_table(ir: &DocumentIR, section: usize) -> &Table {
+    ir.sections[section]
+        .elements
+        .iter()
+        .find_map(|e| match e {
+            Element::Table(t) => Some(t),
+            _ => None,
+        })
+        .expect("a table")
+}
+
+fn cell_text(cell: &TableCell) -> String {
+    cell.content
+        .iter()
+        .map(|e| match e {
+            Element::Paragraph(p) => p
+                .content
+                .iter()
+                .filter_map(|c| match c {
+                    InlineContent::Text(t) => Some(t.text.as_str()),
+                    _ => None,
+                })
+                .collect::<String>(),
+            _ => String::new(),
+        })
+        .collect()
+}
+
+// ---------------------------------------------------------------------------
+// Cells keep their column
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_a_row_that_skips_a_column_keeps_every_value_under_its_own_header() {
+    // XLSX stores only non-empty cells, so a sparse row is perfectly legal.
+    // Emitting cells in encounter order put "9" under the "Name" header.
+    let ir = Xlsx::new(vec![Sheet::new(
+        "S",
+        r#"<row r="1">
+             <c r="A1" t="inlineStr"><is><t>Name</t></is></c>
+             <c r="B1" t="inlineStr"><is><t>Qty</t></is></c>
+             <c r="C1" t="inlineStr"><is><t>Price</t></is></c>
+           </row>
+           <row r="2"><c r="C2"><v>9</v></c></row>
+           <row r="3"><c r="A3" t="inlineStr"><is><t>Pear</t></is></c><c r="C3"><v>4</v></c></row>"#,
+    )])
+    .ir();
+    let t = only_table(&ir, 0);
+    assert_eq!(t.rows[1].cells.len(), 3, "row 2 must be padded to full width");
+    assert_eq!(cell_text(&t.rows[1].cells[0]), "");
+    assert_eq!(cell_text(&t.rows[1].cells[1]), "");
+    assert_eq!(cell_text(&t.rows[1].cells[2]), "9", "9 belongs under Price");
+    assert_eq!(cell_text(&t.rows[2].cells[0]), "Pear");
+    assert_eq!(cell_text(&t.rows[2].cells[1]), "");
+    assert_eq!(cell_text(&t.rows[2].cells[2]), "4");
+}
+
+/// A merge over sheet rows a sheet does not store (`A1:E5` in a sheet
+/// whose next stored row is 6, the shape this crate's own writer saves)
+/// spans the stored rows it covers, not five IR rows: `row_span = 5` hid
+/// the four rows that followed from every IR renderer.
+#[test]
+fn test_a_merge_over_unstored_rows_does_not_hide_the_rows_that_follow() {
+    let cell = |r: &str, t: &str| format!(r#"<c r="{r}" t="inlineStr"><is><t>{t}</t></is></c>"#);
+    let body = format!(
+        "<row r=\"1\">{}{}</row><row r=\"6\">{}{}</row><row r=\"7\">{}{}</row>",
+        cell("A1", "Title"),
+        cell("B1", "Side"),
+        cell("A6", "first data"),
+        cell("B6", "x"),
+        cell("A7", "second data"),
+        cell("B7", "y"),
+    );
+    let mut sheet = Sheet::new("S", &body);
+    sheet.extra = r#"<mergeCells count="1"><mergeCell ref="A1:A5"/></mergeCells>"#;
+    let ir = Xlsx::new(vec![sheet]).ir();
+    let t = only_table(&ir, 0);
+    assert_eq!(t.rows[0].cells[0].row_span, 1, "{:?}", t.rows[0]);
+    for (name, text) in [("plain", ir.plain_text()), ("html", ir.to_html())] {
+        assert!(text.contains("first data") && text.contains("second data"), "{name}: {text}");
+    }
+}
+
+/// A formula whose cached result is the empty string (`t="str"` with an
+/// empty `<v>`, the shape a lookup-heavy workbook saves) shows nothing,
+/// as in Excel and `plain_text()`; the IR path rendered `=formula` for
+/// it, so `to_html()` of one corpus workbook had 10,000 words its own
+/// `plain_text()` did not. A formula with no cached value at all keeps
+/// showing `=formula` on every surface.
+#[test]
+fn test_a_formula_with_an_empty_cached_string_shows_nothing_on_every_surface() {
+    let body = r#"<row r="1">
+        <c r="A1" t="inlineStr"><is><t>Name</t></is></c>
+        <c r="B1" t="inlineStr"><is><t>Value</t></is></c>
+      </row>
+      <row r="2">
+        <c r="A2" t="str"><f>IF(ISNA(VLOOKUP(1,Q!A:B,2,FALSE))," ",1)</f><v></v></c>
+        <c r="B2"><f>NOW()</f></c>
+      </row>"#;
+    let doc = Xlsx::new(vec![Sheet::new("S", body)]).doc();
+    let ir = doc.to_ir();
+    for (name, text) in [
+        ("plain_text", doc.plain_text()),
+        ("ir plain", ir.plain_text()),
+        ("html", ir.to_html()),
+    ] {
+        assert!(!text.contains("VLOOKUP"), "{name} shows the empty-result formula: {text}");
+        assert!(text.contains("=NOW()"), "{name} lost the value-less formula: {text}");
+    }
+    let t = only_table(&ir, 0);
+    assert_eq!(
+        t.rows[1].cells[0].formula.as_deref(),
+        Some(r#"IF(ISNA(VLOOKUP(1,Q!A:B,2,FALSE))," ",1)"#)
+    );
+}
+
+/// A prose-shaped sheet (most rows one cell) may still have rows with
+/// several cells; prose mode kept only the first cell of such a row, so
+/// the rest vanished from every IR surface while `plain_text()` had it.
+#[test]
+fn test_prose_mode_keeps_every_cell_of_a_multi_cell_row() {
+    let cell = |r: &str, t: &str| format!(r#"<c r="{r}" t="inlineStr"><is><t>{t}</t></is></c>"#);
+    let body = format!(
+        "<row r=\"1\">{}</row><row r=\"2\">{}</row><row r=\"3\">{}</row><row r=\"4\">{}{}</row><row r=\"5\">{}</row>",
+        cell("A1", "Line one of the running report text"),
+        cell("A2", "Line two"),
+        cell("A3", "Line three"),
+        cell("A4", "Left"),
+        cell("F4", "Right"),
+        cell("A5", "Line five"),
+    );
+    let ir = Xlsx::new(vec![Sheet::new("S", &body)]).ir();
+    assert!(
+        ir.sections[0]
+            .elements
+            .iter()
+            .all(|e| matches!(e, Element::Paragraph(_))),
+        "a prose sheet reads as paragraphs"
+    );
+    let text = ir.plain_text();
+    for w in ["Line one", "Left", "Right", "Line five"] {
+        assert!(text.contains(w), "{w} missing: {text:?}");
+    }
+    assert!(
+        text.contains("Left\tRight"),
+        "the two cells of one row stay on one line, tab-separated: {text:?}"
+    );
+}
+
+/// A sheet whose part is not well-formed (a damaged archive) is skipped
+/// and named, and the intact sheets are returned; the whole workbook
+/// used to fail. The loss is on record: a section holding the notice (titled
+/// by a fixed label, the name being in its line),
+/// and `Metadata::text_truncated`.
+#[test]
+fn test_an_unreadable_sheet_is_reported_and_the_others_are_kept() {
+    let ir = Xlsx::new(vec![
+        Sheet::new("Good", r#"<row r="1"><c r="A1" t="inlineStr"><is><t>kept</t></is></c></row>"#),
+        Sheet::new("Bad", r#"<row r="1"><c r="A1" t="x><v>1</v></c></row>"#),
+    ])
+    .ir();
+    let text = ir.plain_text();
+    assert!(text.contains("kept"), "{text}");
+    assert!(text.contains("[unreadable sheet \"Bad\""), "{text}");
+    assert!(ir.metadata.text_truncated);
+    assert_eq!(
+        ir.sections
+            .iter()
+            .filter(|s| s.title.as_deref() == Some("Unreadable sheet"))
+            .count(),
+        1
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Cell fonts in table mode
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_cell_font_formatting_reaches_the_ir_in_table_mode() {
+    let ir = Xlsx::new(vec![Sheet::new(
+        "S",
+        r#"<row r="1">
+             <c r="A1" s="1" t="inlineStr"><is><t>Head</t></is></c>
+             <c r="B1" t="inlineStr"><is><t>Plain</t></is></c>
+           </row>
+           <row r="2">
+             <c r="A2" t="inlineStr"><is><t>a</t></is></c>
+             <c r="B2" t="inlineStr"><is><t>b</t></is></c>
+           </row>"#,
+    )])
+    .styles(
+        r#"<fonts count="2"><font/><font><b/><i/><sz val="14"/></font></fonts>
+           <cellXfs count="2"><xf fontId="0"/><xf fontId="1" applyFont="1"/></cellXfs>"#,
+    )
+    .ir();
+    let t = only_table(&ir, 0);
+    let span = match &t.rows[0].cells[0].content[0] {
+        Element::Paragraph(p) => match &p.content[0] {
+            InlineContent::Text(s) => s,
+            other => panic!("not text: {other:?}"),
+        },
+        other => panic!("not a paragraph: {other:?}"),
+    };
+    assert!(span.bold, "bold from the cell font");
+    assert!(span.italic);
+    assert_eq!(span.font_size_half_pt, Some(28), "14pt = 28 half-points");
+}
+
+// ---------------------------------------------------------------------------
+// Cell hyperlinks
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_cell_hyperlinks_reach_the_ir() {
+    let ir = Xlsx::new(vec![Sheet {
+        name: "S",
+        state: None,
+        body: r#"<row r="1">
+                   <c r="A1" t="inlineStr"><is><t>Head</t></is></c>
+                   <c r="B1" t="inlineStr"><is><t>H2</t></is></c>
+                 </row>
+                 <row r="2">
+                   <c r="A2" t="inlineStr"><is><t>Docs</t></is></c>
+                   <c r="B2" t="inlineStr"><is><t>Local</t></is></c>
+                 </row>"#,
+        extra: r#"<hyperlinks>
+                    <hyperlink ref="A2" r:id="rIdLink"/>
+                    <hyperlink ref="B2" location="Sheet2!A1"/>
+                  </hyperlinks>"#,
+    }])
+    .ir();
+    // The r:id has no matching relationship in this fixture, so only the
+    // internal link resolves — which is the case that used to be dropped
+    // outright even when it did resolve.
+    let t = only_table(&ir, 0);
+    let span = match &t.rows[1].cells[1].content[0] {
+        Element::Paragraph(p) => match &p.content[0] {
+            InlineContent::Text(s) => s,
+            other => panic!("not text: {other:?}"),
+        },
+        other => panic!("not a paragraph: {other:?}"),
+    };
+    assert_eq!(span.hyperlink.as_deref(), Some("#Sheet2!A1"));
+}
+
+/// A linked span carrying hover text.
+fn tooltip_span(text: &str) -> InlineContent {
+    InlineContent::Text(TextSpan {
+        text: text.to_string(),
+        hyperlink: Some("https://example.com/".to_string()),
+        hyperlink_tooltip: Some("Hover \"text\" & more".to_string()),
+        ..Default::default()
+    })
+}
+
+fn find_tooltip(elements: &[Element]) -> Option<String> {
+    elements.iter().find_map(|e| match e {
+        Element::Paragraph(p) => p.content.iter().find_map(|c| match c {
+            InlineContent::Text(s) => s.hyperlink_tooltip.clone(),
+            _ => None,
+        }),
+        Element::Table(t) => t
+            .rows
+            .iter()
+            .flat_map(|r| &r.cells)
+            .find_map(|c| find_tooltip(&c.content)),
+        Element::TextBox(tb) => find_tooltip(&tb.content),
+        _ => None,
+    })
+}
+
+/// XLSX `hyperlink/@tooltip` (ECMA-376 §18.3.1) and PPTX
+/// `a:hlinkClick/@tooltip` (§21.1.2.3) were parsed and never reached
+/// the IR, and neither writer emitted them.
+#[test]
+fn test_hyperlink_tooltips_round_trip_through_xlsx_and_pptx() {
+    let table = Element::Table(Table {
+        rows: vec![TableRow {
+            cells: vec![TableCell {
+                content: vec![Element::Paragraph(Paragraph {
+                    content: vec![tooltip_span("Docs")],
+                    ..Default::default()
+                })],
+                ..Default::default()
+            }],
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+    let para = Element::Paragraph(Paragraph {
+        content: vec![tooltip_span("Docs")],
+        ..Default::default()
+    });
+    for (format, element) in [(DocumentFormat::Xlsx, table), (DocumentFormat::Pptx, para)] {
+        let ir = DocumentIR {
+            metadata: Metadata {
+                format,
+                ..Default::default()
+            },
+            sections: vec![Section {
+                elements: vec![element],
+                ..Default::default()
+            }],
+        };
+        let mut out = Cursor::new(Vec::new());
+        office_oxide::create::create_from_ir_to_writer(&ir, format, &mut out).expect("write");
+        let again = Document::from_reader(Cursor::new(out.into_inner()), format)
+            .expect("reread")
+            .to_ir();
+        let tip = again
+            .sections
+            .iter()
+            .find_map(|s| find_tooltip(&s.elements));
+        assert_eq!(tip.as_deref(), Some("Hover \"text\" & more"), "{format:?}");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Hidden sheets are flagged
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_hidden_and_very_hidden_sheets_are_flagged() {
+    let body = r#"<row r="1"><c r="A1" t="inlineStr"><is><t>x</t></is></c></row>"#;
+    let ir = Xlsx::new(vec![
+        Sheet::new("Visible", body),
+        Sheet {
+            name: "Hidden",
+            state: Some("hidden"),
+            body,
+            extra: "",
+        },
+        Sheet {
+            name: "Secret",
+            state: Some("veryHidden"),
+            body,
+            extra: "",
+        },
+    ])
+    .ir();
+    assert_eq!(ir.sections.len(), 3);
+    assert!(!ir.sections[0].hidden);
+    assert!(ir.sections[1].hidden, "state=hidden");
+    assert!(ir.sections[2].hidden, "state=veryHidden");
+    // The content is still extracted — a workbook index wants it.
+    assert!(ir.plain_text().contains('x'));
+}
+
+// ---------------------------------------------------------------------------
+// Workbook metadata is not the first sheet's name
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_workbook_metadata_comes_from_core_properties() {
+    let ir = Xlsx::new(vec![Sheet::new(
+        "Sheet1",
+        r#"<row r="1"><c r="A1" t="inlineStr"><is><t>x</t></is></c></row>"#,
+    )])
+    .core(r#"<dc:title>Budget 2026</dc:title><dc:creator>Finance</dc:creator>"#)
+    .ir();
+    assert_eq!(ir.metadata.title.as_deref(), Some("Budget 2026"));
+    assert_eq!(ir.metadata.author.as_deref(), Some("Finance"));
+}
+
+#[test]
+fn test_workbook_title_falls_back_to_the_first_sheet_name() {
+    let ir = Xlsx::new(vec![Sheet::new(
+        "Sheet1",
+        r#"<row r="1"><c r="A1" t="inlineStr"><is><t>x</t></is></c></row>"#,
+    )])
+    .ir();
+    assert_eq!(ir.metadata.title.as_deref(), Some("Sheet1"));
+}
+
+// ---------------------------------------------------------------------------
+// Number formats
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_quoted_literals_in_a_number_format_are_not_date_tokens() {
+    // The `M` in `" M"` and the `y`/`d` in `"yes"`/`" days"` are literal
+    // text. Reading them as month/year/day tokens rendered 12,500,000 as
+    // the date 36123-11-01.
+    let ir = Xlsx::new(vec![Sheet::new(
+        "S",
+        r#"<row r="1">
+             <c r="A1" s="1"><v>1</v></c>
+             <c r="B1" s="2"><v>2.5</v></c>
+             <c r="C1" s="3"><v>12500000</v></c>
+           </row>
+           <row r="2">
+             <c r="A2" s="1"><v>1</v></c>
+             <c r="B2" s="2"><v>2.5</v></c>
+             <c r="C2" s="3"><v>12500000</v></c>
+           </row>"#,
+    )])
+    .styles(
+        r##"<numFmts count="3">
+             <numFmt numFmtId="164" formatCode="&quot;yes&quot;;&quot;no&quot;"/>
+             <numFmt numFmtId="165" formatCode="0.00&quot; days&quot;"/>
+             <numFmt numFmtId="166" formatCode="#,##0,,&quot; M&quot;"/>
+           </numFmts>
+           <cellXfs count="4"><xf numFmtId="0"/>
+             <xf numFmtId="164" applyNumberFormat="1"/>
+             <xf numFmtId="165" applyNumberFormat="1"/>
+             <xf numFmtId="166" applyNumberFormat="1"/></cellXfs>"##,
+    )
+    .ir();
+    let t = only_table(&ir, 0);
+    assert_eq!(cell_text(&t.rows[0].cells[0]), "yes");
+    assert_eq!(cell_text(&t.rows[0].cells[1]), "2.50 days");
+    // Two trailing commas scale by 1e6; `#,##0` then rounds 12.5 to 13,
+    // which is what Excel displays.
+    assert_eq!(cell_text(&t.rows[0].cells[2]), "13 M");
+}
+
+#[test]
+fn test_a_real_date_format_is_still_a_date() {
+    let ir = Xlsx::new(vec![Sheet::new(
+        "S",
+        r#"<row r="1"><c r="A1" s="1"><v>45000</v></c><c r="B1"><v>1</v></c></row>
+           <row r="2"><c r="A2" s="1"><v>45000</v></c><c r="B2"><v>1</v></c></row>"#,
+    )])
+    .styles(
+        r#"<numFmts count="1">
+             <numFmt numFmtId="164" formatCode="yyyy&quot;年&quot;m&quot;月&quot;"/>
+           </numFmts>
+           <cellXfs count="2"><xf numFmtId="0"/>
+             <xf numFmtId="164" applyNumberFormat="1"/></cellXfs>"#,
+    )
+    .ir();
+    assert!(
+        cell_text(&only_table(&ir, 0).rows[0].cells[0]).starts_with("2023-"),
+        "expected a 2023 date, got {:?}",
+        cell_text(&only_table(&ir, 0).rows[0].cells[0])
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Cell comments
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_cell_comments_reach_the_ir() {
+    let ir = Xlsx::new(vec![Sheet::new(
+        "S",
+        r#"<row r="1"><c r="A1" t="inlineStr"><is><t>x</t></is></c></row>"#,
+    )])
+    .comments(
+        r#"<authors><author>Reviewer</author></authors>
+           <commentList>
+             <comment ref="B2" authorId="0"><text><r><t>Check this figure</t></r></text></comment>
+           </commentList>"#,
+    )
+    .ir();
+    let note = ir.sections[0]
+        .elements
+        .iter()
+        .find_map(|e| match e {
+            Element::Endnote(n) => Some(n),
+            _ => None,
+        })
+        .expect("comment reached the IR");
+    assert_eq!(note.marker.as_deref(), Some("B2 (Reviewer)"));
+    assert!(ir.plain_text().contains("Check this figure"));
+}
+
+// ---------------------------------------------------------------------------
+// Conditional formatting
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_conditional_formatting_reaches_the_ir() {
+    let ir = Xlsx::new(vec![Sheet {
+        name: "S",
+        state: None,
+        body: r#"<row r="1"><c r="A1"><v>1</v></c></row>"#,
+        extra: r#"<conditionalFormatting sqref="A1:A10">
+                    <cfRule type="cellIs" operator="greaterThan" priority="1">
+                      <formula>100</formula>
+                    </cfRule>
+                  </conditionalFormatting>"#,
+    }])
+    .ir();
+    let cf = &ir.sections[0].conditional_formats;
+    assert_eq!(cf.len(), 1, "the rule must reach Section::conditional_formats");
+    assert_eq!(cf[0].range, "A1:A10");
+    assert_eq!(cf[0].rule_type, "cellIs");
+    assert_eq!(cf[0].operator.as_deref(), Some("greaterThan"));
+    assert_eq!(cf[0].formulas, vec!["100".to_string()]);
+}
+
+#[test]
+fn test_a_sheet_with_no_conditional_formatting_has_an_empty_list() {
+    let ir = Xlsx::new(vec![Sheet::new(
+        "S",
+        r#"<row r="1"><c r="A1"><v>1</v></c></row>"#,
+    )])
+    .ir();
+    assert!(ir.sections[0].conditional_formats.is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// Writer validation
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_non_finite_numbers_are_written_as_an_error_cell_not_as_inf() {
+    use office_oxide::xlsx::write::{CellData, XlsxWriter};
+    let mut wb = XlsxWriter::new();
+    {
+        let mut s = wb.add_sheet("S");
+        s.set_cell(0, 0, CellData::Number(f64::NAN));
+        s.set_cell(0, 1, CellData::Number(f64::INFINITY));
+    }
+    // The sheet part is deflated, so re-read through the parser: what
+    // matters is that the workbook still opens and no `inf`/`NaN` literal
+    // reached a `<v>` element.
+    let doc =
+        Document::from_reader(Cursor::new(to_bytes(&wb)), DocumentFormat::Xlsx).expect("parse");
+    let text = doc.plain_text();
+    assert!(!text.contains("inf"), "wrote a non-finite literal: {text:?}");
+    assert!(!text.contains("NaN"), "wrote a non-finite literal: {text:?}");
+    assert!(text.contains("#NUM!"), "expected an error cell: {text:?}");
+}
+
+#[test]
+fn test_illegal_sheet_names_are_normalised() {
+    use office_oxide::xlsx::write::XlsxWriter;
+    let mut wb = XlsxWriter::new();
+    let long = "N".repeat(40);
+    wb.add_sheet(&long);
+    wb.add_sheet("a/b:c*d?e[f]");
+    wb.add_sheet("");
+    wb.add_sheet("Dup");
+    wb.add_sheet("Dup");
+    let doc =
+        Document::from_reader(Cursor::new(to_bytes(&wb)), DocumentFormat::Xlsx).expect("parse");
+    let names: Vec<String> = doc
+        .to_ir()
+        .sections
+        .iter()
+        .filter_map(|s| s.title.clone())
+        .collect();
+    assert_eq!(names.len(), 5);
+    assert!(names[0].chars().count() <= 31, "name too long: {:?}", names[0]);
+    assert!(
+        !names[1].contains(['/', ':', '*', '?', '[', ']']),
+        "forbidden character survived: {:?}",
+        names[1]
+    );
+    assert!(!names[2].is_empty(), "empty sheet name survived");
+    assert_ne!(names[3], names[4], "duplicate sheet names survived");
+}
+
+#[test]
+fn test_writing_to_a_nonexistent_sheet_reports_failure() {
+    use office_oxide::xlsx::write::{CellData, XlsxWriter};
+    let mut wb = XlsxWriter::new();
+    let idx = wb.add_sheet_get_index("Only");
+    assert!(wb.sheet_set_cell(idx, 0, 0, CellData::String("KEPT".into())));
+    assert!(
+        !wb.sheet_set_cell(99, 0, 0, CellData::String("LOST".into())),
+        "a write to a sheet that does not exist must not report success"
+    );
+    let doc =
+        Document::from_reader(Cursor::new(to_bytes(&wb)), DocumentFormat::Xlsx).expect("parse");
+    assert!(doc.plain_text().contains("KEPT"));
+    assert!(!doc.plain_text().contains("LOST"));
+}
+
+#[test]
+fn test_cells_outside_excels_grid_are_refused() {
+    use office_oxide::xlsx::write::{CellData, XlsxWriter};
+    let mut wb = XlsxWriter::new();
+    let idx = wb.add_sheet_get_index("S");
+    // The last real cell is XFD1048576 = (1048575, 16383).
+    assert!(wb.sheet_set_cell(idx, 1_048_575, 16_383, CellData::Number(1.0)));
+    assert!(!wb.sheet_set_cell(idx, 1_048_576, 0, CellData::Number(2.0)));
+    assert!(!wb.sheet_set_cell(idx, 0, 16_384, CellData::Number(3.0)));
+}
+
+// ---------------------------------------------------------------------------
+// Landscape page size
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_landscape_orientation_rotates_the_paper_size() {
+    let ir = Xlsx::new(vec![Sheet {
+        name: "S",
+        state: None,
+        body: r#"<row r="1"><c r="A1" t="inlineStr"><is><t>x</t></is></c></row>"#,
+        extra: r#"<pageMargins left="0.7" right="0.7" top="0.75" bottom="0.75"
+                                header="0.3" footer="0.3"/>
+                  <pageSetup paperSize="9" orientation="landscape"/>"#,
+    }])
+    .ir();
+    let ps = ir.sections[0].page_setup.as_ref().expect("page setup");
+    assert!(ps.landscape);
+    assert!(
+        ps.width_twips > ps.height_twips,
+        "landscape must be wider than it is tall, got {}x{}",
+        ps.width_twips,
+        ps.height_twips
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Spanned cells do not shift their neighbours
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_a_row_spanning_cell_leaves_the_covered_position_empty() {
+    // Markdown has no rowspan syntax, so the covered position must render
+    // empty. Indexing cells positionally shifted every cell to its right
+    // one column left in the row below the span.
+    let cell = |text: &str, row_span: u32| TableCell {
+        content: vec![Element::Paragraph(Paragraph {
+            content: vec![InlineContent::Text(TextSpan::plain(text))],
+            ..Default::default()
+        })],
+        col_span: 1,
+        row_span,
+        ..Default::default()
+    };
+    let ir = DocumentIR {
+        metadata: Metadata {
+            format: DocumentFormat::Docx,
+            ..Default::default()
+        },
+        sections: vec![Section {
+            elements: vec![Element::Table(Table {
+                rows: vec![
+                    TableRow {
+                        cells: vec![cell("A1", 2), cell("B1", 1), cell("C1", 1)],
+                        ..Default::default()
+                    },
+                    // A1 spans into this row, so only B2 and C2 exist here.
+                    TableRow {
+                        cells: vec![cell("B2", 1), cell("C2", 1)],
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            })],
+            ..Default::default()
+        }],
+    };
+    let md = ir.to_markdown();
+    let second_row = md.lines().nth(2).expect("a second body row");
+    assert_eq!(second_row, "|  | B2 | C2 |", "B2 must stay in column 2; got {md}");
+}
+
+// ---------------------------------------------------------------------------
+// PPTX fixture builder
+// ---------------------------------------------------------------------------
+
+const CT_PRES: &str =
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml";
+const CT_SLIDE: &str = "application/vnd.openxmlformats-officedocument.presentationml.slide+xml";
+const CT_NOTES: &str =
+    "application/vnd.openxmlformats-officedocument.presentationml.notesSlide+xml";
+const CT_PPTX_COMMENTS: &str =
+    "application/vnd.openxmlformats-officedocument.presentationml.comments+xml";
+
+/// One slide: the `<p:sld>` attributes and the `<p:spTree>` body.
+struct Slide<'a> {
+    attrs: &'a str,
+    tree: &'a str,
+    notes: Option<&'a str>,
+    comments: Option<&'a str>,
+}
+
+impl<'a> Slide<'a> {
+    fn new(tree: &'a str) -> Self {
+        Self {
+            attrs: "",
+            tree,
+            notes: None,
+            comments: None,
+        }
+    }
+}
+
+fn pptx_ir(slides: Vec<Slide<'_>>) -> DocumentIR {
+    pptx_doc(slides).to_ir()
+}
+
+fn pptx_doc(slides: Vec<Slide<'_>>) -> Document {
+    let mut w = OpcWriter::new(Cursor::new(Vec::new())).unwrap();
+    let pres = PartName::new("/ppt/presentation.xml").unwrap();
+    w.add_package_rel(rel_types::OFFICE_DOCUMENT, "ppt/presentation.xml");
+
+    let mut ids = String::new();
+    for (i, s) in slides.iter().enumerate() {
+        let file = format!("slides/slide{}.xml", i + 1);
+        let rid = w.add_part_rel(&pres, rel_types::SLIDE, &file);
+        ids.push_str(&format!(r#"<p:sldId id="{}" r:id="{rid}"/>"#, 256 + i));
+        let part = PartName::new(&format!("/ppt/{file}")).unwrap();
+        let xml = format!(
+            r#"<?xml version="1.0"?><p:sld {}
+                 xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"
+                 xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
+                 xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+               <p:cSld><p:spTree>{}</p:spTree></p:cSld></p:sld>"#,
+            s.attrs, s.tree
+        );
+        w.add_part(&part, CT_SLIDE, xml.as_bytes()).unwrap();
+
+        if let Some(notes) = s.notes {
+            let np = PartName::new(&format!("/ppt/notesSlides/notesSlide{}.xml", i + 1)).unwrap();
+            let xml = format!(
+                r#"<?xml version="1.0"?><p:notes
+                     xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"
+                     xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+                   <p:cSld><p:spTree><p:sp><p:nvSpPr><p:nvPr>
+                     <p:ph type="body"/></p:nvPr></p:nvSpPr>
+                     <p:txBody><a:p><a:r><a:t>{notes}</a:t></a:r></a:p></p:txBody>
+                   </p:sp></p:spTree></p:cSld></p:notes>"#
+            );
+            w.add_part(&np, CT_NOTES, xml.as_bytes()).unwrap();
+            w.add_part_rel(
+                &part,
+                rel_types::NOTES_SLIDE,
+                &format!("../notesSlides/notesSlide{}.xml", i + 1),
+            );
+        }
+
+        if let Some(inner) = s.comments {
+            let cp = PartName::new(&format!("/ppt/comments/comment{}.xml", i + 1)).unwrap();
+            let xml = format!(
+                r#"<?xml version="1.0"?><p:cmLst
+                     xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
+                   {inner}</p:cmLst>"#
+            );
+            w.add_part(&cp, CT_PPTX_COMMENTS, xml.as_bytes()).unwrap();
+            w.add_part_rel(
+                &part,
+                "http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments",
+                &format!("../comments/comment{}.xml", i + 1),
+            );
+        }
+    }
+
+    let pres_xml = format!(
+        r#"<?xml version="1.0"?><p:presentation
+             xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"
+             xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+           <p:sldIdLst>{ids}</p:sldIdLst></p:presentation>"#
+    );
+    w.add_part(&pres, CT_PRES, pres_xml.as_bytes()).unwrap();
+
+    let bytes = w.finish().unwrap().into_inner();
+    Document::from_reader(Cursor::new(bytes), DocumentFormat::Pptx).expect("parse pptx")
+}
+
+/// A body placeholder carrying the given `<a:p>` paragraphs.
+fn body_sp(paragraphs: &str) -> String {
+    format!(
+        r#"<p:sp>
+             <p:nvSpPr><p:nvPr><p:ph type="body" idx="1"/></p:nvPr></p:nvSpPr>
+             <p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="100" cy="100"/></a:xfrm></p:spPr>
+             <p:txBody>{paragraphs}</p:txBody>
+           </p:sp>"#
+    )
+}
+
+fn find_list(ir: &DocumentIR) -> &List {
+    fn walk<'a>(elements: &'a [Element], out: &mut Option<&'a List>) {
+        for e in elements {
+            match e {
+                Element::List(l) if out.is_none() => *out = Some(l),
+                Element::TextBox(tb) => walk(&tb.content, out),
+                _ => {},
+            }
+        }
+    }
+    let mut out = None;
+    walk(&ir.sections[0].elements, &mut out);
+    out.expect("a list")
+}
+
+fn first_pptx_span(ir: &DocumentIR) -> &TextSpan {
+    fn walk<'a>(elements: &'a [Element], out: &mut Option<&'a TextSpan>) {
+        for e in elements {
+            match e {
+                Element::Paragraph(p) if out.is_none() => {
+                    if let Some(InlineContent::Text(s)) = p.content.first() {
+                        *out = Some(s);
+                    }
+                },
+                Element::TextBox(tb) => walk(&tb.content, out),
+                _ => {},
+            }
+        }
+    }
+    let mut out = None;
+    walk(&ir.sections[0].elements, &mut out);
+    out.expect("a text span")
+}
+
+// ---------------------------------------------------------------------------
+// PPTX run properties
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_pptx_run_underline_font_baseline_caps_and_spacing_reach_the_ir() {
+    let tree = body_sp(
+        r#"<a:p><a:pPr><a:buNone/></a:pPr>
+             <a:r>
+               <a:rPr u="dbl" baseline="30000" cap="all" spc="-50">
+                 <a:latin typeface="Consolas"/>
+               </a:rPr>
+               <a:t>styled</a:t>
+             </a:r>
+           </a:p>"#,
+    );
+    let ir = pptx_ir(vec![Slide::new(&tree)]);
+    let s = first_pptx_span(&ir);
+    assert_eq!(s.text, "styled");
+    assert_eq!(s.underline, Some(UnderlineStyle::Double));
+    assert_eq!(s.font_name.as_deref(), Some("Consolas"));
+    assert_eq!(s.vertical_align, Some(VerticalAlign::Superscript));
+    assert!(s.all_caps);
+    assert_eq!(s.char_spacing_half_pt, Some(-10), "-50 hundredths-pt = -10");
+}
+
+// ---------------------------------------------------------------------------
+// Bullets
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_level_zero_bullets_still_form_a_list() {
+    // Every bullet at lvl=0 is the ordinary single-level list. Keying off
+    // `level > 0` alone rendered it as plain paragraphs with no markers.
+    let tree = body_sp(
+        r#"<a:p><a:pPr><a:buChar char="&#8226;"/></a:pPr>
+             <a:r><a:t>one</a:t></a:r></a:p>
+           <a:p><a:pPr><a:buChar char="&#8226;"/></a:pPr>
+             <a:r><a:t>two</a:t></a:r></a:p>"#,
+    );
+    let ir = pptx_ir(vec![Slide::new(&tree)]);
+    let list = find_list(&ir);
+    assert!(!list.ordered);
+    assert_eq!(list.style, Some(ListStyle::Bullet));
+    assert_eq!(list.items.len(), 2);
+}
+
+#[test]
+fn test_auto_numbered_bullets_produce_an_ordered_list() {
+    let tree = body_sp(
+        r#"<a:p><a:pPr><a:buAutoNum type="alphaLcParenR" startAt="3"/></a:pPr>
+             <a:r><a:t>one</a:t></a:r></a:p>
+           <a:p><a:pPr><a:buAutoNum type="alphaLcParenR"/></a:pPr>
+             <a:r><a:t>two</a:t></a:r></a:p>"#,
+    );
+    let ir = pptx_ir(vec![Slide::new(&tree)]);
+    let list = find_list(&ir);
+    assert!(list.ordered, "buAutoNum means an ordered list");
+    assert_eq!(list.style, Some(ListStyle::LowerAlpha));
+    assert_eq!(list.start_number, Some(3));
+}
+
+#[test]
+fn test_bu_none_paragraphs_are_not_a_list() {
+    let tree = body_sp(r#"<a:p><a:pPr><a:buNone/></a:pPr><a:r><a:t>prose</a:t></a:r></a:p>"#);
+    let ir = pptx_ir(vec![Slide::new(&tree)]);
+    fn has_list(elements: &[Element]) -> bool {
+        elements.iter().any(|e| match e {
+            Element::List(_) => true,
+            Element::TextBox(tb) => has_list(&tb.content),
+            _ => false,
+        })
+    }
+    assert!(!has_list(&ir.sections[0].elements));
+}
+
+// ---------------------------------------------------------------------------
+// Table header rows
+// ---------------------------------------------------------------------------
+
+fn table_frame(tbl_pr: &str) -> String {
+    format!(
+        r#"<p:graphicFrame>
+             <p:xfrm><a:off x="0" y="0"/><a:ext cx="100" cy="100"/></p:xfrm>
+             <a:graphic><a:graphicData
+                 uri="http://schemas.openxmlformats.org/drawingml/2006/table">
+               <a:tbl>
+                 {tbl_pr}
+                 <a:tr><a:tc><a:txBody><a:p><a:r><a:t>A</a:t></a:r></a:p></a:txBody></a:tc></a:tr>
+                 <a:tr><a:tc><a:txBody><a:p><a:r><a:t>B</a:t></a:r></a:p></a:txBody></a:tc></a:tr>
+               </a:tbl>
+             </a:graphicData></a:graphic>
+           </p:graphicFrame>"#
+    )
+}
+
+fn find_table(ir: &DocumentIR) -> &Table {
+    fn walk<'a>(elements: &'a [Element], out: &mut Option<&'a Table>) {
+        for e in elements {
+            match e {
+                Element::Table(t) if out.is_none() => *out = Some(t),
+                Element::TextBox(tb) => walk(&tb.content, out),
+                _ => {},
+            }
+        }
+    }
+    let mut out = None;
+    walk(&ir.sections[0].elements, &mut out);
+    out.expect("a table")
+}
+
+#[test]
+fn test_a_table_declaring_no_header_row_does_not_get_one() {
+    let tree = table_frame("");
+    let ir = pptx_ir(vec![Slide::new(&tree)]);
+    let t = find_table(&ir);
+    assert!(!t.rows[0].is_header, "row 0 is only a header when a:tblPr says firstRow=\"1\"");
+}
+
+#[test]
+fn test_a_table_declaring_first_row_gets_a_header() {
+    let tree = table_frame(r#"<a:tblPr firstRow="1"/>"#);
+    let ir = pptx_ir(vec![Slide::new(&tree)]);
+    let t = find_table(&ir);
+    assert!(t.rows[0].is_header);
+    assert!(!t.rows[1].is_header);
+}
+
+// ---------------------------------------------------------------------------
+// Hidden slides
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_a_hidden_slide_is_flagged_but_still_extracted() {
+    let tree = body_sp(r#"<a:p><a:r><a:t>SECRET</a:t></a:r></a:p>"#);
+    let ir = pptx_ir(vec![
+        Slide::new(&tree),
+        Slide {
+            attrs: r#"show="0""#,
+            tree: &tree,
+            notes: None,
+            comments: None,
+        },
+    ]);
+    assert_eq!(ir.sections.len(), 2);
+    assert!(!ir.sections[0].hidden);
+    assert!(ir.sections[1].hidden, "show=\"0\" means hidden");
+    assert!(ir.plain_text().contains("SECRET"));
+}
+
+// ---------------------------------------------------------------------------
+// Speaker notes
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_speaker_notes_reach_the_ir() {
+    let tree = body_sp(r#"<a:p><a:r><a:t>BODY</a:t></a:r></a:p>"#);
+    let ir = pptx_ir(vec![Slide {
+        attrs: "",
+        tree: &tree,
+        notes: Some("REMEMBER THE DEMO"),
+        comments: None,
+    }]);
+    assert!(
+        ir.plain_text().contains("REMEMBER THE DEMO"),
+        "notes missing from {:?}",
+        ir.plain_text()
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Slide comments
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_slide_comments_reach_the_ir() {
+    let tree = body_sp(r#"<a:p><a:r><a:t>BODY</a:t></a:r></a:p>"#);
+    let ir = pptx_ir(vec![Slide {
+        attrs: "",
+        tree: &tree,
+        notes: None,
+        comments: Some(
+            r#"<p:cm authorId="1" idx="1"><p:pos x="100" y="100"/>
+                 <p:text>Fix the axis label</p:text></p:cm>"#,
+        ),
+    }]);
+    assert!(
+        ir.plain_text().contains("Fix the axis label"),
+        "comment missing from {:?}",
+        ir.plain_text()
+    );
+}
+
+/// The direct `plain_text()`/`to_markdown()` renderers dropped slide
+/// comments that `to_ir()` carried — a slide whose only content was its
+/// review comments came back empty on the CLI's default surfaces.
+#[test]
+fn test_slide_comments_reach_plain_text_and_markdown() {
+    let tree = body_sp(r#"<a:p><a:r><a:t>BODY</a:t></a:r></a:p>"#);
+    let doc = pptx_doc(vec![Slide {
+        attrs: "",
+        tree: &tree,
+        notes: None,
+        comments: Some(
+            r#"<p:cm authorId="1" idx="1"><p:pos x="100" y="100"/>
+                 <p:text>Fix the axis label</p:text></p:cm>"#,
+        ),
+    }]);
+    for (surface, out) in [
+        ("plain_text", doc.plain_text()),
+        ("to_markdown", doc.to_markdown()),
+    ] {
+        assert!(out.contains("Fix the axis label"), "{surface}: {out:?}");
+        assert!(out.contains("Comment"), "{surface} labels the comment: {out:?}");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Unmodelled graphic text
+// ---------------------------------------------------------------------------
+
+/// A graphicFrame whose uri is not one this reader models used to be
+/// skipped wholesale; any `<a:t>` text inside it is document text. (Real
+/// SmartArt keeps its text in a separate data part — see
+/// `test_smartart_text_is_read_from_the_diagram_data_part`.)
+#[test]
+fn test_inline_text_of_an_unmodelled_graphic_is_extracted() {
+    let tree = r#"<p:graphicFrame>
+        <p:xfrm><a:off x="0" y="0"/><a:ext cx="100" cy="100"/></p:xfrm>
+        <a:graphic><a:graphicData uri="urn:example:unmodelled-graphic">
+          <a:txBody><a:p><a:r><a:t>GRAPHIC NODE</a:t></a:r></a:p></a:txBody>
+        </a:graphicData></a:graphic>
+      </p:graphicFrame>"#;
+    let ir = pptx_ir(vec![Slide::new(tree)]);
+    assert!(
+        ir.plain_text().contains("GRAPHIC NODE"),
+        "graphic text missing from {:?}",
+        ir.plain_text()
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Deck metadata
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_a_deck_title_is_not_the_first_slides_title_when_core_properties_exist() {
+    // Without core properties the slide title is a reasonable fallback,
+    // which is what this asserts; the DOCX/XLSX tests cover the positive
+    // core-properties case and the code path is shared.
+    let tree = body_sp(r#"<a:p><a:r><a:t>BODY</a:t></a:r></a:p>"#);
+    let ir = pptx_ir(vec![Slide::new(&tree)]);
+    assert!(ir.metadata.author.is_none());
+}
+
+// ---------------------------------------------------------------------------
+// Implicit row and column indices (ECMA-376 18.3.1.4 / 18.3.1.73)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_cells_without_a_reference_take_the_next_column() {
+    // `r` is optional on both <row> and <c>; several writers omit it for the
+    // whole sheet. Defaulting the missing reference to column 0 put every
+    // cell of a row in the same slot, so laying the row out on the grid kept
+    // one value and dropped the rest.
+    let ir = Xlsx::new(vec![Sheet::new(
+        "S",
+        r#"<row>
+             <c t="inlineStr"><is><t>Checked</t></is></c>
+             <c t="inlineStr"><is><t>Ion</t></is></c>
+             <c t="inlineStr"><is><t>Charge</t></is></c>
+           </row>
+           <row>
+             <c t="inlineStr"><is><t>yes</t></is></c>
+             <c t="inlineStr"><is><t>Na+</t></is></c>
+             <c><v>1</v></c>
+           </row>"#,
+    )])
+    .ir();
+    let t = only_table(&ir, 0);
+    assert_eq!(t.rows.len(), 2);
+    let head: Vec<String> = t.rows[0].cells.iter().map(cell_text).collect();
+    assert_eq!(head, ["Checked", "Ion", "Charge"]);
+    let body: Vec<String> = t.rows[1].cells.iter().map(cell_text).collect();
+    assert_eq!(body, ["yes", "Na+", "1"]);
+}
+
+#[test]
+fn test_an_explicit_reference_resets_the_implied_column() {
+    // A sheet may mix the two forms: the cell after an explicit `r` continues
+    // from that column, not from wherever the implicit run had reached.
+    let ir = Xlsx::new(vec![Sheet::new(
+        "S",
+        r#"<row r="1">
+             <c t="inlineStr"><is><t>a</t></is></c>
+             <c r="D1" t="inlineStr"><is><t>d</t></is></c>
+             <c t="inlineStr"><is><t>e</t></is></c>
+           </row>"#,
+    )])
+    .ir();
+    let t = only_table(&ir, 0);
+    let row: Vec<String> = t.rows[0].cells.iter().map(cell_text).collect();
+    assert_eq!(row, ["a", "", "", "d", "e"]);
+}
+
+#[test]
+fn test_rows_without_a_reference_are_numbered_in_document_order() {
+    // Every row defaulting to index 1 collapsed the sheet's addressing; the
+    // grid still has to report one row per <row> element, in order.
+    let ir = Xlsx::new(vec![Sheet::new(
+        "S",
+        r#"<row><c t="inlineStr"><is><t>one</t></is></c><c><v>1</v></c></row>
+           <row><c t="inlineStr"><is><t>two</t></is></c><c><v>2</v></c></row>
+           <row><c t="inlineStr"><is><t>three</t></is></c><c><v>3</v></c></row>"#,
+    )])
+    .ir();
+    let text: Vec<String> = only_table(&ir, 0)
+        .rows
+        .iter()
+        .map(|r| format!("{}{}", cell_text(&r.cells[0]), cell_text(&r.cells[1])))
+        .collect();
+    assert_eq!(text, ["one1", "two2", "three3"]);
+}
+
+#[test]
+fn test_cells_out_of_column_order_are_all_kept() {
+    // A malformed sheet can list columns unordered. Bailing out of the row on
+    // the first backwards reference discarded every cell after it; the values
+    // belong in their own columns instead.
+    let ir = Xlsx::new(vec![Sheet::new(
+        "S",
+        r#"<row r="1">
+             <c r="C1" t="inlineStr"><is><t>c</t></is></c>
+             <c r="A1" t="inlineStr"><is><t>a</t></is></c>
+             <c r="B1" t="inlineStr"><is><t>b</t></is></c>
+           </row>"#,
+    )])
+    .ir();
+    let row: Vec<String> = only_table(&ir, 0).rows[0]
+        .cells
+        .iter()
+        .map(cell_text)
+        .collect();
+    assert_eq!(row, ["a", "b", "c"]);
+}
+
+#[test]
+fn test_a_duplicate_reference_keeps_the_first_value() {
+    // Two cells claiming one column is corruption either way; the first wins,
+    // and — the part that regressed — the rest of the row survives.
+    let ir = Xlsx::new(vec![Sheet::new(
+        "S",
+        r#"<row r="1">
+             <c r="A1" t="inlineStr"><is><t>first</t></is></c>
+             <c r="A1" t="inlineStr"><is><t>second</t></is></c>
+             <c r="B1" t="inlineStr"><is><t>b</t></is></c>
+           </row>"#,
+    )])
+    .ir();
+    let row: Vec<String> = only_table(&ir, 0).rows[0]
+        .cells
+        .iter()
+        .map(cell_text)
+        .collect();
+    assert_eq!(row, ["first", "b"]);
+}
+
+/// Build `sheet` into a document and convert it on another thread, failing
+/// if the conversion does not finish in `secs`.
+fn ir_within(sheet: Sheet<'static>, secs: u64) -> DocumentIR {
+    let doc = Xlsx::new(vec![sheet]).doc();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(doc.to_ir());
+    });
+    rx.recv_timeout(std::time::Duration::from_secs(secs))
+        .expect("to_ir must finish in time proportional to the cells present")
+}
+
+const TWO_BY_TWO: &str = r#"<row r="1"><c r="A1" t="inlineStr"><is><t>a</t></is></c><c r="B1" t="inlineStr"><is><t>b</t></is></c></row>
+    <row r="2"><c r="A2" t="inlineStr"><is><t>c</t></is></c><c r="B2" t="inlineStr"><is><t>d</t></is></c></row>"#;
+
+/// `<mergeCell ref="A1:XFD1048576"/>` names the whole legal grid. Expanding
+/// it position by position was ~17 billion set inserts from a 2 KB file.
+#[test]
+fn test_a_full_grid_merge_cell_converts_in_bounded_time() {
+    let mut sheet = Sheet::new("S", TWO_BY_TWO);
+    sheet.extra = r#"<mergeCells count="1"><mergeCell ref="A1:XFD1048576"/></mergeCells>"#;
+    let ir = ir_within(sheet, 20);
+    let t = only_table(&ir, 0);
+    assert_eq!(t.rows[0].cells.len(), 1, "only the anchor survives: {:?}", t.rows[0]);
+    assert_eq!(cell_text(&t.rows[0].cells[0]), "a");
+    assert_eq!(t.rows[0].cells[0].row_span, 2, "spans the stored rows it covers");
+    assert_eq!(t.rows[0].cells[0].col_span, 2, "clipped to the table's width");
+    assert!(t.rows[1].cells.is_empty(), "{:?}", t.rows[1]);
+}
+
+/// Many overlapping whole-grid merges: bounded work, and a visible notice
+/// for the ranges that were not applied.
+#[test]
+fn test_overlapping_merge_cells_past_the_work_budget_are_reported() {
+    let body: String = (1..=2_000)
+        .map(|r| format!(r#"<row r="{r}"><c r="A{r}"><v>1</v></c><c r="B{r}"><v>2</v></c></row>"#))
+        .collect();
+    let merges: String = (0..30_000)
+        .map(|_| r#"<mergeCell ref="A1:B1048576"/>"#)
+        .collect();
+    let extra = format!(r#"<mergeCells>{merges}</mergeCells>"#);
+    let mut sheet = Sheet::new("S", Box::leak(body.into_boxed_str()));
+    sheet.extra = Box::leak(extra.into_boxed_str());
+    let ir = ir_within(sheet, 120);
+    assert!(ir.plain_text().contains("merged cell ranges"), "{}", ir.plain_text());
+}
+
+// ---------------------------------------------------------------------------
+// Direct renderers keep sparse cells in their own row and column
+// ---------------------------------------------------------------------------
+
+const SPARSE: &str = r#"<row r="1">
+     <c r="A1" t="inlineStr"><is><t>Name</t></is></c>
+     <c r="B1" t="inlineStr"><is><t>Qty</t></is></c>
+     <c r="C1" t="inlineStr"><is><t>Price</t></is></c>
+   </row>
+   <row r="2"><c r="C2"><v>9</v></c></row>
+   <row r="4"><c r="A4" t="inlineStr"><is><t>Pear</t></is></c><c r="C4"><v>4</v></c></row>"#;
+
+/// XLSX stores only non-empty cells, positioned by `r=` (§18.3.1.4,
+/// §18.3.1.73). `to_csv()` emitted cells in encounter order, so `9` landed
+/// under `Name`, and dropped the omitted row 3, shifting row 4 up.
+#[test]
+fn test_csv_places_sparse_cells_by_reference() {
+    let doc = Xlsx::new(vec![Sheet::new("S", SPARSE)]).doc();
+    let csv = doc.as_xlsx().unwrap().to_csv();
+    assert_eq!(csv, "Name,Qty,Price\r\n,,9\r\n,,\r\nPear,,4");
+}
+
+/// `plain_text()` keeps each value in its own tab-separated column.
+#[test]
+fn test_plain_text_places_sparse_cells_by_column() {
+    let doc = Xlsx::new(vec![Sheet::new("S", SPARSE)]).doc();
+    let text = doc.plain_text();
+    assert!(text.contains("Name\tQty\tPrice\n\t\t9\nPear\t\t4"), "{text:?}");
+}
+
+/// `to_markdown()` (the README path, which does not go through the IR)
+/// put `9` under the `Name` header.
+#[test]
+fn test_markdown_places_sparse_cells_by_column() {
+    let doc = Xlsx::new(vec![Sheet::new("S", SPARSE)]).doc();
+    let md = doc.to_markdown();
+    assert!(md.contains("| Name | Qty | Price |"), "{md}");
+    assert!(md.contains("|  |  | 9 |"), "{md}");
+    assert!(md.contains("| Pear |  | 4 |"), "{md}");
+}
+
+/// Cell fills were parsed into the stylesheet and never read: a solid
+/// background colour never reached `TableCell::background_color`, which
+/// the DOCX path already fills from cell shading.
+#[test]
+fn test_solid_cell_fill_reaches_the_table_cell_background() {
+    let styles = r#"<fills count="3">
+          <fill><patternFill patternType="none"/></fill>
+          <fill><patternFill patternType="gray125"/></fill>
+          <fill><patternFill patternType="solid"><fgColor rgb="FFFFC000"/><bgColor indexed="64"/></patternFill></fill>
+        </fills>
+        <cellXfs count="3">
+          <xf numFmtId="0" fontId="0" fillId="0" borderId="0"/>
+          <xf numFmtId="0" fontId="0" fillId="2" borderId="0" applyFill="1"/>
+          <xf numFmtId="0" fontId="0" fillId="1" borderId="0" applyFill="1"/>
+        </cellXfs>"#;
+    let body = r#"<row r="1">
+        <c r="A1" t="inlineStr"><is><t>plain</t></is></c>
+        <c r="B1" s="1" t="inlineStr"><is><t>amber</t></is></c>
+        <c r="C1" s="2" t="inlineStr"><is><t>patterned</t></is></c>
+      </row>"#;
+    let ir = Xlsx::new(vec![Sheet::new("S", body)]).styles(styles).ir();
+    let t = only_table(&ir, 0);
+    let bg: Vec<_> = t.rows[0].cells.iter().map(|c| c.background_color).collect();
+    assert_eq!(bg, [None, Some([0xFF, 0xC0, 0x00]), None]);
+}
+
+/// Cell borders were parsed (style + colour per side) and never read; they
+/// now reach `TableCell::border`.
+#[test]
+fn test_cell_borders_reach_the_table_cell() {
+    let styles = r#"<borders count="2">
+          <border><left/><right/><top/><bottom/><diagonal/></border>
+          <border>
+            <left style="thin"><color rgb="FF112233"/></left>
+            <right style="double"/>
+            <top style="thick"><color rgb="FF000000"/></top>
+            <bottom style="dashed"/>
+          </border>
+        </borders>
+        <cellXfs count="2">
+          <xf numFmtId="0" fontId="0" fillId="0" borderId="0"/>
+          <xf numFmtId="0" fontId="0" fillId="0" borderId="1" applyBorder="1"/>
+        </cellXfs>"#;
+    let body = r#"<row r="1">
+        <c r="A1" t="inlineStr"><is><t>plain</t></is></c>
+        <c r="B1" s="1" t="inlineStr"><is><t>boxed</t></is></c>
+      </row>"#;
+    let ir = Xlsx::new(vec![Sheet::new("S", body)]).styles(styles).ir();
+    let t = only_table(&ir, 0);
+    assert!(t.rows[0].cells[0].border.is_none());
+    let b = t.rows[0].cells[1].border.as_ref().expect("B1 has borders");
+    let left = b.left.as_ref().unwrap();
+    assert_eq!(
+        (left.style.clone(), left.color),
+        (BorderStyle::Single, Some([0x11, 0x22, 0x33]))
+    );
+    assert_eq!(b.right.as_ref().unwrap().style, BorderStyle::Double);
+    assert_eq!(b.top.as_ref().unwrap().style, BorderStyle::Thick);
+    assert_eq!(b.bottom.as_ref().unwrap().style, BorderStyle::Dashed);
+}
+
+/// `<headerFooter>` (§18.3.1.46) carries user-visible text that was never
+/// read. It now reaches the IR's section headers/footers and both direct
+/// renderers, with its formatting codes (§18.3.1.36) decoded: section
+/// markers split the parts, fields show as Excel's editor shows them, and
+/// an inactive even-page header (no `differentOddEven`) stays out.
+#[test]
+fn test_sheet_header_and_footer_text_is_extracted() {
+    let mut sheet = Sheet::new("S", r#"<row r="1"><c r="A1"><v>1</v></c></row>"#);
+    sheet.extra = r#"<headerFooter differentFirst="1">
+        <oddHeader>&amp;L&amp;"Arial,Bold"&amp;14Quarterly Report&amp;RPage &amp;P of &amp;N</oddHeader>
+        <oddFooter>&amp;CConfidential &amp;&amp; internal &amp;KFF0000&amp;A</oddFooter>
+        <evenHeader>&amp;CEven only</evenHeader>
+        <firstHeader>&amp;CCover</firstHeader>
+      </headerFooter>"#;
+    let doc = Xlsx::new(vec![sheet]).doc();
+    let ir = doc.to_ir();
+    let hf_text = |hf: &Option<HeaderFooter>| {
+        hf.as_ref().map(|h| {
+            h.content
+                .iter()
+                .map(|e| match e {
+                    Element::Paragraph(p) => p
+                        .content
+                        .iter()
+                        .filter_map(|c| match c {
+                            InlineContent::Text(t) => Some(t.text.as_str()),
+                            _ => None,
+                        })
+                        .collect::<String>(),
+                    _ => String::new(),
+                })
+                .collect::<String>()
+        })
+    };
+    let s = &ir.sections[0];
+    assert_eq!(
+        hf_text(&s.header).as_deref(),
+        Some("Quarterly Report\tPage &[Page] of &[Pages]")
+    );
+    assert_eq!(hf_text(&s.footer).as_deref(), Some("Confidential & internal S"));
+    assert_eq!(hf_text(&s.first_page_header).as_deref(), Some("Cover"));
+    assert_eq!(hf_text(&s.even_page_header), None, "differentOddEven is off");
+    for out in [doc.plain_text(), doc.to_markdown()] {
+        assert!(out.contains("Quarterly Report"), "{out}");
+        assert!(out.contains("Confidential & internal"), "{out}");
+        assert!(!out.contains("Even only"), "{out}");
+    }
+}
+
+/// The IR carries defined names and each sheet's hidden flag, but the
+/// XLSX writer emitted neither `<definedNames>` nor `<sheet state>`: a
+/// read→IR→write round trip unhid every hidden sheet and dropped every
+/// named range.
+#[test]
+fn test_defined_names_and_hidden_sheets_survive_an_ir_round_trip() {
+    let mut first = Sheet::new("Data", r#"<row r="1"><c r="A1"><v>1</v></c></row>"#);
+    first.state = Some("hidden");
+    let second = Sheet::new("Report", r#"<row r="1"><c r="A1"><v>2</v></c></row>"#);
+    let ir = Xlsx::new(vec![first, second]).ir();
+    // The builder's workbook has no <definedNames>; add them at the IR,
+    // where a round trip carries them from.
+    let mut ir = ir;
+    ir.metadata.defined_names = vec![
+        DefinedName {
+            name: "Totals".into(),
+            value: "Data!$A$1:$A$10".into(),
+            local_sheet_id: None,
+            hidden: false,
+        },
+        DefinedName {
+            name: "_xlnm.Print_Area".into(),
+            value: "Report!$A$1:$B$2".into(),
+            local_sheet_id: Some(1),
+            hidden: true,
+        },
+    ];
+    let bytes = to_bytes(&office_oxide::create::ir_to_xlsx(&ir));
+    let back = Document::from_reader(Cursor::new(bytes), DocumentFormat::Xlsx)
+        .expect("reopen")
+        .to_ir();
+    assert_eq!(
+        back.sections
+            .iter()
+            .map(|s| (s.title.clone().unwrap_or_default(), s.hidden))
+            .collect::<Vec<_>>(),
+        [("Data".to_string(), true), ("Report".to_string(), false)]
+    );
+    assert_eq!(back.metadata.defined_names, ir.metadata.defined_names);
+}
+
+/// `<alignment>` inside a cell format (§18.8.1) was never parsed, though
+/// the writer can emit it: read -> IR -> write lost every cell's alignment.
+#[test]
+fn test_cell_alignment_is_read_and_survives_an_ir_round_trip() {
+    let styles = r#"<cellXfs count="3">
+          <xf numFmtId="0" fontId="0" fillId="0" borderId="0"/>
+          <xf numFmtId="0" fontId="0" fillId="0" borderId="0" applyAlignment="1"><alignment horizontal="center" vertical="top" wrapText="1"/></xf>
+          <xf numFmtId="0" fontId="0" fillId="0" borderId="0" applyAlignment="1"><alignment horizontal="right" vertical="center"/></xf>
+        </cellXfs>"#;
+    let body = r#"<row r="1">
+        <c r="A1" t="inlineStr"><is><t>plain</t></is></c>
+        <c r="B1" s="1" t="inlineStr"><is><t>centred</t></is></c>
+        <c r="C1" s="2" t="inlineStr"><is><t>right</t></is></c>
+      </row>"#;
+    let ir = Xlsx::new(vec![Sheet::new("S", body)]).styles(styles).ir();
+    let aligns = |ir: &DocumentIR| {
+        only_table(ir, 0).rows[0]
+            .cells
+            .iter()
+            .map(|c| (c.text_align.clone(), c.vertical_align.clone()))
+            .collect::<Vec<_>>()
+    };
+    let expected = vec![
+        (None, None),
+        (Some(ParagraphAlignment::Center), Some(CellVerticalAlign::Top)),
+        (Some(ParagraphAlignment::Right), Some(CellVerticalAlign::Center)),
+    ];
+    assert_eq!(aligns(&ir), expected);
+    let bytes = to_bytes(&office_oxide::create::ir_to_xlsx(&ir));
+    let back = Document::from_reader(Cursor::new(bytes), DocumentFormat::Xlsx)
+        .expect("reopen")
+        .to_ir();
+    let back_h: Vec<_> = aligns(&back).into_iter().map(|(h, _)| h).collect();
+    assert_eq!(
+        back_h,
+        [
+            None,
+            Some(ParagraphAlignment::Center),
+            Some(ParagraphAlignment::Right)
+        ],
+        "horizontal alignment survives the round trip"
+    );
+}
+
+/// `wrapText` (§18.8.1 `alignment`) was parsed into the style model but
+/// had no IR field, so it never reached a consumer and an IR round trip
+/// through the XLSX writer dropped it.
+#[test]
+fn test_cell_wrap_text_reaches_the_ir_and_survives_a_round_trip() {
+    let styles = r#"<cellXfs count="3">
+          <xf numFmtId="0" fontId="0" fillId="0" borderId="0"/>
+          <xf numFmtId="0" fontId="0" fillId="0" borderId="0" applyAlignment="1"><alignment wrapText="1"/></xf>
+          <xf numFmtId="0" fontId="0" fillId="0" borderId="0" applyAlignment="1"><alignment horizontal="right" wrapText="0"/></xf>
+        </cellXfs>"#;
+    let body = r#"<row r="1">
+        <c r="A1" t="inlineStr"><is><t>plain</t></is></c>
+        <c r="B1" s="1" t="inlineStr"><is><t>wrapped</t></is></c>
+        <c r="C1" s="2" t="inlineStr"><is><t>unwrapped</t></is></c>
+      </row>"#;
+    let ir = Xlsx::new(vec![Sheet::new("S", body)]).styles(styles).ir();
+    let wraps = |ir: &DocumentIR| {
+        only_table(ir, 0).rows[0]
+            .cells
+            .iter()
+            .map(|c| c.wrap_text)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(wraps(&ir), [false, true, false]);
+    let bytes = to_bytes(&office_oxide::create::ir_to_xlsx(&ir));
+    let back = Document::from_reader(Cursor::new(bytes), DocumentFormat::Xlsx)
+        .expect("reopen")
+        .to_ir();
+    assert_eq!(wraps(&back), [false, true, false], "wrapText survives the round trip");
+    let back_h: Vec<_> = only_table(&back, 0).rows[0]
+        .cells
+        .iter()
+        .map(|c| c.text_align.clone())
+        .collect();
+    assert_eq!(back_h, [None, None, Some(ParagraphAlignment::Right)]);
+}

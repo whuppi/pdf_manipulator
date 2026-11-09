@@ -1,0 +1,1028 @@
+use super::DocxDocument;
+use super::document::BlockElement;
+use super::formatting::RunProperties;
+use super::hyperlink::HyperlinkTarget;
+use super::image::DrawingInfo;
+use super::numbering::NumberingDefinitions;
+use super::paragraph::{BreakType, ParagraphContent, Run, RunContent};
+use super::styles::{CellStyleLayer, StyleSheet};
+use super::table::Table;
+
+// ---------------------------------------------------------------------------
+// Plain text extraction
+// ---------------------------------------------------------------------------
+
+impl DocxDocument {
+    /// What was lost to the parts that could not be read, one warning for
+    /// each part listed and one for the rest, as `Metadata::warnings` lists
+    /// them and as every rendering writes them. Empty when every part read.
+    pub(crate) fn unreadable_warnings(&self) -> Vec<String> {
+        self.unreadable_parts
+            .iter()
+            .chain(self.cosmetic_parts.iter())
+            .map(|p| format!("skipped unreadable part {p}"))
+            .chain(
+                (self.unreadable_parts_omitted > 0).then(|| {
+                    crate::core::unreadable::omitted_warning(self.unreadable_parts_omitted)
+                }),
+            )
+            .collect()
+    }
+
+    /// The warnings for the unreadable parts that lost text, and for the
+    /// rest left out of the list: what every rendering writes in band. A
+    /// part that holds no text (the theme) is only in
+    /// [`Self::unreadable_warnings`].
+    pub(crate) fn unreadable_text_warnings(&self) -> Vec<String> {
+        self.unreadable_parts
+            .iter()
+            .map(|p| format!("skipped unreadable part {p}"))
+            .chain(
+                (self.unreadable_parts_omitted > 0).then(|| {
+                    crate::core::unreadable::omitted_warning(self.unreadable_parts_omitted)
+                }),
+            )
+            .collect()
+    }
+
+    /// Whether a part that held text could not be read.
+    pub(crate) fn unreadable_loses_text(&self) -> bool {
+        self.unreadable_parts_omitted > 0 || !self.unreadable_parts.is_empty()
+    }
+
+    /// Extract all text as a plain string. Paragraphs are separated by newlines.
+    ///
+    /// Headers and footers are included, matching `to_markdown` and the IR
+    /// renderers. All three used to disagree, so a consumer's word count
+    /// changed depending on which method they called.
+    pub fn plain_text(&self) -> String {
+        let _scale = crate::limits::InputSizeScope::new(self.input_bytes);
+        let _text_scope = crate::limits::begin_copied_text_budget();
+        let mut out = String::new();
+        let styles = self.styles.as_ref();
+        for hf in self
+            .headers_footers
+            .iter()
+            .filter(|h| h.active && h.is_header)
+        {
+            plain_text_blocks(&hf.content, styles, None, &mut out);
+        }
+        plain_text_blocks(&self.body.elements, styles, None, &mut out);
+        for hf in self
+            .headers_footers
+            .iter()
+            .filter(|h| h.active && !h.is_header)
+        {
+            plain_text_blocks(&hf.content, styles, None, &mut out);
+        }
+        // Footnote/endnote/comment bodies are real document content that
+        // to_ir() already carries (as Element::Footnote/Endnote) — without
+        // walking them here too, a footnote-only document returned "" even
+        // though it visibly has text, and a document's word count changed
+        // depending on which of plain_text()/to_markdown()/to_ir() a caller
+        // used.
+        for n in self.footnotes.iter().chain(self.endnotes.iter()) {
+            plain_text_blocks(&n.content, styles, None, &mut out);
+        }
+        // A comment names its author, as on every other surface and format.
+        for n in &self.comments {
+            let mut body = String::new();
+            plain_text_blocks(&n.content, styles, None, &mut body);
+            let body = body.trim();
+            if !body.is_empty() {
+                if !out.is_empty() && !out.ends_with('\n') {
+                    out.push('\n');
+                }
+                out.push_str(&comment_marker(n.author.as_deref()));
+                out.push_str(": ");
+                out.push_str(body);
+                out.push('\n');
+            }
+        }
+        // Trim trailing newlines
+        while out.ends_with('\n') {
+            out.pop();
+        }
+        // The parts that could not be read are listed first: the report is
+        // charged to the budget before the budget's own notice is read.
+        let unreadable = crate::core::unreadable::report_lines(
+            &self.unreadable_text_warnings(),
+            crate::core::unreadable::ReportTarget::Plain,
+        );
+        if !unreadable.is_empty() {
+            out.push_str("\n\n");
+            out.push_str(&unreadable.join("\n"));
+        }
+        // A chart's text is stored once and written once per drawing that
+        // names it; when the copies outgrew the text budget the drawings past
+        // it were written without it, and the output says so. So does a link
+        // whose target was cut while reading: the text has no targets, but
+        // every rendering of one document reports the same losses.
+        for notice in crate::limits::copied_text_notice()
+            .into_iter()
+            .chain(self.link_notice.clone())
+        {
+            out.push_str("\n\n");
+            out.push_str(&notice);
+        }
+        out
+    }
+
+    /// Convert the document to Markdown.
+    ///
+    /// Includes headers and footers around the body so a downstream
+    /// renderer (PDF, HTML, search index) sees the full visible content
+    /// of every page. Without this, simple-but-meaningful artefacts like
+    /// `My header` / `My footer` are silently dropped.
+    pub fn to_markdown(&self) -> String {
+        let _scale = crate::limits::InputSizeScope::new(self.input_bytes);
+        let _text_scope = crate::limits::begin_copied_text_budget();
+        let mut out = String::new();
+        let ctx = MarkdownCtx {
+            styles: self.styles.as_ref(),
+            numbering: self.numbering.as_ref(),
+            table: None,
+        };
+
+        let (header_texts, footer_texts) = split_headers_footers(self, &ctx);
+        for h in &header_texts {
+            out.push_str(h);
+            out.push_str("\n\n");
+        }
+
+        markdown_blocks(&self.body.elements, &ctx, &mut out, 0);
+
+        // See the identical note on plain_text(): footnote,
+        // endnote and comment bodies are real content that to_ir() already
+        // carries, and dropping them here made this renderer disagree with
+        // that one.
+        for (n, is_comment) in self
+            .footnotes
+            .iter()
+            .chain(self.endnotes.iter())
+            .map(|n| (n, false))
+            .chain(self.comments.iter().map(|n| (n, true)))
+        {
+            let mut note_buf = String::new();
+            markdown_blocks(&n.content, &ctx, &mut note_buf, 0);
+            let note_text = note_buf.trim();
+            if !note_text.is_empty() {
+                if !out.ends_with("\n\n") && !out.is_empty() {
+                    out.push_str("\n\n");
+                }
+                if is_comment {
+                    out.push_str(&format!("**{}:** ", comment_marker(n.author.as_deref())));
+                }
+                out.push_str(note_text);
+                out.push('\n');
+            }
+        }
+
+        for f in &footer_texts {
+            if !out.ends_with("\n\n") {
+                out.push_str("\n\n");
+            }
+            out.push_str(f);
+            out.push('\n');
+        }
+
+        while out.ends_with('\n') {
+            out.pop();
+        }
+        // The parts that could not be read, as in plain_text().
+        let unreadable = crate::core::unreadable::report_lines(
+            &self.unreadable_text_warnings(),
+            crate::core::unreadable::ReportTarget::Markdown,
+        );
+        if !unreadable.is_empty() {
+            out.push_str("\n\n");
+            out.push_str(&unreadable.join("\n\n"));
+        }
+        // A link target is shared in the document and copied into the output
+        // once per link; when the copies outgrew the text budget the links
+        // past it were written without their targets, and the output says so.
+        for notice in crate::limits::copied_text_notice()
+            .into_iter()
+            .chain(self.link_notice.clone())
+        {
+            out.push_str("\n\n");
+            out.push_str(&notice);
+        }
+        out
+    }
+}
+
+/// Charge the lines of a chart or diagram, which a drawing writes out again
+/// for every drawing that names the same part, to the copied-text budget.
+/// `false` when they do not fit: the drawing is written without them.
+fn charge_drawing_text(lines: &[&str]) -> bool {
+    let chars: usize = lines.iter().map(|l| l.len() + 1).sum();
+    crate::limits::charge_copied_text(chars)
+}
+
+/// Split parsed `HeaderFooter` entries into headers vs footers and
+/// return them as deduplicated markdown-string vectors. Role is read
+/// directly from each entry's `is_header` field (set at parse time),
+/// so this is correct regardless of how many sections the document
+/// has or how the entries are interleaved.
+fn split_headers_footers(doc: &DocxDocument, ctx: &MarkdownCtx) -> (Vec<String>, Vec<String>) {
+    let mut headers: Vec<String> = Vec::new();
+    let mut footers: Vec<String> = Vec::new();
+    let mut header_seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut footer_seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    for hf in doc.headers_footers.iter().filter(|h| h.active) {
+        let mut buf = String::new();
+        markdown_blocks(&hf.content, ctx, &mut buf, 0);
+        let t = buf.trim().to_string();
+        if t.is_empty() {
+            continue;
+        }
+        if hf.is_header {
+            if header_seen.insert(t.clone()) {
+                headers.push(t);
+            }
+        } else if footer_seen.insert(t.clone()) {
+            footers.push(t);
+        }
+    }
+    (headers, footers)
+}
+
+/// What a run needs to decide whether it is hidden: the stylesheet and
+/// the enclosing paragraph's style, since `<w:vanish/>` is inherited from
+/// a character or paragraph style as readily as set directly on the run.
+#[derive(Clone, Copy)]
+struct HiddenCtx<'a> {
+    styles: Option<&'a StyleSheet>,
+    paragraph_style_id: Option<&'a str>,
+    /// The run formatting the enclosing table cell's style gives it.
+    table: Option<&'a RunProperties>,
+}
+
+impl HiddenCtx<'_> {
+    fn is_hidden(&self, run: &Run) -> bool {
+        if crate::read_options::include_hidden_text() {
+            return false;
+        }
+        match self.styles {
+            Some(sheet) => sheet.effective_hidden_in(
+                self.table,
+                self.paragraph_style_id,
+                run.properties.as_ref(),
+            ),
+            None => run
+                .properties
+                .as_ref()
+                .and_then(|rp| rp.hidden)
+                .unwrap_or(false),
+        }
+    }
+}
+
+fn plain_text_blocks(
+    elements: &[BlockElement],
+    styles: Option<&StyleSheet>,
+    // The enclosing table cell's style layer, if any.
+    table: Option<&RunProperties>,
+    out: &mut String,
+) {
+    for elem in elements {
+        match elem {
+            BlockElement::Paragraph(p) => {
+                let ctx = HiddenCtx {
+                    styles,
+                    paragraph_style_id: p.properties.as_ref().and_then(|pp| pp.style_id.as_deref()),
+                    table,
+                };
+                for content in &p.content {
+                    match content {
+                        ParagraphContent::Run(run) => plain_text_run(run, ctx, out),
+                        ParagraphContent::Hyperlink(hl) => {
+                            for run in &hl.runs {
+                                plain_text_run(run, ctx, out);
+                            }
+                        },
+                    }
+                }
+                out.push('\n');
+            },
+            BlockElement::Table(table) => {
+                plain_text_table(table, styles, out);
+            },
+        }
+    }
+}
+
+/// The label a comment carries on every surface and format.
+fn comment_marker(author: Option<&str>) -> String {
+    match author {
+        Some(a) => format!("Comment ({a})"),
+        None => "Comment".to_string(),
+    }
+}
+
+fn plain_text_run(run: &Run, ctx: HiddenCtx<'_>, out: &mut String) {
+    // `<w:vanish/>` — Word never renders this run at all. The IR path
+    // resolves this through the style chain; reading only the run's own
+    // `w:rPr` here showed text that a character style hides.
+    if ctx.is_hidden(run) {
+        return;
+    }
+    for content in &run.content {
+        match content {
+            RunContent::Text(text) => out.push_str(text),
+            RunContent::Break(BreakType::Line) => out.push('\n'),
+            RunContent::Break(BreakType::Page | BreakType::Column) => out.push('\n'),
+            RunContent::Tab => out.push('\t'),
+            // A drawing has no text of its own — except a native chart or
+            // SmartArt diagram, whose text was resolved from the separate
+            // referenced part at open time.
+            RunContent::Drawing(d) => {
+                let lines: Vec<&str> = d
+                    .chart_text
+                    .iter()
+                    .chain(d.dgm_text.iter())
+                    .map(String::as_str)
+                    .collect();
+                // Charged before it is written: the text is stored once.
+                if !lines.is_empty() && charge_drawing_text(&lines) {
+                    if !out.is_empty() && !out.ends_with(['\n', ' ', '\t']) {
+                        out.push('\n');
+                    }
+                    out.push_str(&lines.join("\n"));
+                    out.push('\n');
+                }
+            },
+            // Text-box prose is document content — in some real files it is
+            // most of the document. It is *block* content, so
+            // it must be separated from the surrounding run: pasting it in
+            // bare fused the last word of a text box to the first word after
+            // it (`Linz` + `ANTRAG` -> `LinzANTRAG`).
+            RunContent::TextBox(blocks) => {
+                let mut inner = String::new();
+                // A text box is not formatted by the table it sits in.
+                plain_text_blocks(blocks, ctx.styles, None, &mut inner);
+                let inner = inner.trim();
+                if !inner.is_empty() {
+                    if !out.is_empty() && !out.ends_with(['\n', ' ', '\t']) {
+                        out.push('\n');
+                    }
+                    out.push_str(inner);
+                    out.push('\n');
+                }
+            },
+            // The reference mark itself carries no text of its own — the
+            // note *body* is walked separately; this is only
+            // the citation point, nothing to render here.
+            RunContent::FootnoteRef(..)
+            | RunContent::EndnoteRef(..)
+            | RunContent::CommentRef(_)
+            | RunContent::CommentRangeStart(_) => {},
+            RunContent::FormField(ff) => {
+                if let Some(text) = &ff.display_text {
+                    out.push_str(text);
+                }
+            },
+            // Resolved into a TextBox during from_opc when the reference
+            // could be followed; an unresolvable one is dropped (matches
+            // the type's own documented intent).
+            RunContent::DeferredPart(_) => {},
+        }
+    }
+}
+
+fn plain_text_table(table: &Table, styles: Option<&StyleSheet>, out: &mut String) {
+    // A table cell can hold another table, so this recurses (via
+    // `plain_text_blocks` -> `plain_text_table` -> `plain_text_blocks` ...)
+    // on whatever it's given — including a tree the XML parser already
+    // bounded to `MAX_NESTING_DEPTH`, which on the small default thread
+    // stack `plain_text()`/`to_markdown()` run on (unlike parsing itself,
+    // which gets its own larger stack) is still deep enough to overflow.
+    // Past the cap, stop descending rather than crash the whole process —
+    // the same defect class as an unguarded XML parse, just one layer
+    // downstream of it.
+    let Some(_depth) = crate::core::xml::DepthGuard::enter() else {
+        out.push_str(&format!(
+            "[nested table deeper than {} levels not shown — document truncated]\n",
+            crate::core::xml::MAX_NESTING_DEPTH
+        ));
+        return;
+    };
+    let layers = cell_style_layers(table, styles);
+    for (row_idx, row) in table.rows.iter().enumerate() {
+        // A cell deleted via tracked changes is excluded from the
+        // accepted view, same policy already applied to run-level
+        // `w:del`.
+        let cells: Vec<_> = row
+            .cells
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| {
+                crate::read_options::include_deleted_text()
+                    || !c.properties.as_ref().is_some_and(|p| p.deleted)
+            })
+            .collect();
+        for (i, (cell_idx, cell)) in cells.iter().enumerate() {
+            if i > 0 {
+                out.push('\t');
+            }
+            let mut cell_text = String::new();
+            let layer = layers.get(row_idx, *cell_idx).map(|l| &l.run);
+            plain_text_blocks(&cell.content, styles, layer, &mut cell_text);
+            // Replace internal newlines with spaces for table cell text
+            out.push_str(&cell_text.trim_end_matches('\n').replace('\n', " "));
+        }
+        out.push('\n');
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Markdown extraction
+// ---------------------------------------------------------------------------
+
+struct MarkdownCtx<'a> {
+    styles: Option<&'a StyleSheet>,
+    numbering: Option<&'a NumberingDefinitions>,
+    /// The enclosing table cell's style layer (a bold header row, ...).
+    table: Option<&'a CellStyleLayer>,
+}
+
+/// The table style's run/paragraph layer of every cell of `table`, by row
+/// and cell index — the same regions and precedence `to_ir()` applies
+/// (`TableStyleLayout`, `ResolvedTableStyle::cell_layer`), each distinct
+/// layer built once.
+struct CellLayers {
+    by_cell: Vec<Vec<Option<std::rc::Rc<CellStyleLayer>>>>,
+}
+
+impl CellLayers {
+    fn get(&self, row: usize, cell: usize) -> Option<&CellStyleLayer> {
+        self.by_cell.get(row)?.get(cell)?.as_deref()
+    }
+}
+
+fn cell_style_layers(table: &Table, styles: Option<&StyleSheet>) -> CellLayers {
+    let Some(style) = table
+        .properties
+        .as_ref()
+        .and_then(|p| p.style_id.as_deref())
+        .zip(styles)
+        .map(|(id, sheet)| sheet.resolve_table_style(id))
+    else {
+        return CellLayers {
+            by_cell: Vec::new(),
+        };
+    };
+    let starts = table.grid_starts();
+    let layout = super::table::TableStyleLayout::new(
+        table,
+        &starts,
+        style.row_band_size,
+        style.col_band_size,
+    );
+    let mut built: Vec<(Vec<&'static str>, Option<std::rc::Rc<CellStyleLayer>>)> = Vec::new();
+    let by_cell = table
+        .rows
+        .iter()
+        .enumerate()
+        .map(|(r, row)| {
+            row.cells
+                .iter()
+                .enumerate()
+                .map(|(c, cell)| {
+                    let start = starts[r][c];
+                    let regions =
+                        layout.regions(r, start, start.saturating_add(cell.grid_span() as usize));
+                    if let Some((_, l)) = built.iter().find(|(k, _)| *k == regions) {
+                        return l.clone();
+                    }
+                    let l = style.cell_layer(&regions).map(std::rc::Rc::new);
+                    built.push((regions, l.clone()));
+                    l
+                })
+                .collect()
+        })
+        .collect();
+    CellLayers { by_cell }
+}
+
+fn markdown_blocks(elements: &[BlockElement], ctx: &MarkdownCtx, out: &mut String, _depth: usize) {
+    // Keyed by (num_id, ilvl): the next number to print for that level.
+    // This renderer processes one paragraph at a time with no notion of
+    // "list group" the way convert_docx.rs's IR path has, so each level's
+    // count is simply "one more than last time this exact level was
+    // seen" — matching the per-numId continuation semantics of the reader.
+    // Without this every item printed the abstract level's bare
+    // `<w:start>` value forever (the 4th instance of this
+    // crate's "two renderers disagree" flaw).
+    let mut numbering_counts: std::collections::HashMap<(u32, u8), u32> =
+        std::collections::HashMap::new();
+    markdown_blocks_inner(elements, ctx, out, _depth, &mut numbering_counts);
+}
+
+fn markdown_blocks_inner(
+    elements: &[BlockElement],
+    ctx: &MarkdownCtx,
+    out: &mut String,
+    _depth: usize,
+    numbering_counts: &mut std::collections::HashMap<(u32, u8), u32>,
+) {
+    // Blocks are separated by a blank line, except consecutive items of one
+    // list (one `numId`), which stay tight — the layout the IR renderer
+    // produces. Ending every block with a single newline let a table, a
+    // code line or a following paragraph run on as a lazy continuation of
+    // the block before it.
+    let mut prev_list: Option<u32> = None;
+    let separate = |out: &mut String, list: Option<u32>, prev: Option<u32>| {
+        if out.is_empty() {
+            return;
+        }
+        while out.ends_with('\n') {
+            out.pop();
+        }
+        let tight = list.is_some() && list == prev;
+        out.push_str(if tight { "\n" } else { "\n\n" });
+    };
+    for elem in elements {
+        match elem {
+            BlockElement::Paragraph(p) => {
+                let block_out: &mut String = out;
+                let mut para_buf = String::new();
+                let out = &mut para_buf;
+                // Determine heading level from outline_level or style
+                let heading_level = p
+                    .properties
+                    .as_ref()
+                    .and_then(|pp| {
+                        pp.outline_level.or_else(|| {
+                            pp.style_id
+                                .as_ref()
+                                .and_then(|sid| ctx.styles?.resolve_outline_level(sid))
+                        })
+                    })
+                    .map(|lvl| (lvl as usize) + 1);
+
+                // Check for numbering — on the *effective* properties: Word's
+                // own "List Bullet"/"List Number" styles carry the `w:numPr`
+                // in the style, not on the paragraph, and `to_ir()` already
+                // resolved it that way while this renderer read the direct
+                // `w:pPr` alone and rendered every such list as plain
+                // paragraphs. A `numId` of 0 is "no numbering", also as in
+                // the converter.
+                let effective = ctx
+                    .styles
+                    .map(|sheet| {
+                        sheet.effective_paragraph_flags_in(
+                            ctx.table.map(|l| &l.paragraph),
+                            p.properties.as_ref(),
+                        )
+                    })
+                    .or_else(|| p.properties.clone());
+                let list_num = effective
+                    .as_ref()
+                    .and_then(|pp| pp.numbering_ref.as_ref())
+                    .map(|nr| nr.num_id);
+                let list_prefix = effective.as_ref().and_then(|pp| {
+                    let nr = pp.numbering_ref.as_ref().filter(|nr| nr.num_id != 0)?;
+                    let numbering = ctx.numbering?;
+                    let level = numbering.resolve_level(nr.num_id, nr.ilvl)?;
+                    let indent = "  ".repeat(nr.ilvl as usize);
+                    use super::numbering::NumberFormat;
+                    // The printed number for an ordered format: one more
+                    // than the last time this exact (num_id, ilvl) was
+                    // seen, or the effective start (honoring
+                    // startOverride) on first encounter — not the bare
+                    // abstract-level start reprinted forever.
+                    let mut next_ordinal = || {
+                        let key = (nr.num_id, nr.ilvl);
+                        let next = match numbering_counts.get(&key) {
+                            Some(&prev) => prev + 1,
+                            None => numbering
+                                .resolve_start(nr.num_id, nr.ilvl)
+                                .unwrap_or(level.start),
+                        };
+                        numbering_counts.insert(key, next);
+                        next
+                    };
+                    // `w:lvlText` "%1)" is CommonMark's `1)` marker; every
+                    // other pattern has no CommonMark form and keeps `.`
+                    // (as `List::ordered_delimiter` on the IR path).
+                    let delim = if crate::ir::is_paren_pattern(&level.level_text) {
+                        ')'
+                    } else {
+                        '.'
+                    };
+                    let marker = match &level.format {
+                        NumberFormat::Bullet => "- ".to_string(),
+                        NumberFormat::Decimal
+                        | NumberFormat::LowerLetter
+                        | NumberFormat::UpperLetter
+                        | NumberFormat::LowerRoman
+                        | NumberFormat::UpperRoman => format!("{}{delim} ", next_ordinal()),
+                        NumberFormat::None => String::new(),
+                        NumberFormat::Other(_) => "- ".to_string(),
+                    };
+                    Some(format!("{indent}{marker}"))
+                });
+
+                // Heading prefix
+                if let Some(level) = heading_level {
+                    // One definition of the valid heading range, shared with the IR
+                    // renderers: `min(9)` emitted up to nine `#`, which no
+                    // markdown reader treats as a heading at all.
+                    let hashes =
+                        "#".repeat(level.clamp(1, usize::from(crate::ir::MAX_HEADING_DEPTH)));
+                    out.push_str(&hashes);
+                    out.push(' ');
+                } else if let Some(ref prefix) = list_prefix {
+                    out.push_str(prefix);
+                }
+
+                // Render paragraph content with inline formatting.
+                // Consecutive runs sharing formatting are merged, because
+                // Word splits one visually-bold phrase into several runs
+                // routinely and wrapping each separately emits `****`,
+                // which CommonMark reads as four literal asterisks.
+                let mut pending: Option<(RunStyle, String)> = None;
+                let hidden = HiddenCtx {
+                    styles: ctx.styles,
+                    paragraph_style_id: p.properties.as_ref().and_then(|pp| pp.style_id.as_deref()),
+                    table: ctx.table.map(|l| &l.run),
+                };
+                // A heading's own style supplies its look; only direct and
+                // character-style formatting become delimiters inside it
+                // (see `convert_heading_inline`).
+                let format_ctx = if heading_level.is_some() {
+                    HiddenCtx {
+                        paragraph_style_id: None,
+                        ..hidden
+                    }
+                } else {
+                    hidden
+                };
+                for content in &p.content {
+                    match content {
+                        ParagraphContent::Run(run) => {
+                            let style = RunStyle::of(run, format_ctx);
+                            let mut text = String::new();
+                            markdown_run_text(run, ctx, hidden, &mut text);
+                            if text.is_empty() {
+                                continue;
+                            }
+                            match pending.as_mut() {
+                                Some((cur, buf)) if *cur == style => buf.push_str(&text),
+                                _ => {
+                                    flush_run(&mut pending, out);
+                                    pending = Some((style, text));
+                                },
+                            }
+                        },
+                        ParagraphContent::Hyperlink(hl) => {
+                            flush_run(&mut pending, out);
+                            let text = runs_to_plain_text(&hl.runs, hidden);
+                            match &hl.target {
+                                // Past the budget the link text stays,
+                                // unlinked.
+                                HyperlinkTarget::External(url)
+                                    if !crate::limits::charge_copied_text(url.len()) =>
+                                {
+                                    out.push_str(&text);
+                                },
+                                HyperlinkTarget::External(url) => {
+                                    out.push('[');
+                                    out.push_str(&text);
+                                    out.push_str("](");
+                                    out.push_str(url);
+                                    out.push(')');
+                                },
+                                HyperlinkTarget::Internal(anchor) => {
+                                    out.push('[');
+                                    out.push_str(&text);
+                                    out.push_str("](#");
+                                    out.push_str(anchor);
+                                    out.push(')');
+                                },
+                            }
+                        },
+                    }
+                }
+                flush_run(&mut pending, out);
+
+                // A list item is a list item even when empty; any other
+                // empty paragraph is not a block (as on the IR path).
+                let list = list_prefix
+                    .as_ref()
+                    .and(list_num)
+                    .filter(|_| heading_level.is_none());
+                if list.is_none() && para_buf.trim().is_empty() {
+                    prev_list = None;
+                    continue;
+                }
+                separate(block_out, list, prev_list);
+                block_out.push_str(&para_buf);
+                prev_list = list;
+            },
+            BlockElement::Table(table) => {
+                separate(out, None, prev_list);
+                markdown_table(table, ctx, out);
+                prev_list = None;
+            },
+        }
+    }
+}
+
+/// The run formatting that decides which markdown delimiters apply.
+#[derive(PartialEq)]
+struct RunStyle {
+    bold: bool,
+    italic: bool,
+    strike: bool,
+    vertical_align: Option<super::formatting::VerticalAlign>,
+}
+
+impl RunStyle {
+    /// The run's *effective* formatting: document defaults, the paragraph
+    /// style chain, the character style, then the direct `w:rPr`. Reading
+    /// the direct properties alone rendered a document whose bold lives
+    /// in its styles — every template, every "Strong" character style —
+    /// as unformatted text, while `to_ir()` resolved the chain.
+    fn of(run: &Run, hidden: HiddenCtx<'_>) -> Self {
+        let direct = run.properties.as_ref();
+        let effective;
+        let rp = match hidden.styles {
+            Some(sheet) => {
+                effective =
+                    sheet.effective_run_flags_in(hidden.table, hidden.paragraph_style_id, direct);
+                Some(&effective)
+            },
+            None => direct,
+        };
+        // Complex-script text takes bold/italic from `w:bCs`/`w:iCs`, by
+        // the same run-level rule as `to_ir()` (`RunProperties::face_for`).
+        let (bold, italic) = rp.map_or((false, false), |rp| {
+            let face =
+                rp.face_for(rp.run_script_class(run.content.iter().filter_map(|rc| match rc {
+                    RunContent::Text(t) => Some(t.as_str()),
+                    RunContent::FormField(ff) => ff.display_text.as_deref(),
+                    _ => None,
+                })));
+            (face.bold, face.italic)
+        });
+        Self {
+            bold,
+            italic,
+            strike: rp.and_then(|rp| rp.strike.or(rp.dstrike)).unwrap_or(false),
+            vertical_align: rp.and_then(|rp| rp.vertical_align),
+        }
+    }
+}
+
+/// Emit an accumulated run group with one set of delimiters.
+fn flush_run(pending: &mut Option<(RunStyle, String)>, out: &mut String) {
+    let Some((style, text)) = pending.take() else {
+        return;
+    };
+    if text.is_empty() {
+        return;
+    }
+    // Leading/trailing whitespace must sit outside the delimiters:
+    // CommonMark does not open emphasis on `** text**`. An all-whitespace
+    // run has no core to emphasise — and computing the two spans
+    // independently makes them overlap, which inverts the slice range and
+    // panics, so take the trailing span from what is left after the
+    // leading one.
+    let core_str = text.trim();
+    if core_str.is_empty() {
+        out.push_str(&text);
+        return;
+    }
+    let lead_len = text.len() - text.trim_start().len();
+    let lead = &text[..lead_len];
+    let trail = &text[lead_len + core_str.len()..];
+    let core = core_str;
+
+    let mut body = core.to_string();
+    // Super/subscript have no markdown syntax; HTML is the conventional
+    // fallback. `vertAlign` was previously dropped entirely here.
+    match style.vertical_align {
+        Some(super::formatting::VerticalAlign::Superscript) => {
+            body = format!("<sup>{body}</sup>");
+        },
+        Some(super::formatting::VerticalAlign::Subscript) => {
+            body = format!("<sub>{body}</sub>");
+        },
+        _ => {},
+    }
+    if style.strike {
+        body = format!("~~{body}~~");
+    }
+    if style.bold && style.italic {
+        body = format!("***{body}***");
+    } else if style.bold {
+        body = format!("**{body}**");
+    } else if style.italic {
+        body = format!("*{body}*");
+    }
+    out.push_str(lead);
+    out.push_str(&body);
+    out.push_str(trail);
+}
+
+/// Collect a run's text content (no emphasis delimiters).
+fn markdown_run_text(run: &Run, ctx: &MarkdownCtx, hidden: HiddenCtx<'_>, text: &mut String) {
+    // `<w:vanish/>` — Word never renders this run at all. Resolved through
+    // the style chain, as the IR path does.
+    if hidden.is_hidden(run) {
+        return;
+    }
+    for content in &run.content {
+        match content {
+            // Document text must not read as markdown: `*not bold*`
+            // rendered as emphasis and a `|` split its table row.
+            RunContent::Text(t) => text.push_str(&crate::core::markdown::escape_text(t)),
+            RunContent::Break(BreakType::Line) => text.push_str("  \n"),
+            RunContent::Break(BreakType::Page | BreakType::Column) => {
+                text.push_str("\n\n---\n\n");
+            },
+            RunContent::Tab => text.push('\t'),
+            RunContent::Drawing(drawing) => {
+                markdown_drawing(drawing, text);
+            },
+            // See `plain_text_run`: block content needs a separator or it
+            // fuses with the run that follows it.
+            RunContent::TextBox(blocks) => {
+                let mut inner = String::new();
+                // A text box is not formatted by the table it sits in.
+                let ctx = MarkdownCtx {
+                    table: None,
+                    ..*ctx
+                };
+                markdown_blocks(blocks, &ctx, &mut inner, 0);
+                let inner = inner.trim();
+                if !inner.is_empty() {
+                    if !text.is_empty() && !text.ends_with(['\n', ' ', '\t']) {
+                        text.push('\n');
+                    }
+                    text.push_str(inner);
+                    text.push('\n');
+                }
+            },
+            RunContent::FootnoteRef(..)
+            | RunContent::EndnoteRef(..)
+            | RunContent::CommentRef(_)
+            | RunContent::CommentRangeStart(_) => {},
+            RunContent::FormField(ff) => {
+                if let Some(t) = &ff.display_text {
+                    text.push_str(t);
+                }
+            },
+            RunContent::DeferredPart(_) => {},
+        }
+    }
+}
+
+fn markdown_drawing(drawing: &DrawingInfo, out: &mut String) {
+    // A chart or diagram is not an image: render the text we recovered
+    // from the referenced part instead of an empty image link with no
+    // target.
+    let lines: Vec<&str> = drawing
+        .chart_text
+        .iter()
+        .chain(drawing.dgm_text.iter())
+        .map(String::as_str)
+        .collect();
+    if !lines.is_empty() && charge_drawing_text(&lines) {
+        if !out.is_empty() && !out.ends_with(['\n', ' ', '\t']) {
+            out.push('\n');
+        }
+        out.push_str(&lines.join("  \n"));
+        out.push('\n');
+        return;
+    }
+    // A linked picture has a real target to point at, as in the IR
+    // renderer.
+    if let Some(url) = drawing
+        .linked_image
+        .as_deref()
+        .filter(|u| crate::limits::charge_copied_text(u.len()))
+        .and_then(crate::ir_render::safe_url)
+    {
+        out.push_str("![");
+        out.push_str(&crate::core::markdown::image_alt(
+            drawing.description.as_deref().unwrap_or(""),
+        ));
+        out.push_str("](");
+        out.push_str(&crate::ir_render::escape_markdown_url(&url));
+        out.push(')');
+        return;
+    }
+    // The relationship id is not a target a markdown reader can resolve,
+    // and this renderer has no other address for the picture. Describe it
+    // with its alt text as the IR renderer does (italic, nothing when
+    // there is none) rather than emit `![alt](rId7)`.
+    if let Some(desc) = drawing.description.as_deref().filter(|d| !d.is_empty()) {
+        out.push('*');
+        out.push_str(&crate::core::markdown::escape_text(desc));
+        out.push('*');
+    }
+}
+
+fn markdown_table(table: &Table, ctx: &MarkdownCtx, out: &mut String) {
+    if table.rows.is_empty() {
+        return;
+    }
+    let layers = cell_style_layers(table, ctx.styles);
+    let in_cell = |row: usize, cell: usize| MarkdownCtx {
+        table: layers.get(row, cell),
+        ..*ctx
+    };
+    // A one-cell table holding a table is a layout frame; render what is
+    // inside it (see `ir_render::layout_frame_content`).
+    if let [row] = table.rows.as_slice()
+        && let [cell] = row.cells.as_slice()
+        && cell
+            .content
+            .iter()
+            .any(|e| matches!(e, BlockElement::Table(_)))
+    {
+        markdown_blocks(&cell.content, &in_cell(0, 0), out, 1);
+        return;
+    }
+
+    // Collect all cell texts
+    let mut row_texts: Vec<Vec<String>> = Vec::new();
+    let mut max_cols = 0usize;
+
+    for (row_idx, row) in table.rows.iter().enumerate() {
+        let mut cells: Vec<String> = Vec::new();
+        // Same tracked-changes policy as plain_text_table.
+        for (cell_idx, cell) in row.cells.iter().enumerate().filter(|(_, c)| {
+            crate::read_options::include_deleted_text()
+                || !c.properties.as_ref().is_some_and(|p| p.deleted)
+        }) {
+            // Cells keep their inline formatting, as the IR renderer's
+            // cells do; rendering them as plain text dropped every bold
+            // and italic span inside a table on this surface alone.
+            let mut cell_text = String::new();
+            markdown_blocks(&cell.content, &in_cell(row_idx, cell_idx), &mut cell_text, 1);
+            // The cell is already markdown (its own emphasis and
+            // escapes); only the line breaks still need taming, since a
+            // raw newline ends a GFM table row.
+            let cell_text = cell_text
+                .split('\n')
+                .map(str::trim)
+                .filter(|l| !l.is_empty())
+                .collect::<Vec<_>>()
+                .join("<br>");
+            cells.push(cell_text);
+        }
+        max_cols = max_cols.max(cells.len());
+        row_texts.push(cells);
+    }
+
+    // Pad rows to max_cols
+    for row in &mut row_texts {
+        while row.len() < max_cols {
+            row.push(String::new());
+        }
+    }
+
+    // Output header row
+    if let Some(first) = row_texts.first() {
+        out.push('|');
+        for cell in first {
+            out.push(' ');
+            out.push_str(cell);
+            out.push_str(" |");
+        }
+        out.push('\n');
+
+        // Separator row
+        out.push('|');
+        for _ in 0..max_cols {
+            out.push_str(" --- |");
+        }
+        out.push('\n');
+
+        // Data rows
+        for row in row_texts.iter().skip(1) {
+            out.push('|');
+            for cell in row {
+                out.push(' ');
+                out.push_str(cell);
+                out.push_str(" |");
+            }
+            out.push('\n');
+        }
+    }
+    out.push('\n');
+}
+
+fn runs_to_plain_text(runs: &[Run], ctx: HiddenCtx<'_>) -> String {
+    let mut text = String::new();
+    for run in runs {
+        plain_text_run(run, ctx, &mut text);
+    }
+    text
+}

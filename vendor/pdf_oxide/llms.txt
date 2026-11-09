@@ -1,0 +1,98 @@
+# PDF Oxide — The Fastest PDF Library for Python and Rust
+
+> The fastest PDF library for Python, Rust, Go, JavaScript/Node.js, and C#.
+> Text extraction, image extraction, PDF creation, editing, and markdown conversion.
+> 0.8ms mean per document. 100% pass rate on 3,830 real-world PDFs.
+> 5× faster than PyMuPDF, 15× faster than pypdf.
+> MIT / Apache-2.0 license. Current version: 0.3.24.
+
+- Python: `pip install pdf-oxide`
+- Rust: `cargo add pdf_oxide`
+- Go: `go get github.com/yfedoseev/pdf_oxide/go`
+- JavaScript/Node.js: `npm install pdf-oxide`
+- C#/.NET: `dotnet add package PdfOxide`
+- Documentation: https://pdf.oxide.fyi
+- Full documentation in one file: https://pdf.oxide.fyi/llms-full.txt
+
+## Getting Started
+
+- [Python Quick Start](https://raw.githubusercontent.com/yfedoseev/pdf_oxide/main/docs/getting-started-python.md): Install with pip, extract text, create PDFs, edit documents
+- [Rust Quick Start](https://raw.githubusercontent.com/yfedoseev/pdf_oxide/main/docs/getting-started-rust.md): Add to Cargo.toml, PdfDocument and Pdf APIs, error handling
+- [Go Examples](https://github.com/yfedoseev/pdf_oxide/tree/main/examples/go): 8 runnable examples covering extraction, creation, search, editing, batch processing
+- [JavaScript Examples](https://github.com/yfedoseev/pdf_oxide/tree/main/examples/javascript): 8 runnable examples for Node.js
+- [C# Examples](https://github.com/yfedoseev/pdf_oxide/tree/main/examples/csharp): 8 runnable examples for .NET
+
+## API Reference
+
+- [Rust API (docs.rs)](https://docs.rs/pdf_oxide): Complete Rust API reference with all public types and methods
+- [README](https://raw.githubusercontent.com/yfedoseev/pdf_oxide/main/README.md): Project overview, installation, quick start examples
+- [Changelog](https://raw.githubusercontent.com/yfedoseev/pdf_oxide/main/CHANGELOG.md): Version history and release notes
+
+## Performance (v0.3.24)
+
+Benchmarked on 3,830 PDFs (veraPDF, Mozilla pdf.js, DARPA SafeDocs). Text extraction libraries only (no OCR).
+
+Python: pdf_oxide 0.8ms, pypdfium2 4.1ms, PyMuPDF 4.6ms, pdftext 7.3ms, pypdf 12.1ms, pdfminer 16.8ms, pdfplumber 23.2ms, pymupdf4llm 55.5ms, markitdown 108.8ms.
+Rust: pdf_oxide 0.8ms (100% pass), lopdf 0.3ms (80% pass, no text extraction), unpdf 2.8ms (95.1%), pdf_extract 4.08ms (91.5%), oxidize_pdf 13.5ms (99.1%).
+Text quality: 99.5% parity vs PyMuPDF/pypdfium2.
+
+## Guides
+
+- [PDF Creation Guide](https://raw.githubusercontent.com/yfedoseev/pdf_oxide/main/docs/PDF_CREATION_GUIDE.md): DocumentBuilder, fonts, images, form fields, annotations
+- [Markdown Converter](https://raw.githubusercontent.com/yfedoseev/pdf_oxide/main/docs/MARKDOWN_CONVERTER_USAGE.md): PDF to Markdown conversion options
+
+## Extraction
+
+- extract_text(page_index): Extract plain text from a page
+- extract_words(page_index, region=None, word_gap_threshold=None, profile=None): Word-level extraction with bounding boxes. Optional word_gap_threshold (PDF points) overrides adaptive splitting. Optional profile (ExtractionProfile) controls span-level text parsing.
+- extract_text_lines(page_index, region=None, word_gap_threshold=None, line_gap_threshold=None, profile=None): Line-level extraction. Optional thresholds (PDF points) override adaptive word/line grouping. Optional profile controls span-level text parsing.
+- page_layout_params(page_index): Returns computed adaptive thresholds (word_gap, line_gap, median_char_width, median_font_size, etc.) for inspection.
+- ExtractionProfile: Pre-tuned profiles for document types. Pass to extract_words()/extract_text_lines() via profile= kwarg. Static methods: conservative(), aggressive(), balanced(), academic(), policy(), form(), government(), scanned_ocr(), adaptive().
+- extract_spans(page_index): Extract text with font, size, color, position metadata
+- extract_chars(page_index): Per-character extraction with bounding boxes
+- extract_images(page_index): Extract images from content streams, XObjects, inline
+- extract_paths(page_index): Extract vector graphics and paths
+- to_markdown(page_index) / to_markdown_all(): Convert pages to Markdown
+- to_html(page_index) / to_html_all(): Convert pages to HTML
+- FormField::extract_fields(): Extract form field values, export FDF/XFDF
+- get_annotations(page_index): Get all annotation types
+- get_outline(): Get document bookmarks/outline
+- TextSearcher: Regex and case-insensitive text search
+
+## Creation
+
+- Pdf::from_markdown(text): Create PDF from Markdown
+- Pdf::from_html(html): Create PDF from HTML
+- Pdf::from_image(path) / from_images(paths): Create from PNG/JPEG/TIFF
+- Pdf::from_qrcode(data) / from_barcode(data, type): QR codes and barcodes
+- PdfBuilder: Fluent API — title, author, page_size, margins, font_size, add_text, add_image
+- DocumentBuilder: Low-level — pages, text positioning, form fields, annotations, tables
+
+## Editing
+
+- DocumentEditor::open(path): Open PDF for editing
+- PdfPage DOM: find_text_containing, set_text, replace text
+- Page operations: rotate, crop, merge, extract, media_box, crop_box
+- Form editing: get/set field values, add/remove fields, flatten
+- Annotation editing: modify, flatten, redact
+- Image manipulation: reposition, resize, set_bounds
+- Encryption: save_encrypted with AES-256, password protection
+
+## Compliance
+
+- PdfAValidator / PdfAConverter: PDF/A validation and conversion
+- PdfUaValidator: PDF/UA accessibility checks
+- PdfXValidator: PDF/X print production validation
+
+## Optional
+
+- [Architecture](https://raw.githubusercontent.com/yfedoseev/pdf_oxide/main/docs/ARCHITECTURE.md): Internal architecture and design decisions
+- [Development Guide](https://raw.githubusercontent.com/yfedoseev/pdf_oxide/main/docs/DEVELOPMENT_GUIDE.md): Contributing and development setup
+
+## Links
+
+- GitHub: https://github.com/yfedoseev/pdf_oxide
+- PyPI: https://pypi.org/project/pdf-oxide/
+- crates.io: https://crates.io/crates/pdf_oxide
+- docs.rs: https://docs.rs/pdf_oxide
+- Documentation: https://pdf.oxide.fyi

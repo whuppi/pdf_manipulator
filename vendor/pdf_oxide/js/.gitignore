@@ -1,0 +1,35 @@
+# Node modules
+node_modules/
+package-lock.json
+yarn.lock
+
+# Native module
+*.node
+*.so
+*.dylib
+*.dll
+
+# npm publish staging
+dist/
+
+# Prebuilt native addons (populated by CI only)
+prebuilds/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Build artifacts
+*.o
+*.a
+*.so
+*.dylib
+*.dll
+*.exe
+
+# Testing
+test_output/
+coverage/

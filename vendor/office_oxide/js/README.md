@@ -1,0 +1,179 @@
+# office-oxide for Node.js — The Fastest Office Document Library for JavaScript & TypeScript
+
+Native Node.js bindings for [office_oxide](https://github.com/yfedoseev/office_oxide) — a fast Rust library for parsing and converting Office documents (DOCX, XLSX, PPTX, DOC, XLS, PPT), and for writing and editing DOCX, XLSX, and PPTX (the legacy binary formats are read-only, and convertible to OOXML via `saveAs`).
+
+Links directly against the Rust C FFI via [koffi](https://koffi.dev). No `node-gyp` build step. Pre-built native libraries are shipped for Linux, macOS, and Windows (x64 + arm64).
+
+[![npm](https://img.shields.io/npm/v/office-oxide?label=npm%20native)](https://www.npmjs.com/package/office-oxide)
+[![License: MIT OR Apache-2.0](https://img.shields.io/badge/License-MIT%20OR%20Apache--2.0-blue.svg)](https://opensource.org/licenses)
+
+> **Part of the [office_oxide](https://github.com/yfedoseev/office_oxide) toolkit.** Same Rust core, same pass rate as the
+> [Rust](https://docs.rs/office_oxide), [Python](../python/README.md),
+> [Go](../go/README.md), [C# / .NET](../csharp/OfficeOxide/README.md),
+> and [WASM](../wasm-pkg/README.md) bindings.
+>
+> For running in browsers, Deno, Bun, or edge runtimes, use the sibling [`office-oxide-wasm`](../wasm-pkg) package instead.
+
+## Quick Start
+
+```bash
+npm install office-oxide
+```
+
+```js
+import { Document } from 'office-oxide';
+
+const doc = Document.open('report.docx');
+try {
+  console.log(doc.format);       // "docx"
+  console.log(doc.plainText());
+  console.log(doc.toMarkdown());
+  console.log(doc.toIr());       // structured, format-agnostic IR
+} finally { doc.close(); }
+```
+
+With the disposable protocol (Node 22+):
+
+```js
+using doc = Document.open('report.docx');
+console.log(doc.plainText());
+```
+
+## Why office-oxide?
+
+- **Fast** — 1.7ms mean DOCX, 6.2ms mean XLSX, 2.6ms mean PPTX; 5–10× faster than python-docx / openpyxl / python-pptx
+- **Reliable** — opens 97.3% of a 10,386-file test collection; the rest are encrypted, truncated or corrupt files
+- **Complete** — 6 formats: DOCX, XLSX, PPTX + legacy DOC, XLS, PPT
+- **Permissive** — MIT / Apache-2.0, no AGPL or GPL restrictions
+- **No node-gyp** — Ships pre-built native libraries; no C++ build toolchain required
+- **Full TypeScript support** — Type definitions ship in the package
+
+## Performance
+
+Benchmarked on 10,386 files (the project's test collection). Single-thread, release build, warm disk cache.
+
+| Library | Format | Mean | Pass Rate | License |
+|---------|--------|------|-----------|---------|
+| **office_oxide** | **DOCX** | **1.7ms** | **98.7%** | **MIT** |
+| python-docx | DOCX | 9.5ms | 95.7% | MIT |
+| **office_oxide** | **XLSX** | **6.2ms** | **98.6%** | **MIT** |
+| openpyxl | XLSX | 60.7ms | 96.0% | MIT |
+| **office_oxide** | **PPTX** | **2.6ms** | **98.1%** | **MIT** |
+| python-pptx | PPTX | 13.4ms | 90.0% | MIT |
+
+## Installation
+
+```bash
+npm install office-oxide
+```
+
+The native shared library is resolved (in order):
+
+1. `OFFICE_OXIDE_LIB` environment variable (absolute path).
+2. `prebuilds/<platform>-<arch>/liboffice_oxide.{so|dylib|dll}` inside the npm package.
+3. The system library search path.
+
+| Platform | x64 | ARM64 |
+|---|---|---|
+| Linux (glibc) | Yes | Yes |
+| macOS | Yes | Yes (Apple Silicon) |
+| Windows | Yes | Yes |
+
+Requires Node.js 18 or newer. TypeScript definitions ship in the package.
+
+## Editing
+
+Only DOCX, XLSX, and PPTX are editable; DOC, XLS, and PPT are read-only.
+
+```js
+import { EditableDocument } from 'office-oxide';
+
+using ed = EditableDocument.open('template.docx');
+ed.replaceText('{{NAME}}', 'Alice');
+ed.save('out.docx');
+```
+
+### Spreadsheet cells
+
+```js
+using ed = EditableDocument.open('report.xlsx');
+ed.setCell(0, 'A1', 'Revenue');
+ed.setCell(0, 'B1', 12345.67);
+ed.setCell(0, 'C1', true);
+ed.save('report.edited.xlsx');
+```
+
+## One-shot helpers
+
+```js
+import { extractText, toMarkdown, toHtml } from 'office-oxide';
+
+console.log(extractText('doc.docx'));
+console.log(toMarkdown('deck.pptx'));
+console.log(toHtml('data.xlsx'));
+```
+
+## API
+
+TypeScript definitions ship with the package (`office-oxide/lib/index.d.ts`).
+
+| Export | Description |
+| --- | --- |
+| `Document.open(path)` / `fromBytes(data, format)` | Parse a read-only document. |
+| `Document#format` | `"docx" \| "xlsx" \| …` |
+| `Document#plainText()` / `toMarkdown()` / `toHtml()` / `toIr()` | Extraction methods. |
+| `Document#toMarkdownWithImages()` | Markdown with each image inline as `[image-base64:…]`. |
+| `Document#saveAs(path)` | Save/convert to a different format. |
+| `EditableDocument.open(path)` / `fromBytes(data, format)` | Open DOCX/XLSX/PPTX for editing. |
+| `EditableDocument#replaceText(find, replace)` | In-place replace. Returns count; an empty `find` throws. |
+| `EditableDocument#setCell(sheet, ref, value)` | Write an XLSX cell. |
+| `EditableDocument#save(path)` / `toBytes()` | Persist to disk (atomically) or to a `Buffer`. |
+| `XlsxWriter` / `PptxWriter` | Build workbooks and decks from scratch. A write that lands nowhere (missing sheet/slide, cell outside the grid) throws. |
+| `XlsxWriter#setFormula(sheet, row, col, formula)` / `new Formula(f)` | Formula cells; a plain string starting with `=` stays text. |
+| `version()` / `detectFormat(path)` | Library info. |
+| `extractText(path)` / `toMarkdown(path)` / `toHtml(path)` | One-shot helpers. |
+| `createFromMarkdown(markdown, format, path)` | Markdown → DOCX/XLSX/PPTX. |
+
+## Other languages
+
+office_oxide ships the same Rust core through six bindings:
+
+- **Rust** — `cargo add office_oxide` — see [docs.rs/office_oxide](https://docs.rs/office_oxide)
+- **Python** — `pip install office-oxide` — see [python/README.md](../python/README.md)
+- **Go** — `go get github.com/yfedoseev/office_oxide/go` — see [go/README.md](../go/README.md)
+- **C# / .NET** — `dotnet add package OfficeOxide` — see [csharp/OfficeOxide/README.md](../csharp/OfficeOxide/README.md)
+- **WASM** — `npm install office-oxide-wasm` — see [wasm-pkg/README.md](../wasm-pkg/README.md)
+
+## Why I built this
+
+I needed a library that could read all six Office formats at once — not six separate packages — and I needed it without pulling in a JVM, a Python runtime, or a GPL-licensed dependency. The same Rust binary powers Python via PyO3, Node.js via koffi, Go via cgo, C# via P/Invoke, and the browser via WASM — one fix lands everywhere.
+
+If something's broken or missing, [open an issue](https://github.com/yfedoseev/office_oxide/issues).
+
+— Yury
+
+## Per-document options and limits
+
+```js
+import { Document, ParseOptions, OfficeOxideError } from 'office-oxide';
+
+const opts = new ParseOptions({ strict: true, text_chars: 5_000_000 }); // error if incomplete
+try {
+  const doc = Document.open('upload.docx', opts);
+} catch (e) {
+  if (e instanceof OfficeOxideError && e.code === 7) console.log('refused:', e.message);
+}
+const doc = Document.fromBytes(bytes, 'xlsx');   // default: read what can be read
+console.log(doc.damage());                       // [{ kind, part, detail }], empty when sound
+```
+
+The options belong to the document: nothing global changes. `ParseOptions.names()`
+lists every option. Call `close()` on options and documents when done.
+
+## License
+
+MIT OR Apache-2.0
+
+---
+
+**Node.js** + **Rust core** | MIT / Apache-2.0 | Opens 97.3% of a 10,386-file test collection | 5–10× faster than the common Python libraries | 6 formats

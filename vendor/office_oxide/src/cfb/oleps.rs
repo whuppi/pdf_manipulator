@@ -1,0 +1,722 @@
+//! Minimal [MS-OLEPS] (OLE Property Set) decoder for the
+//! `\x05SummaryInformation` stream every legacy `.doc`/`.xls`/`.ppt` file
+//! carries by default.
+//!
+//! Only the handful of well-known `PIDSI_*` properties `Metadata` has
+//! fields for are decoded — title, subject, author, keywords, comments
+//! and the two `FILETIME` dates. This is deliberately not a general
+//! OLEPS/VARIANT decoder: no vectors, arrays or non-simple
+//! (storage-backed) properties. `VT_LPSTR` bytes are decoded in the
+//! property set's own code page (`PID_CODEPAGE`, [MS-OLEPS] §2.18.2),
+//! Windows-1252 when it declares none: a Bulgarian title read as Latin-1
+//! came out as `ðóñåíñêè êëóá`.
+//!
+//! Byte layouts verified against the published [MS-OLEPS] spec pages
+//! (PropertySetStream, PropertySet, PropertyIdentifierAndOffset,
+//! TypedPropertyValue, CodePageString, UnicodeString) rather than
+//! recalled from memory — a wrong offset here produces silently wrong
+//! metadata, not a caught error, and this format has a real CVE history
+//! (integer overflow in offset arithmetic) in peer implementations.
+
+/// `FMTID_SummaryInformation`, {F29F85E0-4FF9-1068-AB91-08002B27B3D9}
+/// ([MS-OLEPS] §1.9 / §2.25.1), in its on-disk GUID byte order (the first
+/// three fields little-endian).
+const FMTID_SUMMARY_INFORMATION: [u8; 16] = [
+    0xE0, 0x85, 0x9F, 0xF2, 0xF9, 0x4F, 0x68, 0x10, 0xAB, 0x91, 0x08, 0x00, 0x2B, 0x27, 0xB3, 0xD9,
+];
+
+/// `FMTID_DocSummaryInformation`, {D5CDD502-2E9C-101B-9397-08002B2CF9AE}
+/// ([MS-OLEPS] §1.9 / §2.25.3), the first property set of the
+/// `\x05DocumentSummaryInformation` stream, in on-disk GUID byte order.
+const FMTID_DOC_SUMMARY_INFORMATION: [u8; 16] = [
+    0x02, 0xD5, 0xCD, 0xD5, 0x9C, 0x2E, 0x1B, 0x10, 0x93, 0x97, 0x08, 0x00, 0x2B, 0x2C, 0xF9, 0xAE,
+];
+
+/// Well-known property IDs in the `SummaryInformation` FMTID
+/// ({F29F85E0-4FF9-1068-AB91-08002B27B3D9}), [MS-OLEPS] §2.16.
+/// `PID_CODEPAGE` ([MS-OLEPS] §2.18.2): the code page of every
+/// `CodePageString` in the set, a `VT_I2`.
+const PID_CODEPAGE: u32 = 1;
+const VT_I2: u16 = 0x0002;
+/// `CP_WINUNICODE`: a `CodePageString` whose bytes are UTF-16LE.
+const CP_WINUNICODE: u16 = 1200;
+const PIDSI_TITLE: u32 = 2;
+const PIDSI_SUBJECT: u32 = 3;
+const PIDSI_AUTHOR: u32 = 4;
+const PIDSI_KEYWORDS: u32 = 5;
+const PIDSI_COMMENTS: u32 = 6;
+/// `PIDSI_LASTAUTHOR` ([MS-OSHARED] §2.3.3.2.1): the last user to save.
+const PIDSI_LASTAUTHOR: u32 = 8;
+/// `PIDSI_REVNUMBER` ([MS-OSHARED] §2.3.3.2.1): the revision number.
+const PIDSI_REVNUMBER: u32 = 9;
+const PIDSI_CREATE_DTM: u32 = 12;
+const PIDSI_LASTSAVE_DTM: u32 = 13;
+
+// Property IDs of the `DocumentSummaryInformation` FMTID
+// ({D5CDD502-2E9C-101B-9397-08002B2CF9AE}), [MS-OSHARED] §2.3.3.2.2.
+/// `PIDDSI_CATEGORY`: the document category.
+const PIDDSI_CATEGORY: u32 = 0x02;
+/// `PIDDSI_MANAGER`: the author's manager.
+const PIDDSI_MANAGER: u32 = 0x0E;
+/// `PIDDSI_COMPANY`: the company.
+const PIDDSI_COMPANY: u32 = 0x0F;
+
+const VT_LPSTR: u16 = 0x001E;
+const VT_LPWSTR: u16 = 0x001F;
+const VT_FILETIME: u16 = 0x0040;
+
+/// The subset of `SummaryInformation` this crate's `Metadata` has fields
+/// for. `None` for a field means the property was absent, not that
+/// parsing failed — a stream that declares only 3 of the 7 properties is
+/// normal, not malformed.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SummaryProperties {
+    /// `PIDSI_TITLE` (2).
+    pub title: Option<String>,
+    /// `PIDSI_SUBJECT` (3).
+    pub subject: Option<String>,
+    /// `PIDSI_AUTHOR` (4).
+    pub author: Option<String>,
+    /// `PIDSI_KEYWORDS` (5).
+    pub keywords: Option<String>,
+    /// `PIDSI_COMMENTS` (6).
+    pub comments: Option<String>,
+    /// `PIDSI_CREATE_DTM` (12), ISO-8601 (`YYYY-MM-DDTHH:MM:SSZ`),
+    /// converted from the raw `FILETIME` (100-ns ticks since 1601-01-01
+    /// UTC).
+    pub created: Option<String>,
+    /// `PIDSI_LASTSAVE_DTM` (13). See `created`.
+    pub modified: Option<String>,
+    /// `PIDSI_LASTAUTHOR` (8).
+    pub last_author: Option<String>,
+    /// `PIDSI_REVNUMBER` (9).
+    pub revision: Option<String>,
+    /// `PIDDSI_CATEGORY`, from `\x05DocumentSummaryInformation`.
+    pub category: Option<String>,
+    /// `PIDDSI_MANAGER`, from `\x05DocumentSummaryInformation`.
+    pub manager: Option<String>,
+    /// `PIDDSI_COMPANY`, from `\x05DocumentSummaryInformation`.
+    pub company: Option<String>,
+    /// The compound file holds a document signature: a root `_signatures`
+    /// storage (CryptoAPI signature, [MS-OFFCRYPTO] §2.5.1) or
+    /// `_xmlsignatures` storage (XML signature, [MS-OFFCRYPTO] §2.5.2).
+    pub has_digital_signature: bool,
+}
+
+impl SummaryProperties {
+    fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+
+    /// Fill every field `self` lacks from `other`.
+    fn merge(&mut self, other: SummaryProperties) {
+        let fill = |a: &mut Option<String>, b: Option<String>| {
+            if a.is_none() {
+                *a = b;
+            }
+        };
+        fill(&mut self.title, other.title);
+        fill(&mut self.subject, other.subject);
+        fill(&mut self.author, other.author);
+        fill(&mut self.keywords, other.keywords);
+        fill(&mut self.comments, other.comments);
+        fill(&mut self.created, other.created);
+        fill(&mut self.modified, other.modified);
+        fill(&mut self.last_author, other.last_author);
+        fill(&mut self.revision, other.revision);
+        fill(&mut self.category, other.category);
+        fill(&mut self.manager, other.manager);
+        fill(&mut self.company, other.company);
+        self.has_digital_signature |= other.has_digital_signature;
+    }
+}
+
+/// Read every document-level property a legacy compound file carries:
+/// the `\x05SummaryInformation` and `\x05DocumentSummaryInformation`
+/// property sets and the presence of a document signature. `None` when
+/// none of them yields anything.
+pub fn read_document_properties<R: std::io::Read + std::io::Seek>(
+    cfb: &mut super::CfbReader<R>,
+) -> Option<SummaryProperties> {
+    let mut props = cfb
+        .open_stream("\u{5}SummaryInformation")
+        .ok()
+        .and_then(|data| parse_summary_information(&data))
+        .unwrap_or_default();
+    if let Some(dsi) = cfb
+        .open_stream("\u{5}DocumentSummaryInformation")
+        .ok()
+        .and_then(|data| parse_document_summary_information(&data))
+    {
+        props.merge(dsi);
+    }
+    props.has_digital_signature =
+        cfb.has_root_entry("_signatures") || cfb.has_root_entry("_xmlsignatures");
+    (!props.is_empty()).then_some(props)
+}
+
+/// Parse a `\x05DocumentSummaryInformation` stream's first property set
+/// (the `DocumentSummaryInformation` FMTID; the optional second set holds
+/// user-defined properties). Same failure policy as
+/// [`parse_summary_information`].
+pub fn parse_document_summary_information(data: &[u8]) -> Option<SummaryProperties> {
+    let offset = property_set_offset(data, &FMTID_DOC_SUMMARY_INFORMATION)?;
+    let props = parse_property_set(data, offset, |p, id| match id {
+        PIDDSI_CATEGORY => Some(&mut p.category),
+        PIDDSI_MANAGER => Some(&mut p.manager),
+        PIDDSI_COMPANY => Some(&mut p.company),
+        _ => None,
+    })?;
+    if props.is_empty() { None } else { Some(props) }
+}
+
+/// Which string field of `SummaryProperties` a property id fills.
+type StringSlot = fn(&mut SummaryProperties, u32) -> Option<&mut Option<String>>;
+
+/// Parse a `\x05SummaryInformation` stream's raw bytes.
+///
+/// Returns `None` for a stream that is missing, too short, carries the
+/// wrong byte-order marker, or ends up with none of the 7 tracked
+/// properties resolved — every failure mode here means "no metadata
+/// recovered", never a panic or an out-of-bounds read: every offset is
+/// checked against the buffer length before use.
+pub fn parse_summary_information(data: &[u8]) -> Option<SummaryProperties> {
+    let offset = property_set_offset(data, &FMTID_SUMMARY_INFORMATION)?;
+    let props = parse_property_set(data, offset, |p, id| match id {
+        PIDSI_TITLE => Some(&mut p.title),
+        PIDSI_SUBJECT => Some(&mut p.subject),
+        PIDSI_AUTHOR => Some(&mut p.author),
+        PIDSI_KEYWORDS => Some(&mut p.keywords),
+        PIDSI_COMMENTS => Some(&mut p.comments),
+        PIDSI_LASTAUTHOR => Some(&mut p.last_author),
+        PIDSI_REVNUMBER => Some(&mut p.revision),
+        _ => None,
+    })?;
+    if props.is_empty() { None } else { Some(props) }
+}
+
+/// The offset of the property set with FMTID `fmtid` in a
+/// PropertySetStream.
+///
+/// Property IDs mean title/author/... only within their own FMTID; the same
+/// IDs in any other set are different properties. The set is found by FMTID
+/// among the FMTID/offset pairs actually present, rather than taking
+/// whichever set comes first.
+fn property_set_offset(data: &[u8], fmtid: &[u8; 16]) -> Option<usize> {
+    // PropertySetStream header ([MS-OLEPS] §2.21):
+    // ByteOrder(2) Version(2) SystemIdentifier(4) CLSID(16) NumPropertySets(4)
+    // then, per property set: FMTID(16) Offset(4).
+    if data.len() < 28 {
+        return None;
+    }
+    let byte_order = u16::from_le_bytes([data[0], data[1]]);
+    if byte_order != 0xFFFE {
+        return None;
+    }
+    let num_property_sets = u32::from_le_bytes([data[24], data[25], data[26], data[27]]) as usize;
+    let pairs_present = (data.len() - 28) / 20;
+    (0..num_property_sets.min(pairs_present)).find_map(|i| {
+        let at = 28 + i * 20;
+        (data[at..at + 16] == *fmtid).then(|| {
+            u32::from_le_bytes([data[at + 16], data[at + 17], data[at + 18], data[at + 19]])
+                as usize
+        })
+    })
+}
+
+/// Parse one PropertySet packet ([MS-OLEPS] §2.17) at `base` within
+/// `data`, storing each string property `slot` maps to a field. The two
+/// `FILETIME` dates are `SummaryInformation` ids and are read only when a
+/// `VT_FILETIME` value sits under them.
+fn parse_property_set(data: &[u8], base: usize, slot: StringSlot) -> Option<SummaryProperties> {
+    // Size(4) NumProperties(4) then NumProperties * PropertyIdentifierAndOffset(8).
+    let header_end = base.checked_add(8)?;
+    if data.len() < header_end {
+        return None;
+    }
+    let num_properties = u32::from_le_bytes([
+        data[base + 4],
+        data[base + 5],
+        data[base + 6],
+        data[base + 7],
+    ]) as usize;
+    // A hostile stream can claim billions of properties; bound the work
+    // by the PropertyIdentifierAndOffset entries the bytes can hold, not
+    // by a fixed count that would drop genuine properties past it.
+    let num_properties = num_properties.min((data.len() - header_end) / 8);
+
+    let entries: Vec<(u32, usize)> = (0..num_properties)
+        .filter_map(|i| {
+            let entry = header_end.checked_add(i.checked_mul(8)?)?;
+            if data.len() < entry + 8 {
+                return None;
+            }
+            let id = u32::from_le_bytes([
+                data[entry],
+                data[entry + 1],
+                data[entry + 2],
+                data[entry + 3],
+            ]);
+            let rel_offset = u32::from_le_bytes([
+                data[entry + 4],
+                data[entry + 5],
+                data[entry + 6],
+                data[entry + 7],
+            ]) as usize;
+            // Offset is relative to the start of *this* PropertySet packet
+            // (i.e. `base`, where its own Size field begins), not the stream.
+            Some((id, base.checked_add(rel_offset)?))
+        })
+        .collect();
+    // The code page applies to every string in the set wherever it is
+    // listed, so find it before decoding any.
+    let codepage = entries
+        .iter()
+        .find(|(id, _)| *id == PID_CODEPAGE)
+        .and_then(|&(_, at)| read_i2(data, at))
+        .map(|v| v as u16)
+        .unwrap_or(1252);
+
+    let mut out = SummaryProperties::default();
+    for (id, value_at) in entries {
+        let field = match id {
+            PIDSI_CREATE_DTM => {
+                out.created = read_filetime(data, value_at);
+                continue;
+            },
+            PIDSI_LASTSAVE_DTM => {
+                out.modified = read_filetime(data, value_at);
+                continue;
+            },
+            _ => match slot(&mut out, id) {
+                Some(field) => field,
+                None => continue,
+            },
+        };
+        if let Some(s) = read_string(data, value_at, codepage) {
+            if !s.is_empty() {
+                *field = Some(s);
+            }
+        }
+    }
+    Some(out)
+}
+
+/// Read a `VT_I2` `TypedPropertyValue` at `pos`.
+fn read_i2(data: &[u8], pos: usize) -> Option<i16> {
+    if data.len() < pos + 6 {
+        return None;
+    }
+    let ty = u16::from_le_bytes([data[pos], data[pos + 1]]);
+    (ty == VT_I2).then(|| i16::from_le_bytes([data[pos + 4], data[pos + 5]]))
+}
+
+/// Read a `TypedPropertyValue` whose `Type` is `VT_LPSTR` or `VT_LPWSTR`
+/// at `pos`. Any other `Type` (or an out-of-bounds `pos`) yields `None`
+/// rather than misreading unrelated bytes as text.
+fn read_string(data: &[u8], pos: usize, codepage: u16) -> Option<String> {
+    if data.len() < pos + 4 {
+        return None;
+    }
+    let ty = u16::from_le_bytes([data[pos], data[pos + 1]]);
+    let value_start = pos + 4; // past Type(2) + Padding(2)
+    match ty {
+        VT_LPSTR => {
+            // CodePageString: cch(4, includes the NUL, excludes padding)
+            // then that many single bytes.
+            if data.len() < value_start + 4 {
+                return None;
+            }
+            let cch = u32::from_le_bytes([
+                data[value_start],
+                data[value_start + 1],
+                data[value_start + 2],
+                data[value_start + 3],
+            ]) as usize;
+            let cch = cch.min(1 << 20); // 1M-char cap against a hostile length
+            let start = value_start + 4;
+            let end = start.checked_add(cch)?;
+            if data.len() < end {
+                return None;
+            }
+            let bytes = &data[start..end];
+            let s = if codepage == CP_WINUNICODE {
+                let units: Vec<u16> = bytes
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .map(|c| u16::from_le_bytes(*c))
+                    .collect();
+                String::from_utf16_lossy(&units)
+            } else {
+                crate::core::codepage::decode_windows_codepage(bytes, codepage)
+            };
+            // Strip the NUL terminator `cch` includes.
+            Some(s.trim_end_matches('\0').to_string())
+        },
+        VT_LPWSTR => {
+            // UnicodeString: Length(4, UTF-16 code units, includes the
+            // NUL, excludes padding) then that many UTF-16LE units.
+            if data.len() < value_start + 4 {
+                return None;
+            }
+            let len = u32::from_le_bytes([
+                data[value_start],
+                data[value_start + 1],
+                data[value_start + 2],
+                data[value_start + 3],
+            ]) as usize;
+            let len = len.min(1 << 20);
+            let start = value_start + 4;
+            let byte_len = len.checked_mul(2)?;
+            let end = start.checked_add(byte_len)?;
+            if data.len() < end {
+                return None;
+            }
+            let units: Vec<u16> = data[start..end]
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|c| u16::from_le_bytes(*c))
+                .collect();
+            let s = String::from_utf16_lossy(&units);
+            Some(s.trim_end_matches('\0').to_string())
+        },
+        _ => None,
+    }
+}
+
+/// Read a `TypedPropertyValue` whose `Type` is `VT_FILETIME` at `pos`,
+/// converted to an ISO-8601 UTC string. `None` for any other `Type`, an
+/// out-of-bounds `pos`, or a zero `FILETIME` (Office writes an all-zero
+/// value for "no date", not the 1601 epoch).
+fn read_filetime(data: &[u8], pos: usize) -> Option<String> {
+    if data.len() < pos + 12 {
+        return None;
+    }
+    let ty = u16::from_le_bytes([data[pos], data[pos + 1]]);
+    if ty != VT_FILETIME {
+        return None;
+    }
+    let value_start = pos + 4;
+    let low = u32::from_le_bytes([
+        data[value_start],
+        data[value_start + 1],
+        data[value_start + 2],
+        data[value_start + 3],
+    ]);
+    let high = u32::from_le_bytes([
+        data[value_start + 4],
+        data[value_start + 5],
+        data[value_start + 6],
+        data[value_start + 7],
+    ]);
+    let ticks = ((high as u64) << 32) | (low as u64);
+    filetime_to_iso8601(ticks)
+}
+
+/// Convert a Windows `FILETIME` (100-ns ticks since 1601-01-01 00:00:00
+/// UTC) to an ISO-8601 string, without pulling in a date/time crate this
+/// project otherwise has no need for.
+fn filetime_to_iso8601(ticks: u64) -> Option<String> {
+    if ticks == 0 {
+        return None;
+    }
+    const TICKS_PER_SEC: u64 = 10_000_000;
+    // Seconds between the FILETIME epoch (1601-01-01) and the Unix epoch
+    // (1970-01-01): 11,644,473,600, per [MS-DTYP] §2.3.3.
+    const EPOCH_DELTA_SECS: u64 = 11_644_473_600;
+    let total_secs = ticks / TICKS_PER_SEC;
+    let unix_secs = total_secs.checked_sub(EPOCH_DELTA_SECS)?;
+
+    let days = unix_secs / 86_400;
+    let secs_of_day = unix_secs % 86_400;
+    let (hour, minute, second) = (secs_of_day / 3600, (secs_of_day / 60) % 60, secs_of_day % 60);
+    let (year, month, day) = civil_from_days(days as i64);
+    Some(format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z"))
+}
+
+/// Days-since-1970-01-01 to (year, month, day), Howard Hinnant's
+/// `civil_from_days` algorithm (public domain) — proleptic Gregorian,
+/// correct for the full range any real document date falls in.
+fn civil_from_days(z: i64) -> (i64, u32, u32) {
+    let z = z + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = (z - era * 146_097) as u64; // [0, 146096]
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365; // [0, 399]
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
+    let mp = (5 * doy + 2) / 153; // [0, 11]
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32; // [1, 31]
+    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32; // [1, 12]
+    let y = if m <= 2 { y + 1 } else { y };
+    (y, m, d)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Build a minimal, valid `SummaryInformation` stream with exactly
+    /// the properties in `props`, each `(id, TypedPropertyValue bytes)`.
+    fn build_stream(props: &[(u32, Vec<u8>)]) -> Vec<u8> {
+        build_stream_with_fmtid(&FMTID_SUMMARY_INFORMATION, props)
+    }
+
+    fn build_stream_with_fmtid(fmtid: &[u8; 16], props: &[(u32, Vec<u8>)]) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend_from_slice(&0xFFFEu16.to_le_bytes()); // ByteOrder
+        out.extend_from_slice(&0u16.to_le_bytes()); // Version
+        out.extend_from_slice(&0u32.to_le_bytes()); // SystemIdentifier
+        out.extend_from_slice(&[0u8; 16]); // CLSID
+        out.extend_from_slice(&1u32.to_le_bytes()); // NumPropertySets
+
+        // FMTID + Offset.
+        let fmtid_and_offset_pos = out.len();
+        out.extend_from_slice(fmtid);
+        out.extend_from_slice(&0u32.to_le_bytes()); // Offset placeholder
+        let property_set_offset = out.len() as u32;
+        out[fmtid_and_offset_pos + 16..fmtid_and_offset_pos + 20]
+            .copy_from_slice(&property_set_offset.to_le_bytes());
+
+        // PropertySet: Size, NumProperties, then the
+        // PropertyIdentifierAndOffset array, then the values.
+        let size_pos = out.len();
+        out.extend_from_slice(&0u32.to_le_bytes()); // Size placeholder
+        out.extend_from_slice(&(props.len() as u32).to_le_bytes());
+
+        let header_len = 8 + props.len() * 8;
+        let mut value_offset = header_len;
+        for (id, value) in props {
+            out.extend_from_slice(&id.to_le_bytes());
+            out.extend_from_slice(&(value_offset as u32).to_le_bytes());
+            value_offset += value.len();
+        }
+        for (_, value) in props {
+            out.extend_from_slice(value);
+        }
+        let total_size = out.len() - size_pos;
+        out[size_pos..size_pos + 4].copy_from_slice(&(total_size as u32).to_le_bytes());
+        out
+    }
+
+    fn lpstr(s: &str) -> Vec<u8> {
+        let mut v = Vec::new();
+        v.extend_from_slice(&VT_LPSTR.to_le_bytes());
+        v.extend_from_slice(&0u16.to_le_bytes()); // padding
+        let cch = (s.len() + 1) as u32; // + NUL
+        v.extend_from_slice(&cch.to_le_bytes());
+        v.extend_from_slice(s.as_bytes());
+        v.push(0); // NUL terminator
+        while v.len() % 4 != 0 {
+            v.push(0);
+        }
+        v
+    }
+
+    fn lpwstr(s: &str) -> Vec<u8> {
+        let mut v = Vec::new();
+        v.extend_from_slice(&VT_LPWSTR.to_le_bytes());
+        v.extend_from_slice(&0u16.to_le_bytes());
+        let units: Vec<u16> = s.encode_utf16().collect();
+        let len = (units.len() + 1) as u32; // + NUL
+        v.extend_from_slice(&len.to_le_bytes());
+        for u in &units {
+            v.extend_from_slice(&u.to_le_bytes());
+        }
+        v.extend_from_slice(&0u16.to_le_bytes()); // NUL terminator
+        while v.len() % 4 != 0 {
+            v.push(0);
+        }
+        v
+    }
+
+    fn filetime(ticks: u64) -> Vec<u8> {
+        let mut v = Vec::new();
+        v.extend_from_slice(&VT_FILETIME.to_le_bytes());
+        v.extend_from_slice(&0u16.to_le_bytes());
+        v.extend_from_slice(&(ticks as u32).to_le_bytes());
+        v.extend_from_slice(&((ticks >> 32) as u32).to_le_bytes());
+        v
+    }
+
+    #[test]
+    fn test_decodes_lpstr_title_and_author() {
+        let stream = build_stream(&[
+            (PIDSI_TITLE, lpstr("Hello World")),
+            (PIDSI_AUTHOR, lpstr("Jane Doe")),
+        ]);
+        let props = parse_summary_information(&stream).expect("must parse");
+        assert_eq!(props.title.as_deref(), Some("Hello World"));
+        assert_eq!(props.author.as_deref(), Some("Jane Doe"));
+        assert!(props.subject.is_none());
+    }
+
+    fn lpstr_bytes(bytes: &[u8]) -> Vec<u8> {
+        let mut v = Vec::new();
+        v.extend_from_slice(&VT_LPSTR.to_le_bytes());
+        v.extend_from_slice(&0u16.to_le_bytes());
+        v.extend_from_slice(&((bytes.len() + 1) as u32).to_le_bytes());
+        v.extend_from_slice(bytes);
+        v.push(0);
+        while v.len() % 4 != 0 {
+            v.push(0);
+        }
+        v
+    }
+
+    fn i2(value: i16) -> Vec<u8> {
+        let mut v = Vec::new();
+        v.extend_from_slice(&VT_I2.to_le_bytes());
+        v.extend_from_slice(&0u16.to_le_bytes());
+        v.extend_from_slice(&value.to_le_bytes());
+        v.extend_from_slice(&0u16.to_le_bytes());
+        v
+    }
+
+    /// A `CodePageString` is in the set's `PID_CODEPAGE`, not Latin-1: a
+    /// Cyrillic title in a Windows-1251 set read as `ðóñåíñêè êëóá`.
+    #[test]
+    fn test_lpstr_is_decoded_in_the_sets_code_page() {
+        // "Русе" in Windows-1251.
+        let ruse = [0xD0u8, 0xF3, 0xF1, 0xE5];
+        let stream = build_stream(&[(PID_CODEPAGE, i2(1251)), (PIDSI_TITLE, lpstr_bytes(&ruse))]);
+        let props = parse_summary_information(&stream).expect("must parse");
+        assert_eq!(props.title.as_deref(), Some("Русе"));
+
+        // The code page applies wherever in the set it is listed.
+        let stream = build_stream(&[(PIDSI_TITLE, lpstr_bytes(&ruse)), (PID_CODEPAGE, i2(1251))]);
+        assert_eq!(parse_summary_information(&stream).unwrap().title.as_deref(), Some("Русе"));
+
+        // No code page: Windows-1252, whose 0x80-0x9F row is punctuation.
+        let stream = build_stream(&[(PIDSI_TITLE, lpstr_bytes(&[b'A', 0x96, b'B']))]);
+        assert_eq!(parse_summary_information(&stream).unwrap().title.as_deref(), Some("A–B"));
+
+        // CP_WINUNICODE: the bytes are UTF-16LE.
+        let utf16: Vec<u8> = "Café".encode_utf16().flat_map(u16::to_le_bytes).collect();
+        let stream = build_stream(&[(PID_CODEPAGE, i2(1200)), (PIDSI_TITLE, lpstr_bytes(&utf16))]);
+        assert_eq!(parse_summary_information(&stream).unwrap().title.as_deref(), Some("Café"));
+    }
+
+    #[test]
+    fn test_decodes_lpwstr_unicode_title() {
+        let stream = build_stream(&[(PIDSI_TITLE, lpwstr("Café Résumé"))]);
+        let props = parse_summary_information(&stream).expect("must parse");
+        assert_eq!(props.title.as_deref(), Some("Café Résumé"));
+    }
+
+    #[test]
+    fn test_decodes_filetime_dates() {
+        // 2006-09-05T00:00:00Z, a value already used as a reference date
+        // elsewhere in this crate's own XLS date tests.
+        // Unix seconds for 2006-09-05T00:00:00Z = 1157414400.
+        let ticks = (1_157_414_400u64 + 11_644_473_600) * 10_000_000;
+        let stream = build_stream(&[(PIDSI_CREATE_DTM, filetime(ticks))]);
+        let props = parse_summary_information(&stream).expect("must parse");
+        assert_eq!(props.created.as_deref(), Some("2006-09-05T00:00:00Z"));
+    }
+
+    #[test]
+    fn test_zero_filetime_is_none_not_the_1601_epoch() {
+        let stream = build_stream(&[(PIDSI_CREATE_DTM, filetime(0))]);
+        // Every other property absent too, and a zero FILETIME resolves
+        // to None, so this whole stream carries nothing usable.
+        assert!(parse_summary_information(&stream).is_none());
+    }
+
+    #[test]
+    fn test_wrong_byte_order_is_rejected() {
+        let mut stream = build_stream(&[(PIDSI_TITLE, lpstr("x"))]);
+        stream[0] = 0x00;
+        stream[1] = 0x00;
+        assert!(parse_summary_information(&stream).is_none());
+    }
+
+    #[test]
+    fn test_truncated_stream_does_not_panic() {
+        let stream = build_stream(&[(PIDSI_TITLE, lpstr("Hello World"))]);
+        for cut in 0..stream.len() {
+            let _ = parse_summary_information(&stream[..cut]);
+        }
+    }
+
+    #[test]
+    fn test_empty_stream_is_none() {
+        assert!(parse_summary_information(&[]).is_none());
+    }
+
+    #[test]
+    fn test_unknown_property_ids_are_ignored_not_misread() {
+        let stream = build_stream(&[
+            (999, lpstr("unrelated property")),
+            (PIDSI_SUBJECT, lpstr("Real Subject")),
+        ]);
+        let props = parse_summary_information(&stream).expect("must parse");
+        assert_eq!(props.subject.as_deref(), Some("Real Subject"));
+    }
+
+    /// Only the `SummaryInformation` FMTID's property IDs mean title,
+    /// author and so on; the same IDs in another property set (here the
+    /// `DocumentSummaryInformation` FMTID, where PID 2 is the category)
+    /// were read as if they did.
+    #[test]
+    fn test_property_set_with_another_fmtid_is_not_read_as_summary_information() {
+        let doc_summary: [u8; 16] = [
+            0x02, 0xD5, 0xCD, 0xD5, 0x9C, 0x2E, 0x1B, 0x10, 0x93, 0x97, 0x08, 0x00, 0x2B, 0x2C,
+            0xF9, 0xAE,
+        ];
+        let data = build_stream_with_fmtid(&doc_summary, &[(PIDSI_TITLE, lpstr("Category"))]);
+        assert_eq!(parse_summary_information(&data), None);
+    }
+
+    /// The `SummaryInformation` set is found by FMTID, not by position:
+    /// here it is the second of two property sets.
+    #[test]
+    fn test_summary_information_set_is_found_by_fmtid() {
+        let other = [0x11u8; 16];
+        let wrong = build_stream_with_fmtid(&other, &[(PIDSI_TITLE, lpstr("Wrong"))]);
+        let real = build_stream(&[(PIDSI_TITLE, lpstr("Real"))]);
+        // Header, two FMTID/offset pairs, then both packets.
+        let mut data = real[..24].to_vec();
+        data.extend_from_slice(&2u32.to_le_bytes());
+        let off1 = 28 + 40;
+        let off2 = off1 + (wrong.len() - 48);
+        data.extend_from_slice(&other);
+        data.extend_from_slice(&(off1 as u32).to_le_bytes());
+        data.extend_from_slice(&FMTID_SUMMARY_INFORMATION);
+        data.extend_from_slice(&(off2 as u32).to_le_bytes());
+        data.extend_from_slice(&wrong[48..]);
+        data.extend_from_slice(&real[48..]);
+        let props = parse_summary_information(&data).expect("found by FMTID");
+        assert_eq!(props.title.as_deref(), Some("Real"));
+    }
+
+    /// Properties past the 64th were silently dropped. The count is now
+    /// bounded by what the packet can hold, not by a fixed number.
+    #[test]
+    fn test_properties_past_the_sixty_fourth_are_read() {
+        let mut props: Vec<(u32, Vec<u8>)> = (100..170).map(|id| (id, i2(0))).collect();
+        props.push((PIDSI_AUTHOR, lpstr("Late")));
+        let data = build_stream(&props);
+        let parsed = parse_summary_information(&data).expect("parsed");
+        assert_eq!(parsed.author.as_deref(), Some("Late"));
+    }
+
+    /// A count claiming billions of properties is bounded by the bytes
+    /// present, without reading past them.
+    #[test]
+    fn test_huge_property_count_is_bounded_by_the_packet() {
+        let mut data = build_stream(&[(PIDSI_TITLE, lpstr("T"))]);
+        let base = 48;
+        data[base + 4..base + 8].copy_from_slice(&u32::MAX.to_le_bytes());
+        // Parses (or not) without panicking or reserving billions of slots.
+        let _ = parse_summary_information(&data);
+    }
+
+    #[test]
+    fn test_civil_from_days_matches_known_dates() {
+        assert_eq!(civil_from_days(0), (1970, 1, 1));
+        assert_eq!(civil_from_days(13_396), (2006, 9, 5));
+        assert_eq!(civil_from_days(-1), (1969, 12, 31));
+    }
+}

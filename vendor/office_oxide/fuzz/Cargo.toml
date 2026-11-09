@@ -1,0 +1,91 @@
+# cargo-fuzz targets for office_oxide.
+#
+# Office parsers consume fully untrusted bytes (OOXML zip/XML for Docx/Xlsx/Pptx,
+# CFB compound files for the legacy Doc/Xls/Ppt) — a prime fuzzing surface.
+# Targets must never panic on any input; malformed documents return `Err`.
+#
+# Standalone workspace (own `[workspace]`, and excluded from the root workspace)
+# so the nightly + sanitizer toolchain cargo-fuzz needs never affects the normal
+# build/test matrix.
+#
+# Run locally:  cargo +nightly fuzz run fuzz_parse -- -max_total_time=300
+[package]
+name = "office-oxide-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[dependencies.office_oxide]
+path = ".."
+# Opt-in feature, so the decryption paths are fuzzed too.
+features = ["default-password"]
+
+[[bin]]
+name = "fuzz_parse"
+path = "fuzz_targets/fuzz_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_doc_stsh"
+path = "fuzz_targets/fuzz_doc_stsh.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]
+
+[[bin]]
+name = "fuzz_doc_pieces"
+path = "fuzz_targets/fuzz_doc_pieces.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_doc_comments"
+path = "fuzz_targets/fuzz_doc_comments.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_ppt_slide_list"
+path = "fuzz_targets/fuzz_ppt_slide_list.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_xls_sparse"
+path = "fuzz_targets/fuzz_xls_sparse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_ooxml_salvage"
+path = "fuzz_targets/fuzz_ooxml_salvage.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_default_password"
+path = "fuzz_targets/fuzz_default_password.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_doc_header_fonts"
+path = "fuzz_targets/fuzz_doc_header_fonts.rs"
+test = false
+doc = false
+bench = false

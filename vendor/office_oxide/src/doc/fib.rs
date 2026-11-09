@@ -1,0 +1,609 @@
+//! File Information Block (FIB) parsing.
+//!
+//! The FIB is at the start of the WordDocument stream. It contains metadata
+//! and pointers to other structures in the Table stream.
+
+use super::error::{DocError, Result};
+
+/// Whether `n_fib` is a version of Word. Word 6.0 wrote 0x0065 and Word 95
+/// 0x0068; Word 97 and later 0x00C1 up to 0x0112 (Word 2010). A FIB whose
+/// version is outside that range was overwritten (a damaged header), and the
+/// language ID next to it, which decides how 8-bit text is read, means nothing.
+pub(crate) fn is_word_version(n_fib: u16) -> bool {
+    (0x0065..=0x0200).contains(&n_fib)
+}
+
+/// What to tell the reader about a header whose version is not a Word version.
+/// `from_fonts` is the character set of the font table that gave the 8-bit
+/// text its language instead (see `fonts::language_from_font_charsets`).
+pub(crate) fn damaged_version_warning(n_fib: u16, from_fonts: Option<u8>) -> String {
+    match from_fonts {
+        Some(chs) => format!(
+            "the file header's version number (nFib 0x{n_fib:04X}) is not a Word version, so the \
+             header is damaged and its language is lost; the language of the document's 8-bit \
+             text was taken from the character set (0x{chs:02X}) its fonts declare"
+        ),
+        None => format!(
+            "the file header's version number (nFib 0x{n_fib:04X}) is not a Word version, so the \
+             header is damaged and the language of the document's 8-bit text is unknown; that \
+             text was read as Windows-1252"
+        ),
+    }
+}
+
+/// Parsed FIB fields needed for text extraction.
+#[derive(Debug, Clone, Default)]
+pub struct Fib {
+    /// FibBase `lid`: the document's default language ID (Windows LCID),
+    /// e.g. `0x0419` = Russian. Determines which codepage compressed
+    /// (8-bit) text runs are stored in — before this field existed,
+    /// every compressed run was decoded as CP1252 regardless of the
+    /// document's actual authoring locale.
+    pub lid: u16,
+    /// FibBase `nFib`, the version of the file's FIB (absolute offset 0x02).
+    /// See [`is_word_version`].
+    pub n_fib: u16,
+    /// Which table stream to use: true = "1Table", false = "0Table".
+    pub use_table1: bool,
+    /// Offset of the CLX (piece table) in the Table stream.
+    pub clx_offset: u32,
+    /// Size of the CLX in the Table stream.
+    pub clx_size: u32,
+    /// Total length of text in the main document (in characters).
+    pub text_len: u32,
+    /// Length of footnote text.
+    pub footnote_len: u32,
+    /// Length of header/footer text.
+    pub header_len: u32,
+    /// Length of comment text.
+    pub comment_len: u32,
+    /// Length of endnote text.
+    pub endnote_len: u32,
+    /// Length of textbox text.
+    pub textbox_len: u32,
+    /// Length of header textbox text.
+    pub header_textbox_len: u32,
+    /// Offset of the PlcfBtePapx (PAPX FKP index) in the Table stream.
+    /// FIB absolute offset 0x0102. Zero when the file has no PAPX FKP.
+    pub fc_plcf_bte_papx: u32,
+    /// Byte length of the PlcfBtePapx in the Table stream (0x0106).
+    pub lcb_plcf_bte_papx: u32,
+    /// Offset of the PlfLst (list definitions: LSTF + LVL arrays) in the
+    /// Table stream (0x02E2). Zero when the file defines no lists. Named
+    /// `fc_plcf_lst` here (not `fc_plf_lst`) for historical reasons — the
+    /// struct/field spelling predates list-format support, which is the first
+    /// consumer of the pointer it holds.
+    pub fc_plcf_lst: u32,
+    /// Byte length of the PlfLst in the Table stream (0x02E6).
+    pub lcb_plcf_lst: u32,
+    /// Offset of the PlfLfo (list format overrides: LFO array, one per
+    /// `ilfo`) in the Table stream (0x02EA). `sprmPIlfo`'s value is a
+    /// 1-based index into this array, not into `PlfLst` directly — an
+    /// `LFO.lsid` is what actually selects the matching `LSTF`. Zero when the file uses no lists.
+    pub fc_plf_lfo: u32,
+    /// Byte length of the PlfLfo in the Table stream (0x02EE).
+    pub lcb_plf_lfo: u32,
+    /// Offset of the GrpXstAtnOwners (comment author name array) in the
+    /// Table stream (0x01BA). Zero when the document has no comments.
+    ///
+    pub fc_grp_xst_atn_owners: u32,
+    /// Byte length of the GrpXstAtnOwners in the Table stream (0x01BE).
+    pub lcb_grp_xst_atn_owners: u32,
+    /// Offset of the PlcfHdd (header/footer story delimiter PLC) in the
+    /// Table stream (0x00F2). Zero when the document has no header
+    /// document at all.
+    pub fc_plcf_hdd: u32,
+    /// Byte length of the PlcfHdd in the Table stream (0x00F6).
+    pub lcb_plcf_hdd: u32,
+    /// Offset of the PlcfandRef (comment reference-point PLC, main
+    /// document CPs + `ATRDPre10` author/bookmark data) in the Table
+    /// stream (0x00BA). Zero when the document has no comments.
+    pub fc_plcf_and_ref: u32,
+    /// Byte length of the PlcfandRef in the Table stream (0x00BE).
+    pub lcb_plcf_and_ref: u32,
+    /// Offset of the PlcfandTxt (comment-body boundary PLC, CPs within
+    /// the Comments substory's own character space) in the Table stream
+    /// (0x00C2). Zero when the document has no comments.
+    pub fc_plcf_and_txt: u32,
+    /// Byte length of the PlcfandTxt in the Table stream (0x00C6).
+    pub lcb_plcf_and_txt: u32,
+    /// Offset of the PlcBteChpx (CHPX FKP page index) in the Table stream
+    /// (0x00FA). Zero when the file has no CHPX FKP.
+    pub fc_plcf_bte_chpx: u32,
+    /// Byte length of the PlcBteChpx in the Table stream (0x00FE).
+    pub lcb_plcf_bte_chpx: u32,
+    /// Offset of the PlcfSed (section boundaries) in the Table stream
+    /// (0x00CA). Zero when absent.
+    pub fc_plcf_sed: u32,
+    /// Byte length of the PlcfSed (0x00CE).
+    pub lcb_plcf_sed: u32,
+    /// Offset of the PlcftxbxTxt (main-document text-box story boundaries)
+    /// in the Table stream (0x025A). Zero when absent.
+    pub fc_plcftxbx_txt: u32,
+    /// Byte length of the PlcftxbxTxt (0x025E).
+    pub lcb_plcftxbx_txt: u32,
+    /// Offset of the PlcfHdrtxbxTxt (header text-box story boundaries) in
+    /// the Table stream (0x026A). Zero when absent.
+    pub fc_plcf_hdrtxbx_txt: u32,
+    /// Byte length of the PlcfHdrtxbxTxt (0x026E).
+    pub lcb_plcf_hdrtxbx_txt: u32,
+    /// Offset of the main document's PlcfSpa (`fcPlcSpaMom`, shape anchors,
+    /// [MS-DOC] §2.8.27) in the Table stream (0x01DA). Zero when absent.
+    pub fc_plc_spa_mom: u32,
+    /// Byte length of the main document's PlcfSpa (`lcbPlcSpaMom`, 0x01DE).
+    pub lcb_plc_spa_mom: u32,
+    /// Offset of the style sheet (`stshf`, an `STSH`) in the Table stream
+    /// (absolute 0x00A2). This is an **offset, not a presence flag**: the
+    /// style sheet is normally the first thing written to the Table stream, so
+    /// `0` is its usual value on real files. Test [`lcb_stshf`] for absence.
+    pub fc_stshf: u32,
+    /// `fcSttbfFfn` (absolute 0x0112, [MS-DOC] §2.5.6): the font table in the
+    /// Table stream. `lcb_sttbf_ffn` is its size.
+    pub fc_sttbf_ffn: u32,
+    /// See [`Fib::fc_sttbf_ffn`].
+    pub lcb_sttbf_ffn: u32,
+    /// Byte length of the style sheet in the Table stream (0x00A6). The only
+    /// valid absence test: [MS-DOC] `FibRgFcLcb97` requires this to be
+    /// non-zero, and `STSH` states every FIB contains a style sheet.
+    pub lcb_stshf: u32,
+}
+
+impl Fib {
+    /// Parse the FIB from the WordDocument stream.
+    pub fn parse(data: &[u8]) -> Result<Self> {
+        if data.len() < 68 {
+            return Err(DocError::InvalidFib(format!(
+                "WordDocument stream too short: {} bytes",
+                data.len()
+            )));
+        }
+
+        let wident = u16::from_le_bytes([data[0], data[1]]);
+        // 0xA5EC = Word 97 and later. 0xA5DC = Word 6.0/95, whose FIB has a
+        // completely different layout: every FibRgFcLcb97 offset below is
+        // wrong for it. Accepting the file and then reading Word 97 offsets
+        // out of it produced a confident empty result — a 426 KB document
+        // extracted as the empty string with `Ok`. Say what it is instead.
+        // 0xA697/0xA698/0xA699 are the Macintosh Word 6/95 magics
+        // (`nFib` 0x65/0x68), the same family; they used to fall through
+        // to "unknown wIdent", which hid what the file was.
+        if matches!(wident, 0xA5DC | 0xA697..=0xA699) {
+            return Err(DocError::UnsupportedVersion(format!(
+                "Word 6.0/95 (wIdent 0x{wident:04X}); only Word 97 and later are supported"
+            )));
+        }
+        if wident != 0xA5EC {
+            return Err(DocError::InvalidFib(format!("unknown wIdent: 0x{wident:04X}")));
+        }
+
+        // FibBase.lid, absolute offset 0x06 (u16 LE) — verified against
+        // FibBase's field layout (wIdent, nFib, unused, lid, ...).
+        let lid = u16::from_le_bytes([data[0x06], data[0x07]]);
+        let n_fib = u16::from_le_bytes([data[0x02], data[0x03]]);
+
+        // Flags at offset 0x0A (u16): [MS-DOC] §2.5.1 FibBase.
+        //   bit 8  = fEncrypted
+        //   bit 9  = fWhichTblStm
+        let flags = u16::from_le_bytes([data[0x0A], data[0x0B]]);
+        // An encrypted document's text is ciphertext. Walking the piece
+        // table over it yields either nothing or mojibake, both reported as
+        // a successful extraction of a document that "has no text".
+        if (flags & (1 << 8)) != 0 {
+            return Err(DocError::Encrypted);
+        }
+        let use_table1 = (flags & (1 << 9)) != 0;
+
+        // FibRgLw97 starts at offset 0x22, its size field at 0x22 (u16, should be 0x16).
+        // Text lengths in FibRgLw97 ([MS-DOC] FibRgLw97): cbMac, reserved1,
+        // reserved2, ccpText, ccpFtn, ccpHdd, reserved3 (MUST be zero, MUST
+        // be ignored — NOT ccpAtn), ccpAtn, ccpEdn, ccpTxbx, ccpHdrTxbx.
+        // Every field from `comment_len` on used to be read one
+        // slot early (`comment_len` landed on the always-zero `reserved3`,
+        // so it silently read as 0 for every `.doc` ever opened; comments
+        // ended up mislabeled as endnotes, endnotes as textboxes, and the
+        // real `ccpHdrTxbx` — header-anchored textbox text — was never read
+        // at all).
+        let text_len = read_u32(data, 0x4C);
+        let footnote_len = read_u32(data, 0x50);
+        let header_len = read_u32(data, 0x54);
+        // 0x58 = reserved3, MUST be zero, MUST be ignored — deliberately unread.
+        let comment_len = read_u32(data, 0x5C);
+        let endnote_len = read_u32(data, 0x60);
+        let textbox_len = read_u32(data, 0x64);
+        let header_textbox_len = read_u32(data, 0x68);
+
+        // FibRgFcLcb97 is laid out at a fixed set of absolute offsets within
+        // the WordDocument stream for Word 97+ (nFib = 0x00C1). The offsets
+        // below are absolute (measured from the start of the stream), which
+        // matches what the on-disk FIB stores. See [MS-DOC] §2.5.5.
+        //
+        // fcClx / lcbClx — piece table pointer (absolute 0x01A2 / 0x01A6).
+        let (clx_offset, clx_size) = if data.len() > 0x01AA {
+            (read_u32(data, 0x01A2), read_u32(data, 0x01A6))
+        } else {
+            (0, 0)
+        };
+
+        // fcPlcfBtePapx / lcbPlcfBtePapx — PAPX FKP index (0x0102 / 0x0106).
+        // Used to locate paragraph property (PAPX) pages, which carry the
+        // fInTable / TAP (table) SPRMs needed for table reconstruction.
+        let (fc_plcf_bte_papx, lcb_plcf_bte_papx) = if data.len() > 0x010A {
+            (read_u32(data, 0x0102), read_u32(data, 0x0106))
+        } else {
+            (0, 0)
+        };
+
+        // fcPlfLst / lcbPlfLst — list definitions (0x02E2 / 0x02E6).
+        // Zero when the document defines no lists.
+        let (fc_plcf_lst, lcb_plcf_lst) = if data.len() > 0x02EA {
+            (read_u32(data, 0x02E2), read_u32(data, 0x02E6))
+        } else {
+            (0, 0)
+        };
+
+        // fcPlfLfo / lcbPlfLfo — list format overrides (0x02EA / 0x02EE),
+        // immediately following the fcPlfLst/lcbPlfLst pair above. Verified
+        // against the published [MS-DOC] worked example ("Example of a
+        // List"), which shows both pairs at these exact offsets.
+        let (fc_plf_lfo, lcb_plf_lfo) = if data.len() > 0x02F2 {
+            (read_u32(data, 0x02EA), read_u32(data, 0x02EE))
+        } else {
+            (0, 0)
+        };
+
+        // fcGrpXstAtnOwners / lcbGrpXstAtnOwners — comment author names
+        // (0x01BA / 0x01BE). Derived from FibRgFcLcb97's fixed field order
+        // ([MS-DOC] §2.5.5): each entry is 4 bytes, starting at absolute
+        // offset 0x9A (fcStshfOrig); fcGrpXstAtnOwners is the 73rd entry
+        // (0-based index 72), landing at 0x9A + 72*4 = 0x1BA. Cross-checked
+        // against the two already-verified anchors above: fcPlcfBtePapx
+        // (index 26) lands at 0x9A + 26*4 = 0x102, and fcClx (index 66)
+        // lands at 0x9A + 66*4 = 0x1A2 — both match their hard-coded
+        // offsets already in this file.
+        let (fc_grp_xst_atn_owners, lcb_grp_xst_atn_owners) = if data.len() > 0x01C2 {
+            (read_u32(data, 0x01BA), read_u32(data, 0x01BE))
+        } else {
+            (0, 0)
+        };
+
+        // fcPlcfHdd / lcbPlcfHdd — header/footer story delimiter PLC
+        // (0x00F2 / 0x00F6). Derived the same way as fcGrpXstAtnOwners
+        // above: index 22 in FibRgFcLcb97's fixed field order, base 0x9A,
+        // 0x9A + 22*4 = 0xF2.
+        let (fc_plcf_hdd, lcb_plcf_hdd) = if data.len() > 0x00FA {
+            (read_u32(data, 0x00F2), read_u32(data, 0x00F6))
+        } else {
+            (0, 0)
+        };
+
+        // fcPlcfandRef/lcbPlcfandRef (0x00BA/0x00BE) and fcPlcfandTxt/
+        // lcbPlcfandTxt (0x00C2/0x00C6) — fields 4 and 5 (0-based pairs)
+        // in FibRgFcLcb97's fixed order: fcStshfOrig(0), fcStshf(1),
+        // fcPlcffndRef(2), fcPlcffndTxt(3), fcPlcfandRef(4),
+        // fcPlcfandTxt(5) — confirmed against the live spec page listing
+        // that exact sequence. 0x9A + 4*8 = 0xBA, 0x9A + 5*8 = 0xC2,
+        // consistent with the pair-index formula already cross-checked
+        // above for fcPlcfHdd/fcPlcfBtePapx/fcClx/fcGrpXstAtnOwners.
+        //
+        let (fc_plcf_and_ref, lcb_plcf_and_ref) = if data.len() > 0x00C2 {
+            (read_u32(data, 0x00BA), read_u32(data, 0x00BE))
+        } else {
+            (0, 0)
+        };
+        let (fc_plcf_and_txt, lcb_plcf_and_txt) = if data.len() > 0x00CA {
+            (read_u32(data, 0x00C2), read_u32(data, 0x00C6))
+        } else {
+            (0, 0)
+        };
+
+        // fcPlcfBteChpx/lcbPlcfBteChpx (0x00FA/0x00FE) — CHPX FKP page index.
+        // FibRgFcLcb97's fixed field order places fcPlcfBteChpx/
+        // lcbPlcfBteChpx immediately before fcPlcfBtePapx/lcbPlcfBtePapx
+        // (confirmed against the live [MS-DOC] §2.5.6 field-order table:
+        // ... fcPlcfHdd, lcbPlcfHdd, fcPlcfBteChpx, lcbPlcfBteChpx,
+        // fcPlcfBtePapx, lcbPlcfBtePapx, ...). fieldIndex 24 (0x9A + 24*4 =
+        // 0xFA), one pair before fcPlcfBtePapx's already-verified fieldIndex
+        // 26 (0x9A + 26*4 = 0x102).
+        let (fc_plcf_bte_chpx, lcb_plcf_bte_chpx) = if data.len() > 0x0102 {
+            (read_u32(data, 0x00FA), read_u32(data, 0x00FE))
+        } else {
+            (0, 0)
+        };
+
+        // fcPlcfSed/lcbPlcfSed — pair 6 of FibRgFcLcb97 ([MS-DOC] §2.5.6:
+        // fcStshfOrig, fcStshf, fcPlcffndRef, fcPlcffndTxt, fcPlcfandRef,
+        // fcPlcfandTxt, fcPlcfSed, ...): 0x9A + 6*8 = 0xCA.
+        let (fc_plcf_sed, lcb_plcf_sed) = if data.len() > 0x00D2 {
+            (read_u32(data, 0x00CA), read_u32(data, 0x00CE))
+        } else {
+            (0, 0)
+        };
+        // fcPlcftxbxTxt/lcbPlcftxbxTxt — pair 56 (0x9A + 56*8 = 0x25A) and
+        // fcPlcfHdrtxbxTxt/lcbPlcfHdrtxbxTxt — pair 58 (0x26A), counted in
+        // the same [MS-DOC] §2.5.6 order that puts the verified fcClx at
+        // pair 33 (0x1A2) and fcPlfLst at pair 73 (0x2E2).
+        let (fc_plcftxbx_txt, lcb_plcftxbx_txt) = if data.len() > 0x0262 {
+            (read_u32(data, 0x025A), read_u32(data, 0x025E))
+        } else {
+            (0, 0)
+        };
+        let (fc_plcf_hdrtxbx_txt, lcb_plcf_hdrtxbx_txt) = if data.len() > 0x0272 {
+            (read_u32(data, 0x026A), read_u32(data, 0x026E))
+        } else {
+            (0, 0)
+        };
+        // fcPlcSpaMom/lcbPlcSpaMom — pair 40 (0x9A + 40*8 = 0x1DA) of
+        // FibRgFcLcb97 ([MS-DOC] §2.5.6), right after fcUnused3 (pair 39).
+        let (fc_plc_spa_mom, lcb_plc_spa_mom) = if data.len() > 0x01E2 {
+            (read_u32(data, 0x01DA), read_u32(data, 0x01DE))
+        } else {
+            (0, 0)
+        };
+        // fcStshf / lcbStshf — style sheet (STSH) in the Table stream
+        // (absolute 0x00A2 / 0x00A6). `fcStshf` is an offset whose usual value
+        // is 0; only `lcbStshf` says whether a style sheet is present.
+        let (fc_stshf, lcb_stshf) = if data.len() > 0x00A9 {
+            (read_u32(data, 0x00A2), read_u32(data, 0x00A6))
+        } else {
+            (0, 0)
+        };
+
+        let (fc_sttbf_ffn, lcb_sttbf_ffn) = if data.len() > 0x0119 {
+            (read_u32(data, 0x0112), read_u32(data, 0x0116))
+        } else {
+            (0, 0)
+        };
+
+        Ok(Self {
+            lid,
+            n_fib,
+            use_table1,
+            clx_offset,
+            clx_size,
+            text_len,
+            footnote_len,
+            header_len,
+            comment_len,
+            endnote_len,
+            textbox_len,
+            header_textbox_len,
+            fc_plcf_bte_papx,
+            lcb_plcf_bte_papx,
+            fc_plcf_lst,
+            lcb_plcf_lst,
+            fc_plf_lfo,
+            lcb_plf_lfo,
+            fc_grp_xst_atn_owners,
+            lcb_grp_xst_atn_owners,
+            fc_plcf_hdd,
+            lcb_plcf_hdd,
+            fc_plcf_and_ref,
+            lcb_plcf_and_ref,
+            fc_plcf_and_txt,
+            lcb_plcf_and_txt,
+            fc_plcf_bte_chpx,
+            lcb_plcf_bte_chpx,
+            fc_plcf_sed,
+            lcb_plcf_sed,
+            fc_plcftxbx_txt,
+            lcb_plcftxbx_txt,
+            fc_plcf_hdrtxbx_txt,
+            lcb_plcf_hdrtxbx_txt,
+            fc_plc_spa_mom,
+            lcb_plc_spa_mom,
+            fc_stshf,
+            lcb_stshf,
+            fc_sttbf_ffn,
+            lcb_sttbf_ffn,
+        })
+    }
+}
+
+fn read_u32(data: &[u8], offset: usize) -> u32 {
+    if offset + 4 <= data.len() {
+        u32::from_le_bytes([
+            data[offset],
+            data[offset + 1],
+            data[offset + 2],
+            data[offset + 3],
+        ])
+    } else {
+        0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn build_minimal_fib() -> Vec<u8> {
+        let mut data = vec![0u8; 1024];
+        // wIdent = Word 97
+        data[0..2].copy_from_slice(&0xA5ECu16.to_le_bytes());
+        // nFib (version)
+        data[2..4].copy_from_slice(&0x00C1u16.to_le_bytes());
+        // flags: use 1Table (bit 9)
+        data[0x0A..0x0C].copy_from_slice(&(1u16 << 9).to_le_bytes());
+        // ccpText = 100
+        data[0x4C..0x50].copy_from_slice(&100u32.to_le_bytes());
+        // fcClx
+        data[0x01A2..0x01A6].copy_from_slice(&512u32.to_le_bytes());
+        // lcbClx
+        data[0x01A6..0x01AA].copy_from_slice(&64u32.to_le_bytes());
+        // fcPlcfBtePapx = 300, lcbPlcfBtePapx = 28
+        data[0x0102..0x0106].copy_from_slice(&300u32.to_le_bytes());
+        data[0x0106..0x010A].copy_from_slice(&28u32.to_le_bytes());
+        // fcPlfLst = 400, lcbPlfLst = 12
+        data[0x02E2..0x02E6].copy_from_slice(&400u32.to_le_bytes());
+        data[0x02E6..0x02EA].copy_from_slice(&12u32.to_le_bytes());
+        // fcPlfLfo / lcbPlfLfo — the exact values from [MS-DOC]'s own
+        // "Example of a List" worked example.
+        data[0x02EA..0x02EE].copy_from_slice(&0x000007E1u32.to_le_bytes());
+        data[0x02EE..0x02F2].copy_from_slice(&0x00000018u32.to_le_bytes());
+        data
+    }
+
+    #[test]
+    fn test_parse_valid_fib() {
+        let data = build_minimal_fib();
+        let fib = Fib::parse(&data).unwrap();
+        assert!(fib.use_table1);
+        assert_eq!(fib.text_len, 100);
+        assert_eq!(fib.clx_offset, 512);
+        assert_eq!(fib.clx_size, 64);
+        assert_eq!(fib.fc_plcf_bte_papx, 300);
+        assert_eq!(fib.lcb_plcf_bte_papx, 28);
+        assert_eq!(fib.fc_plcf_lst, 400);
+        assert_eq!(fib.lcb_plcf_lst, 12);
+        assert_eq!(fib.fc_plf_lfo, 0x000007E1);
+        assert_eq!(fib.lcb_plf_lfo, 0x00000018);
+    }
+
+    /// Regression: `fcPlcfBteChpx`/`lcbPlcfBteChpx` must land at 0x00FA/
+    /// 0x00FE — immediately before `fcPlcfBtePapx` at 0x0102, per
+    /// [MS-DOC] §2.5.6's field-order table.
+    #[test]
+    fn test_fc_plcf_bte_chpx_offset() {
+        let mut data = build_minimal_fib();
+        data[0x00FA..0x00FE].copy_from_slice(&700u32.to_le_bytes());
+        data[0x00FE..0x0102].copy_from_slice(&40u32.to_le_bytes());
+        let fib = Fib::parse(&data).unwrap();
+        assert_eq!(fib.fc_plcf_bte_chpx, 700);
+        assert_eq!(fib.lcb_plcf_bte_chpx, 40);
+        // The already-verified PAPX pointer must be unaffected by the new
+        // field landing immediately before it.
+        assert_eq!(fib.fc_plcf_bte_papx, 300);
+        assert_eq!(fib.lcb_plcf_bte_papx, 28);
+    }
+
+    #[test]
+    fn test_bad_wident_rejected() {
+        let mut data = build_minimal_fib();
+        data[0..2].copy_from_slice(&0x1234u16.to_le_bytes());
+        assert!(Fib::parse(&data).is_err());
+    }
+
+    #[test]
+    fn test_too_short_rejected() {
+        let data = vec![0u8; 100];
+        assert!(Fib::parse(&data).is_err());
+    }
+
+    /// FibBase `chs` (offset 0x0014) = 0x0100 marks a Macintosh character set
+    /// in a Word 6/95 file, whose 8-bit text is then Mac Roman. A Word 97+
+    /// file stores compressed text as Windows-1252 whatever `chs` says (real
+    /// files written with the marker carry accents and ellipses in 1252), so
+    /// the marker must not change how the language alone selects the codepage.
+    #[test]
+    fn test_a_macintosh_charset_marker_does_not_change_word97_text_decoding() {
+        let mut data = build_minimal_fib();
+        data[0x06..0x08].copy_from_slice(&0x040Cu16.to_le_bytes()); // French
+        data[0x12] = 1; // envr
+        data[0x14..0x16].copy_from_slice(&0x0100u16.to_le_bytes());
+        let fib = Fib::parse(&data).unwrap();
+        assert_eq!(fib.lid, 0x040C);
+        assert_eq!(super::super::codepage::codepage_for_lid(fib.lid), 1252);
+    }
+
+    /// Real Word wrote `nFib` 0x65 (Word 6) up to 0x112 (Word 2010 and later); a
+    /// value outside that is a damaged header, whose language ID means nothing.
+    #[test]
+    fn test_only_word_versions_are_word_versions() {
+        for n in [
+            0x0065u16, 0x0068, 0x00C1, 0x00C2, 0x00D9, 0x0101, 0x010C, 0x0110, 0x0112,
+        ] {
+            assert!(is_word_version(n), "{n:#06x}");
+        }
+        for n in [0u16, 0x0064, 0x005A, 0x0200 + 1, 0x2020, 0x20FF, 0xFFFF] {
+            assert!(!is_word_version(n), "{n:#06x}");
+        }
+        let mut data = build_minimal_fib();
+        data[2..4].copy_from_slice(&0x2020u16.to_le_bytes());
+        assert_eq!(Fib::parse(&data).unwrap().n_fib, 0x2020);
+    }
+
+    #[test]
+    fn test_use_table0() {
+        let mut data = build_minimal_fib();
+        data[0x0A..0x0C].copy_from_slice(&0u16.to_le_bytes()); // clear bit 9
+        let fib = Fib::parse(&data).unwrap();
+        assert!(!fib.use_table1);
+    }
+
+    /// Every `FibRgLw97` field from `comment_len` on used to be
+    /// read one slot early (landing on `reserved3`, spec-mandated always
+    /// zero, at 0x58) instead of its real offset. Each field below gets a
+    /// distinct value so a shift in either direction is caught, and
+    /// `reserved3` itself is set to a nonzero value to prove it's never
+    /// read at all.
+    #[test]
+    fn test_fibrglw97_fields_read_from_their_real_spec_offsets() {
+        let mut data = build_minimal_fib();
+        data[0x4C..0x50].copy_from_slice(&100u32.to_le_bytes()); // ccpText
+        data[0x50..0x54].copy_from_slice(&11u32.to_le_bytes()); // ccpFtn
+        data[0x54..0x58].copy_from_slice(&22u32.to_le_bytes()); // ccpHdd
+        data[0x58..0x5C].copy_from_slice(&0xDEADBEEFu32.to_le_bytes()); // reserved3 — MUST be ignored
+        data[0x5C..0x60].copy_from_slice(&33u32.to_le_bytes()); // ccpAtn (comments)
+        data[0x60..0x64].copy_from_slice(&44u32.to_le_bytes()); // ccpEdn (endnotes)
+        data[0x64..0x68].copy_from_slice(&55u32.to_le_bytes()); // ccpTxbx (textboxes)
+        data[0x68..0x6C].copy_from_slice(&66u32.to_le_bytes()); // ccpHdrTxbx (header textboxes)
+
+        let fib = Fib::parse(&data).unwrap();
+        assert_eq!(fib.text_len, 100);
+        assert_eq!(fib.footnote_len, 11);
+        assert_eq!(fib.header_len, 22);
+        assert_eq!(fib.comment_len, 33, "must read ccpAtn at 0x5C, not reserved3 at 0x58");
+        assert_eq!(fib.endnote_len, 44, "must read ccpEdn at 0x60");
+        assert_eq!(fib.textbox_len, 55, "must read ccpTxbx at 0x64");
+        assert_eq!(
+            fib.header_textbox_len, 66,
+            "must read the real ccpHdrTxbx at 0x68, previously never read at all"
+        );
+    }
+
+    /// `fcGrpXstAtnOwners`/`lcbGrpXstAtnOwners` (comment
+    /// author names) were never parsed at all. Offset derived from
+    /// FibRgFcLcb97's fixed field order; cross-checked against the two
+    /// offsets already verified elsewhere in this file (`fcPlcfBtePapx`
+    /// at 0x0102, `fcClx` at 0x01A2).
+    #[test]
+    fn test_grp_xst_atn_owners_read_from_its_real_offset() {
+        let mut data = build_minimal_fib();
+        data[0x01BA..0x01BE].copy_from_slice(&700u32.to_le_bytes());
+        data[0x01BE..0x01C2].copy_from_slice(&40u32.to_le_bytes());
+
+        let fib = Fib::parse(&data).unwrap();
+        assert_eq!(fib.fc_grp_xst_atn_owners, 700);
+        assert_eq!(fib.lcb_grp_xst_atn_owners, 40);
+    }
+
+    /// `fcPlcfHdd`/`lcbPlcfHdd` (header/footer story
+    /// delimiter PLC) were never parsed at all.
+    #[test]
+    fn test_plcf_hdd_read_from_its_real_offset() {
+        let mut data = build_minimal_fib();
+        data[0x00F2..0x00F6].copy_from_slice(&800u32.to_le_bytes());
+        data[0x00F6..0x00FA].copy_from_slice(&56u32.to_le_bytes());
+
+        let fib = Fib::parse(&data).unwrap();
+        assert_eq!(fib.fc_plcf_hdd, 800);
+        assert_eq!(fib.lcb_plcf_hdd, 56);
+    }
+
+    /// `fcPlcfandRef`/`lcbPlcfandRef` and `fcPlcfandTxt`/
+    /// `lcbPlcfandTxt` were never parsed at all.
+    #[test]
+    fn test_plcf_and_ref_and_txt_read_from_their_real_offsets() {
+        let mut data = build_minimal_fib();
+        data[0x00BA..0x00BE].copy_from_slice(&900u32.to_le_bytes());
+        data[0x00BE..0x00C2].copy_from_slice(&64u32.to_le_bytes());
+        data[0x00C2..0x00C6].copy_from_slice(&1000u32.to_le_bytes());
+        data[0x00C6..0x00CA].copy_from_slice(&12u32.to_le_bytes());
+
+        let fib = Fib::parse(&data).unwrap();
+        assert_eq!(fib.fc_plcf_and_ref, 900);
+        assert_eq!(fib.lcb_plcf_and_ref, 64);
+        assert_eq!(fib.fc_plcf_and_txt, 1000);
+        assert_eq!(fib.lcb_plcf_and_txt, 12);
+    }
+}

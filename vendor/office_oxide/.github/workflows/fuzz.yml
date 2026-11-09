@@ -1,0 +1,98 @@
+name: Fuzz
+
+# The fuzz crate is excluded from the workspace (it needs nightly and
+# sanitizer flags), so no other job compiles it: the target could bit-rot
+# unseen. Every change to the library or the target builds it and runs it
+# briefly; a daily run fuzzes for longer.
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'src/**'
+      - 'fuzz/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/fuzz.yml'
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'src/**'
+      - 'fuzz/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/fuzz.yml'
+  schedule:
+    - cron: "0 5 * * *" # daily at 05:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fuzz:
+    name: Build and run fuzz_parse
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust (nightly)
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: nightly
+
+      - name: Cache
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: fuzz
+
+      - name: Install cargo-fuzz
+        run: cargo install --locked cargo-fuzz
+
+      # The committed fuzz/Cargo.lock is what the advisory gate audits; fail
+      # if it no longer matches the manifests instead of silently resolving
+      # a different tree here.
+      - name: Check the fuzz lockfile is current
+        run: cargo metadata --manifest-path fuzz/Cargo.toml --locked --format-version 1 > /dev/null
+
+      - name: Build the fuzz targets
+        run: cargo fuzz build
+
+      # 60 s on every change, 10 min on the daily run. Any crash fails the job.
+      - name: Fuzz
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          secs=60
+          if [ "$EVENT_NAME" = "schedule" ]; then secs=600; fi
+          cargo fuzz run fuzz_parse -- -max_total_time="$secs" -rss_limit_mb=4096
+          # The structure-aware targets reach parsers whole-file fuzzing rarely
+          # gets to (salvage of damaged parts, default-password decryption, the
+          # .doc font table); a short run each.
+          for target in fuzz_ooxml_salvage fuzz_default_password fuzz_doc_header_fonts; do
+            cargo fuzz run "$target" -- -max_total_time=$((secs / 3)) -rss_limit_mb=4096
+          done
+
+      # Whole-file fuzzing rarely reaches the legacy style sheet; this target
+      # builds a valid .doc around the fuzzer's bytes so every run does.
+      - name: Fuzz the .doc style sheet
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          secs=60
+          if [ "$EVENT_NAME" = "schedule" ]; then secs=600; fi
+          cargo fuzz run fuzz_doc_stsh -- -max_total_time="$secs" -rss_limit_mb=4096
+
+      - name: Upload crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fuzz-artifacts
+          path: fuzz/artifacts/
+          if-no-files-found: ignore

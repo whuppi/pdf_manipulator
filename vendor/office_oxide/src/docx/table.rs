@@ -1,0 +1,394 @@
+use crate::core::units::Twip;
+
+use super::document::BlockElement;
+use super::formatting::{Justification, TableBorders};
+
+/// A table element (`w:tbl`).
+#[derive(Debug, Clone)]
+pub struct Table {
+    /// Table-level formatting.
+    pub properties: Option<TableProperties>,
+    /// Column widths from `w:tblGrid/w:gridCol`.
+    pub grid: Vec<Twip>,
+    /// Rows in the table.
+    pub rows: Vec<TableRow>,
+}
+
+/// A table row (`w:tr`).
+#[derive(Debug, Clone)]
+pub struct TableRow {
+    /// Row-level formatting.
+    pub properties: Option<TableRowProperties>,
+    /// Cells in this row.
+    pub cells: Vec<TableCell>,
+}
+
+/// A table cell (`w:tc`).
+#[derive(Debug, Clone)]
+pub struct TableCell {
+    /// Cell-level formatting.
+    pub properties: Option<TableCellProperties>,
+    /// Block content within the cell.
+    pub content: Vec<BlockElement>,
+}
+
+/// Table-level properties (`w:tblPr`).
+#[derive(Debug, Clone, Default)]
+pub struct TableProperties {
+    /// Preferred table width.
+    pub width: Option<TableWidth>,
+    /// Table justification.
+    pub justification: Option<Justification>,
+    /// Applied table style ID.
+    pub style_id: Option<String>,
+    /// Table border edges (`w:tblBorders`).
+    pub borders: Option<TableBorders>,
+    /// Default cell margins (`w:tblCellMar`), in twips.
+    pub cell_margins: Option<CellMargins>,
+    /// Table indent from the left margin (`w:tblInd`), in twips.
+    pub indent: Option<Twip>,
+    /// Accessibility caption (`w:tblCaption`).
+    pub caption: Option<String>,
+    /// Which of the table style's conditional formats apply (`w:tblLook`).
+    pub look: Option<TableLook>,
+    /// Rows per band for banded-row formatting (`w:tblStyleRowBandSize`,
+    /// set in a table style's `w:tblPr`); `None` means 1.
+    pub row_band_size: Option<u32>,
+    /// Columns per band (`w:tblStyleColBandSize`); `None` means 1.
+    pub col_band_size: Option<u32>,
+}
+
+/// `w:tblLook` (ECMA-376 §17.4): which conditional formats of the table's
+/// style are switched on. Each flag is off unless the table says
+/// otherwise.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TableLook {
+    /// Header-row formatting (`firstRow`).
+    pub first_row: bool,
+    /// Total-row formatting (`lastRow`).
+    pub last_row: bool,
+    /// First-column formatting (`firstColumn`).
+    pub first_column: bool,
+    /// Last-column formatting (`lastColumn`).
+    pub last_column: bool,
+    /// Banded rows switched off (`noHBand`).
+    pub no_h_band: bool,
+    /// Banded columns switched off (`noVBand`).
+    pub no_v_band: bool,
+}
+
+impl TableLook {
+    /// `w:tblLook`: the explicit attributes, or the older `w:val` bitmask
+    /// (firstRow 0x0020, lastRow 0x0040, firstColumn 0x0080, lastColumn
+    /// 0x0100, noHBand 0x0200, noVBand 0x0400), which an explicit
+    /// attribute overrides.
+    pub(crate) fn parse(e: &quick_xml::events::BytesStart) -> Self {
+        let mut look = TableLook::default();
+        if let Ok(Some(v)) = crate::core::xml::optional_attr_str(e, "w:val") {
+            if let Ok(bits) = u16::from_str_radix(v.trim(), 16) {
+                look.first_row = bits & 0x0020 != 0;
+                look.last_row = bits & 0x0040 != 0;
+                look.first_column = bits & 0x0080 != 0;
+                look.last_column = bits & 0x0100 != 0;
+                look.no_h_band = bits & 0x0200 != 0;
+                look.no_v_band = bits & 0x0400 != 0;
+            }
+        }
+        for (attr, flag) in [
+            ("w:firstRow", &mut look.first_row),
+            ("w:lastRow", &mut look.last_row),
+            ("w:firstColumn", &mut look.first_column),
+            ("w:lastColumn", &mut look.last_column),
+            ("w:noHBand", &mut look.no_h_band),
+            ("w:noVBand", &mut look.no_v_band),
+        ] {
+            if let Ok(Some(v)) = crate::core::xml::optional_attr_str(e, attr) {
+                *flag = matches!(v.as_ref(), "1" | "true" | "on");
+            }
+        }
+        look
+    }
+}
+
+/// Cell margins from `w:tblCellMar` / `w:tcMar`, in twips.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CellMargins {
+    /// Top margin.
+    pub top: Option<i32>,
+    /// Bottom margin.
+    pub bottom: Option<i32>,
+    /// Left (start) margin.
+    pub left: Option<i32>,
+    /// Right (end) margin.
+    pub right: Option<i32>,
+}
+
+/// How a `w:trHeight` value is applied.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RowHeightRule {
+    /// Height is a minimum; the row grows to fit content.
+    AtLeast,
+    /// Height is fixed.
+    Exact,
+    /// Height is determined by content.
+    Auto,
+}
+
+/// Table row properties (`w:trPr`).
+#[derive(Debug, Clone, Default)]
+pub struct TableRowProperties {
+    /// Whether this row is a table header row.
+    pub is_header: bool,
+    /// Row height from `w:trHeight`, in twips.
+    pub height: Option<i32>,
+    /// How `height` is applied.
+    pub height_rule: Option<RowHeightRule>,
+    /// `<w:cantSplit/>` — the row may not break across pages.
+    pub cant_split: bool,
+}
+
+/// Table cell properties (`w:tcPr`).
+#[derive(Debug, Clone, Default)]
+pub struct TableCellProperties {
+    /// Preferred cell width.
+    pub width: Option<TableWidth>,
+    /// Vertical merge type (for spanning rows).
+    pub vertical_merge: Option<MergeType>,
+    /// Horizontal grid span (number of columns spanned).
+    pub grid_span: Option<u32>,
+    /// Cell shading/background. Boxed: rare on real cells in a large
+    /// table — `Option<T>` reserves `size_of(T)` even when `None`.
+    pub shading: Option<Box<Shading>>,
+    /// Cell border edges (`w:tcBorders`). Boxed: rare on real cells in a
+    /// large table.
+    pub borders: Option<Box<TableBorders>>,
+    /// Vertical alignment of cell content (`w:vAlign`).
+    pub v_align: Option<CellVAlign>,
+    /// Text flow direction (`w:textDirection`).
+    pub text_direction: Option<String>,
+    /// Per-cell margin overrides (`w:tcMar`), in twips.
+    pub margins: Option<CellMargins>,
+    /// `true` when the cell carries `<w:cellDel>` — deleted via tracked
+    /// changes, pending acceptance. Mirrors the policy already applied to
+    /// run-level `w:del`: excluded from the accepted view.
+    pub deleted: bool,
+}
+
+/// Vertical alignment of a cell's content (`w:vAlign`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CellVAlign {
+    /// Align to the top of the cell.
+    Top,
+    /// Center vertically.
+    Center,
+    /// Align to the bottom of the cell.
+    Bottom,
+}
+
+/// Width specification for tables/cells.
+#[derive(Debug, Clone)]
+pub struct TableWidth {
+    /// Numeric width value (interpretation depends on `width_type`).
+    pub value: i32,
+    /// How `value` is measured.
+    pub width_type: TableWidthType,
+}
+
+/// How the table/cell width value is interpreted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TableWidthType {
+    /// Width in fiftieths of a percent.
+    Pct,
+    /// Width in twips.
+    Dxa,
+    /// Automatically determined.
+    Auto,
+    /// No width specified.
+    Nil,
+}
+
+/// Vertical merge type for table cells.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MergeType {
+    /// Start of a vertical merge.
+    Restart,
+    /// Continuation of a vertical merge.
+    Continue,
+}
+
+/// Cell/paragraph shading.
+#[derive(Debug, Clone)]
+pub struct Shading {
+    /// Background fill color (hex or "auto").
+    pub fill: Option<String>,
+    /// Foreground/pattern color.
+    pub color: Option<String>,
+    /// Shading pattern value.
+    pub pattern: Option<String>,
+}
+
+/// Upper bound for a single `w:gridSpan`. Word's own table limit is 63
+/// columns; this leaves generous headroom while keeping the value bounded.
+pub(crate) const MAX_GRID_SPAN: u32 = 1_000;
+
+impl TableCell {
+    /// This cell's `w:gridSpan`, clamped to `1..=MAX_GRID_SPAN` — the value
+    /// is untrusted and every grid computation sizes something from it.
+    pub(crate) fn grid_span(&self) -> u32 {
+        self.properties
+            .as_ref()
+            .and_then(|p| p.grid_span)
+            .unwrap_or(1)
+            .clamp(1, MAX_GRID_SPAN)
+    }
+}
+
+impl Table {
+    /// The starting grid column of every cell, row by row (ascending, so a
+    /// lookup by column is a binary search).
+    pub(crate) fn grid_starts(&self) -> Vec<Vec<usize>> {
+        self.rows
+            .iter()
+            .map(|r| {
+                let mut col = 0usize;
+                r.cells
+                    .iter()
+                    .map(|c| {
+                        let start = col;
+                        col = col.saturating_add(c.grid_span() as usize);
+                        start
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+}
+
+/// Where a cell sits relative to the regions a table style formats
+/// (`w:tblStylePr`, ECMA-376 Part 1 §17.7.6), as `w:tblLook` switches them
+/// on. Shared by `to_ir()` and the direct renderers so a header row is
+/// bold on every surface or on none.
+pub(crate) struct TableStyleLayout {
+    /// `None` when the table has no `w:tblLook`: only whole-table
+    /// formatting applies, rather than guessing which regions are on.
+    look: Option<TableLook>,
+    num_rows: usize,
+    grid_width: usize,
+    row_band: usize,
+    col_band: usize,
+}
+
+impl TableStyleLayout {
+    /// The layout of `table` (whose cells start at `starts`, from
+    /// [`Table::grid_starts`]) under a style with the given band sizes.
+    pub(crate) fn new(
+        table: &Table,
+        starts: &[Vec<usize>],
+        style_row_band: Option<u32>,
+        style_col_band: Option<u32>,
+    ) -> Self {
+        let tp = table.properties.as_ref();
+        let grid_width = starts
+            .iter()
+            .zip(&table.rows)
+            .map(|(s, r)| match (s.last(), r.cells.last()) {
+                (Some(&start), Some(cell)) => start.saturating_add(cell.grid_span() as usize),
+                _ => 0,
+            })
+            .max()
+            .unwrap_or(0);
+        TableStyleLayout {
+            look: tp.and_then(|p| p.look),
+            num_rows: table.rows.len(),
+            grid_width,
+            row_band: tp
+                .and_then(|p| p.row_band_size)
+                .or(style_row_band)
+                .unwrap_or(1) as usize,
+            col_band: tp
+                .and_then(|p| p.col_band_size)
+                .or(style_col_band)
+                .unwrap_or(1) as usize,
+        }
+    }
+
+    /// The `w:tblStylePr` regions covering the cell at `row` spanning grid
+    /// columns `start..end`, in increasing precedence (ECMA-376 §17.7.6:
+    /// whole table, banded columns, banded rows, first/last column,
+    /// first/last row, corner cells).
+    pub(crate) fn regions(&self, row: usize, start: usize, end: usize) -> Vec<&'static str> {
+        let mut out = vec!["wholeTable"];
+        let Some(look) = self.look else {
+            return out;
+        };
+        let first_row = look.first_row && row == 0;
+        let last_row = look.last_row && row + 1 == self.num_rows;
+        let first_col = look.first_column && start == 0;
+        let last_col = look.last_column && end >= self.grid_width;
+        if !look.no_v_band && !first_col && !last_col {
+            let data_col = start.saturating_sub(usize::from(look.first_column));
+            out.push(if (data_col / self.col_band.max(1)).is_multiple_of(2) {
+                "band1Vert"
+            } else {
+                "band2Vert"
+            });
+        }
+        if !look.no_h_band && !first_row && !last_row {
+            let data_row = row.saturating_sub(usize::from(look.first_row));
+            out.push(if (data_row / self.row_band.max(1)).is_multiple_of(2) {
+                "band1Horz"
+            } else {
+                "band2Horz"
+            });
+        }
+        if first_col {
+            out.push("firstCol");
+        }
+        if last_col {
+            out.push("lastCol");
+        }
+        if first_row {
+            out.push("firstRow");
+        }
+        if last_row {
+            out.push("lastRow");
+        }
+        match (first_row, last_row, first_col, last_col) {
+            (true, _, true, _) => out.push("nwCell"),
+            (true, _, _, true) => out.push("neCell"),
+            (_, true, true, _) => out.push("swCell"),
+            (_, true, _, true) => out.push("seCell"),
+            _ => {},
+        }
+        out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Regression: `TableCellProperties`'s `shading`/
+    /// `borders` must stay boxed. `TableCellProperties` was 536 bytes
+    /// before this fix (dominated by an unboxed `Shading` + `TableBorders`
+    /// pair), and `TableCell` (which every cell in a large table pays for)
+    /// was 560 bytes. Headroom above the measured post-fix sizes (96B /
+    /// 120B) keeps this from being flaky on an unrelated new field, while
+    /// still catching the actual regression: a large struct un-boxed back
+    /// into `Option<T>`.
+    #[test]
+    fn test_table_cell_properties_size_stays_boxed() {
+        assert!(
+            std::mem::size_of::<TableCellProperties>() <= 200,
+            "TableCellProperties grew to {} bytes — check shading/borders \
+             are still Option<Box<T>>, not Option<T>",
+            std::mem::size_of::<TableCellProperties>()
+        );
+        assert!(
+            std::mem::size_of::<TableCell>() <= 250,
+            "TableCell grew to {} bytes — a TableCellProperties field \
+             regression would show up here too",
+            std::mem::size_of::<TableCell>()
+        );
+    }
+}

@@ -1,0 +1,1217 @@
+use crate::format::DocumentFormat;
+use crate::ir::*;
+
+pub(crate) fn pptx_to_ir(doc: &crate::pptx::PptxDocument) -> DocumentIR {
+    let _image_scope = crate::limits::begin_image_budget();
+    let _scale = crate::limits::InputSizeScope::new(doc.input_bytes);
+    let _text_scope = crate::limits::begin_copied_text_budget();
+    // Slide size sits at presentation level — every slide in the
+    // deck shares it.
+    let page_setup = doc
+        .presentation
+        .slide_size
+        .as_ref()
+        .and_then(slide_page_setup);
+
+    let mut sections = Vec::new();
+    // Converted notes, by the shared body they came from; their per-slide
+    // copies are charged to the copied-text budget.
+    let mut notes_cache: std::collections::HashMap<usize, (Vec<Element>, usize)> =
+        std::collections::HashMap::new();
+
+    for slide in doc.slides.iter() {
+        if let Some(ref err) = slide.parse_error {
+            // An unreadable slide keeps its place as a notice, so the loss
+            // is visible in every projection of the IR.
+            sections.push(Section {
+                elements: vec![Element::Paragraph(Paragraph {
+                    content: vec![InlineContent::Text(TextSpan::plain(
+                        crate::pptx::text::unreadable_slide_notice(&slide.name, err),
+                    ))],
+                    ..Default::default()
+                })],
+                break_type: if sections.is_empty() {
+                    SectionBreakType::Continuous
+                } else {
+                    SectionBreakType::NextPage
+                },
+                page_setup: page_setup.clone(),
+                ..Default::default()
+            });
+            continue;
+        }
+        let title_with_algn = find_title(&slide.shapes);
+        let title = title_with_algn.as_ref().map(|(t, _)| t.clone());
+        let title_alignment = title_with_algn.as_ref().and_then(|(_, a)| a.clone());
+        let mut elements = Vec::new();
+
+        // Lead each slide with the title placeholder text as a
+        // heading so it has visible demarcation in the rendered
+        // PDF/HTML output. When the slide has no title we used to
+        // synthesise "Slide N" — that was useful for markdown anchors
+        // but pure visual noise in paginated output, where every
+        // slide already starts on its own page via the NextPage break.
+        // Worse, the synthesised heading rendered as 20 pt bold and
+        // contributed ~50 pt of fixed vertical overhead per section,
+        // which inflated PDF→PPTX→PDF round-trip page counts.
+        if let Some(ref t) = title {
+            elements.push(Element::Heading(Heading {
+                level: 2,
+                content: vec![InlineContent::Text(TextSpan::plain(t.clone()))],
+                alignment: title_alignment.clone(),
+                ..Default::default()
+            }));
+        }
+
+        // Sort shapes spatially
+        let mut shape_entries: Vec<(Option<&crate::pptx::ShapePosition>, &crate::pptx::Shape)> =
+            Vec::new();
+        collect_shape_entries(&slide.shapes, &mut shape_entries);
+        shape_entries.sort_by(|a, b| spatial_cmp(a.0, b.0));
+
+        for (_, shape) in &shape_entries {
+            convert_shape(shape, &mut elements);
+        }
+
+        // Propagate slide background colour to the section so the
+        // PDF renderer can paint a full-slide rectangle before laying
+        // down shapes.
+        let background_rgb = slide.background_rgb;
+
+        // Speaker notes are carried in their own field, never appended to
+        // `elements`. Putting them in the element list made every writer treat
+        // them as ordinary body text, so a round trip promoted a presenter's
+        // private note onto the visible slide.
+        //
+        // Converted through the same `convert_text_body` ordinary slide
+        // body text already uses, so bold/italic/bullets/numbering in
+        // notes survive instead of being flattened to plain lines.
+        //
+        // Slides that share a notes part share one parsed body; it is
+        // converted once and each slide gets a copy of the result, whose
+        // text is charged to the document's text budget.
+        let speaker_notes = slide.notes.as_ref().and_then(|tb| {
+            let key = std::sync::Arc::as_ptr(tb) as usize;
+            let (converted, chars) = notes_cache.entry(key).or_insert_with(|| {
+                let mut converted = Vec::new();
+                convert_text_body(tb, &mut converted);
+                // The size of a copy: its serialised form, which holds every
+                // string (link targets, tooltips, font names), the structure
+                // and any image bytes, not just the visible text.
+                let chars = serde_json::to_vec(&converted).map_or(usize::MAX, |v| v.len());
+                (converted, chars)
+            });
+            (!converted.is_empty() && crate::limits::charge_copied_text(*chars))
+                .then(|| converted.clone())
+        });
+
+        // Slide comments are review content that reached no consumer at
+        // all. Carry them as endnotes so every renderer sees them.
+        for (i, c) in slide.comments().enumerate() {
+            // Each slide's endnotes are copies of the shared comments: charged
+            // to the document's copy budget, so a deck of many slides that name
+            // one large comments part cannot multiply it without bound.
+            let cost = c.text.len() + 2 * c.author.as_ref().map_or(0, String::len);
+            if !crate::limits::charge_copied_text(cost) {
+                break;
+            }
+            elements.push(Element::Endnote(Note {
+                id: i as u32,
+                marker: c.author.clone(),
+                author: c.author.clone(),
+                content: vec![Element::Paragraph(Paragraph {
+                    content: vec![InlineContent::Text(TextSpan::plain(c.text.clone()))],
+                    ..Default::default()
+                })],
+            }));
+        }
+
+        // Each PPTX slide is its own page when rendered to PDF or
+        // any paginated format. Default `Continuous` would let two
+        // slides share a page, which is wrong for slide content.
+        let break_type = if sections.is_empty() {
+            SectionBreakType::Continuous
+        } else {
+            SectionBreakType::NextPage
+        };
+
+        sections.push(Section {
+            title: title.clone(),
+            elements,
+            break_type,
+            page_setup: page_setup.clone(),
+            background_rgb,
+            hidden: slide.hidden,
+            speaker_notes,
+            ..Default::default()
+        });
+    }
+
+    // The first slide's *title* is not the deck's title. Read the real one
+    // from `docProps/core.xml`, falling back to the slide title.
+    let cp = doc.core_properties.as_ref();
+    let title = cp
+        .and_then(|c| c.title.clone())
+        .filter(|t| !t.is_empty())
+        .or_else(|| sections.first().and_then(|s| s.title.clone()));
+
+    // Layout and master static text, once per deck, after the slides (see
+    // `pptx::layout`) — through the same conversion as slide text, so the
+    // direct markdown renderer and this one agree.
+    let mut master_elements = Vec::new();
+    for (body, _) in doc.master_static_bodies() {
+        convert_text_body(body, &mut master_elements);
+    }
+    if !master_elements.is_empty() {
+        sections.push(Section {
+            title: Some(crate::pptx::layout::MASTER_TEXT_SECTION_TITLE.to_string()),
+            elements: master_elements,
+            break_type: if sections.is_empty() {
+                SectionBreakType::Continuous
+            } else {
+                SectionBreakType::NextPage
+            },
+            page_setup: page_setup.clone(),
+            ..Default::default()
+        });
+    }
+
+    // Pictures left without their bytes by the image budget: said in the last
+    // slide as well as in the metadata, as the spreadsheet conversion does.
+    let image_notice = crate::limits::image_budget_notice();
+    if let Some(notice) = &image_notice {
+        let paragraph = Element::Paragraph(Paragraph {
+            content: vec![InlineContent::Text(TextSpan::plain(notice.clone()))],
+            ..Default::default()
+        });
+        match sections.last_mut() {
+            Some(last) => last.elements.push(paragraph),
+            None => sections.push(Section {
+                elements: vec![paragraph],
+                page_setup: page_setup.clone(),
+                ..Default::default()
+            }),
+        }
+    }
+
+    // The parts that could not be read end the last section, one paragraph
+    // each, as a spreadsheet's report does; charged to the text budget before
+    // the budget's notice is read below.
+    let unreadable_warnings = doc.unreadable_warnings();
+    let unreadable_lines =
+        crate::core::unreadable::report_ir_lines(&doc.unreadable_text_warnings());
+    if !unreadable_lines.is_empty() {
+        if sections.is_empty() {
+            sections.push(Section::default());
+        }
+        if let Some(last) = sections.last_mut() {
+            last.elements
+                .extend(unreadable_lines.into_iter().map(|line| {
+                    Element::Paragraph(Paragraph {
+                        content: vec![InlineContent::Text(TextSpan::plain(line))],
+                        ..Default::default()
+                    })
+                }));
+        }
+    }
+
+    // Read after every conversion above: links and notes are charged too.
+    let copied_text_notice = crate::limits::copied_text_notice();
+    let mut ir = DocumentIR {
+        metadata: Metadata {
+            format: DocumentFormat::Pptx,
+            title,
+            author: cp.and_then(|c| c.creator.clone()),
+            subject: cp.and_then(|c| c.subject.clone()),
+            keywords: cp
+                .and_then(|c| c.keywords.as_deref())
+                .map(crate::convert_docx::split_keywords)
+                .unwrap_or_default(),
+            created: cp.and_then(|c| c.created.clone()),
+            modified: cp.and_then(|c| c.modified.clone()),
+            description: cp.and_then(|c| c.description.clone()),
+            has_macros: doc.has_macros,
+            text_truncated: doc.unreadable_loses_text()
+                || copied_text_notice.is_some()
+                || image_notice.is_some(),
+            ..crate::core::core_properties::ooxml_metadata_extras(
+                cp,
+                doc.app_properties.as_ref(),
+                Some(&doc.package_properties),
+            )
+        },
+        sections,
+    };
+    // Every part the reader skipped, by name and reason, as the DOCX
+    // conversion lists them.
+    ir.metadata.warnings.extend(unreadable_warnings);
+    ir.metadata.warnings.extend(copied_text_notice);
+    ir.metadata
+        .warnings
+        .extend(crate::limits::image_budget_warning());
+    ir
+}
+
+/// Smallest and largest legal `p:sldSz` extent, in EMU
+/// (`ST_SlideSizeCoordinate`, ECMA-376 Part 1 §19.7.18: 1 inch to 56 inches).
+const MIN_SLIDE_EXTENT_EMU: i64 = 914_400;
+const MAX_SLIDE_EXTENT_EMU: i64 = 51_206_400;
+
+/// The IR page geometry for a deck's slide size. EMU → twips is /635
+/// (914400 EMU per inch, 1440 twips per inch).
+///
+/// A size outside the schema's range is not a page size anything can
+/// honour; converting it used to truncate through `as u32` into an
+/// arbitrary, plausible-looking page. It now yields no page setup (with a
+/// warning), so consumers fall back to their own default.
+fn slide_page_setup(sz: &crate::pptx::SlideSize) -> Option<PageSetup> {
+    let legal = MIN_SLIDE_EXTENT_EMU..=MAX_SLIDE_EXTENT_EMU;
+    if !legal.contains(&sz.cx) || !legal.contains(&sz.cy) {
+        log::warn!(
+            "pptx: slide size {}x{} EMU is outside the legal range; page size not set",
+            sz.cx,
+            sz.cy
+        );
+        return None;
+    }
+    // In range, both quotients are well below u32::MAX.
+    Some(PageSetup {
+        width_twips: u32::try_from(sz.cx / 635).ok()?,
+        height_twips: u32::try_from(sz.cy / 635).ok()?,
+        landscape: sz.cx > sz.cy,
+        ..Default::default()
+    })
+}
+
+fn collect_shape_entries<'a>(
+    shapes: &'a [crate::pptx::Shape],
+    entries: &mut Vec<(Option<&'a crate::pptx::ShapePosition>, &'a crate::pptx::Shape)>,
+) {
+    for shape in shapes {
+        match shape {
+            crate::pptx::Shape::Group(grp) => {
+                collect_shape_entries(&grp.children, entries);
+            },
+            crate::pptx::Shape::AutoShape(auto) => {
+                entries.push((auto.position.as_ref(), shape));
+            },
+            crate::pptx::Shape::Picture(pic) => {
+                entries.push((pic.position.as_ref(), shape));
+            },
+            crate::pptx::Shape::GraphicFrame(gf) => {
+                entries.push((gf.position.as_ref(), shape));
+            },
+            crate::pptx::Shape::Connector(_) => {},
+        }
+    }
+}
+
+fn spatial_cmp(
+    a: Option<&crate::pptx::ShapePosition>,
+    b: Option<&crate::pptx::ShapePosition>,
+) -> std::cmp::Ordering {
+    match (a, b) {
+        (Some(a), Some(b)) => a.y.cmp(&b.y).then(a.x.cmp(&b.x)),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => std::cmp::Ordering::Equal,
+    }
+}
+
+fn is_title_placeholder(ph_type: Option<&str>) -> bool {
+    matches!(ph_type, Some("title" | "ctrTitle"))
+}
+
+/// A body/content-style placeholder: `type="body"`/`"subTitle"`, or no
+/// `type` attribute at all (the OOXML default for a text placeholder).
+/// This crate's own PPTX writer always emits an explicit, synthetic
+/// `<a:xfrm>` on these two shape kinds (`write_title_shape`/
+/// `write_body_shape`) for consistent rendering across viewers that
+/// don't resolve slide-layout inheritance — but on the next read, that
+/// self-inflicted explicit position was indistinguishable from a real,
+/// deliberately positioned free-floating text box, so this content got
+/// wrapped in a spurious `Element::TextBox` on every write→reread cycle
+///. `dt`/`ftr`/`sldNum`/`pic`/`chart`/`tbl`/`media`
+/// placeholders are deliberately excluded — this crate's writer never
+/// emits those on a slide (only `write_layout_placeholder`, a separate,
+/// unrelated slide-*layout* writer, uses other `ph_type`s), so an
+/// explicit position on one of those in a real file is far more likely
+/// to be a genuine, meaningful override worth preserving.
+fn is_body_placeholder(ph_type: Option<&str>) -> bool {
+    matches!(ph_type, None | Some("body" | "subTitle"))
+}
+
+/// Locate the title placeholder and return its text together with the
+/// alignment of the first paragraph. Used by `pptx_to_ir` to seed both
+/// `Section.title` and the synthesised level-2 Heading's alignment.
+fn find_title(shapes: &[crate::pptx::Shape]) -> Option<(String, Option<ParagraphAlignment>)> {
+    for shape in shapes {
+        match shape {
+            crate::pptx::Shape::AutoShape(auto)
+                if auto
+                    .placeholder
+                    .as_ref()
+                    .is_some_and(|ph| is_title_placeholder(ph.ph_type.as_deref())) =>
+            {
+                if let Some(ref tb) = auto.text_body {
+                    let text = plain_text_from_body(tb);
+                    if !text.is_empty() {
+                        let algn = tb.paragraphs.first().and_then(|p| p.alignment.clone());
+                        return Some((text, algn));
+                    }
+                }
+            },
+            crate::pptx::Shape::Group(grp) => {
+                if let Some(t) = find_title(&grp.children) {
+                    return Some(t);
+                }
+            },
+            _ => {},
+        }
+    }
+    None
+}
+
+fn plain_text_from_body(body: &crate::pptx::TextBody) -> String {
+    let mut parts = Vec::new();
+    for para in &body.paragraphs {
+        let mut text = String::new();
+        for content in &para.content {
+            match content {
+                crate::pptx::TextContent::Run(run) => text.push_str(&run.text),
+                crate::pptx::TextContent::LineBreak => text.push('\n'),
+                crate::pptx::TextContent::Field(field) => text.push_str(&field.text),
+            }
+        }
+        parts.push(text);
+    }
+    parts.join("\n")
+}
+
+fn convert_shape(shape: &crate::pptx::Shape, elements: &mut Vec<Element>) {
+    match shape {
+        crate::pptx::Shape::AutoShape(auto) => {
+            // Skip title placeholder — used as section title
+            if auto
+                .placeholder
+                .as_ref()
+                .is_some_and(|ph| is_title_placeholder(ph.ph_type.as_deref()))
+            {
+                return;
+            }
+
+            let is_body_ph = auto
+                .placeholder
+                .as_ref()
+                .is_some_and(|ph| is_body_placeholder(ph.ph_type.as_deref()));
+
+            let mut has_text_content = false;
+            if let Some(ref tb) = auto.text_body {
+                let mut inner = Vec::new();
+                convert_text_body(tb, &mut inner);
+                if !inner.is_empty() {
+                    has_text_content = true;
+                    // Surface the placeholder's own role (subtitle, date,
+                    // slide number, footer, object, …) on every paragraph
+                    // built from it — richer than `TextType`'s 8 values
+                    // and, unlike it, not thrown away after the
+                    // title/body classification above is done with it.
+                    if let Some(ph_type) = auto
+                        .placeholder
+                        .as_ref()
+                        .and_then(|ph| ph.ph_type.as_deref())
+                    {
+                        tag_placeholder_role(&mut inner, ph_type);
+                    }
+                    if is_body_ph {
+                        elements.extend(inner);
+                    } else {
+                        push_positional_textbox(elements, inner, auto.position.as_ref());
+                    }
+                }
+            }
+            // A non-text AutoShape (decorative icon, action button, …)
+            // whose only content is its accessibility description and/or
+            // its own click action used to produce zero IR output at
+            // all — not even a placeholder, unlike Picture shapes,
+            // where alt text already survives. Action Buttons are drawn
+            // as icons with no text by convention, so for those the
+            // click target *is* the shape's entire purpose).
+            // Emit the same kind of data-less Image placeholder
+            // Picture already falls back to when its own relationship
+            // can't be resolved, so the description, click action and
+            // position all survive.
+            let shape_hyperlink = auto.hyperlink.as_ref().and_then(hyperlink_info_url);
+            if !has_text_content && (auto.alt_text.is_some() || shape_hyperlink.is_some()) {
+                let (display_w, display_h) = auto
+                    .position
+                    .as_ref()
+                    .map(|p| (Some(p.cx.max(0) as u64), Some(p.cy.max(0) as u64)))
+                    .unwrap_or((None, None));
+                elements.push(Element::Image(Image {
+                    alt_text: auto.alt_text.clone(),
+                    data: None,
+                    display_width_emu: display_w,
+                    display_height_emu: display_h,
+                    hyperlink: shape_hyperlink,
+                    ..Default::default()
+                }));
+            }
+        },
+        crate::pptx::Shape::Picture(pic) => {
+            // Carry the resolved media bytes through so the PDF renderer
+            // (`render_pptx_textbox_content`) can paint the actual
+            // picture at its shape rectangle. `embed_rid` is preserved
+            // as alt-text fallback only when the relationship couldn't
+            // be resolved — we still want a placeholder element so the
+            // shape's position survives in plain-text / markdown output.
+            let format = pic.format.as_deref().and_then(image_format_from_ext);
+            let (display_w, display_h) = pic
+                .position
+                .as_ref()
+                .map(|p| (Some(p.cx.max(0) as u64), Some(p.cy.max(0) as u64)))
+                .unwrap_or((None, None));
+            let img_el = Element::Image(Image {
+                alt_text: pic.alt_text.clone(),
+                // Pictures share the media bytes; each IR image owns a copy,
+                // charged to the image-byte budget.
+                data: pic
+                    .data
+                    .as_deref()
+                    .filter(|d| crate::limits::charge_image_bytes(d.len()))
+                    .map(<[u8]>::to_vec),
+                format,
+                display_width_emu: display_w,
+                display_height_emu: display_h,
+                hyperlink: pic.hyperlink.as_ref().and_then(hyperlink_info_url),
+                source_url: pic.link_target.as_deref().and_then(copied_url),
+                ..Default::default()
+            });
+            push_positional_textbox(elements, vec![img_el], pic.position.as_ref());
+        },
+        crate::pptx::Shape::Group(grp) => {
+            for child in &grp.children {
+                convert_shape(child, elements);
+            }
+        },
+        crate::pptx::Shape::GraphicFrame(gf) => match gf.content {
+            crate::pptx::GraphicContent::Table(ref tbl) => {
+                let table_el = convert_pptx_table(tbl);
+                push_positional_textbox(elements, vec![table_el], gf.position.as_ref());
+            },
+            // SmartArt / chart text. We don't draw the graphic, but its
+            // words are document content and used to be dropped entirely —
+            // a deck built out of SmartArt extracted as empty.
+            crate::pptx::GraphicContent::Text(ref lines) => {
+                // The part's lines are stored once and shared by every frame
+                // that names it; each frame's copy in the IR (a paragraph per
+                // line) is charged before it is made, and left out once the
+                // budget is spent.
+                let per_line = std::mem::size_of::<Element>() + std::mem::size_of::<TextSpan>();
+                let fits = crate::limits::charge_copied_text(crate::pptx::shape::lines_cost(
+                    lines, per_line,
+                ));
+                let paras: Vec<Element> = lines
+                    .iter()
+                    .filter(|_| fits)
+                    .map(|t| {
+                        Element::Paragraph(Paragraph {
+                            content: vec![InlineContent::Text(TextSpan::plain(t.clone()))],
+                            ..Default::default()
+                        })
+                    })
+                    .collect();
+                if !paras.is_empty() {
+                    push_positional_textbox(elements, paras, gf.position.as_ref());
+                }
+            },
+            // An OLE object is shown as its preview picture. It used to fall
+            // through as an unknown graphic, losing the preview.
+            crate::pptx::GraphicContent::OleObject(ref ole) => {
+                if let Some(ref shared) = ole.preview_data {
+                    // Frames share the preview's bytes; each IR image owns a
+                    // copy, charged to the image-byte budget like a picture's.
+                    let data =
+                        crate::limits::charge_image_bytes(shared.len()).then(|| shared.to_vec());
+                    let (display_w, display_h) = gf
+                        .position
+                        .as_ref()
+                        .map(|p| (Some(p.cx.max(0) as u64), Some(p.cy.max(0) as u64)))
+                        .unwrap_or((None, None));
+                    let img = Element::Image(Image {
+                        data,
+                        format: ole
+                            .preview_format
+                            .as_deref()
+                            .and_then(image_format_from_ext),
+                        display_width_emu: display_w,
+                        display_height_emu: display_h,
+                        ..Default::default()
+                    });
+                    push_positional_textbox(elements, vec![img], gf.position.as_ref());
+                } else {
+                    log::debug!(
+                        "pptx: OLE object {:?} ({:?}) has no preview picture",
+                        ole.name,
+                        ole.prog_id
+                    );
+                }
+            },
+            crate::pptx::GraphicContent::Unknown => {},
+        },
+        crate::pptx::Shape::Connector(_) => {},
+    }
+}
+
+/// Set `placeholder_role` on every `Paragraph` reachable from `elements`
+/// (recursing into `List` items and `TextBox` content, the two other
+/// block containers a placeholder's own text can be wrapped in).
+/// `Heading` is deliberately left untouched: title/centered-title
+/// placeholders already have a reliable, unambiguous signal via
+/// `is_title_placeholder`/`TextType`, so this only adds real information
+/// for the roles that `TextType`'s 8 values can't express.
+fn tag_placeholder_role(elements: &mut [Element], role: &str) {
+    for el in elements {
+        match el {
+            Element::Paragraph(p) => p.placeholder_role = Some(role.to_string()),
+            Element::List(l) => {
+                for item in &mut l.items {
+                    tag_placeholder_role(&mut item.content, role);
+                }
+            },
+            Element::TextBox(tb) => tag_placeholder_role(&mut tb.content, role),
+            _ => {},
+        }
+    }
+}
+
+/// Wrap a shape's converted IR content in a `TextBox` carrying its
+/// absolute `(x, y, cx, cy)` EMU rectangle. The PPTX renderer uses
+/// these coordinates to paint each shape at its source position
+/// instead of flowing them as a single long page.
+///
+/// When the source shape has no `<a:xfrm>` (rare — placeholders that
+/// inherit geometry from a slide layout), the inner content is pushed
+/// as flow elements so plain-text / markdown rendering still sees it.
+fn push_positional_textbox(
+    elements: &mut Vec<Element>,
+    content: Vec<Element>,
+    position: Option<&crate::pptx::ShapePosition>,
+) {
+    // Wrap in `Element::TextBox` only when the source shape carried a
+    // *real* `<a:xfrm>`. Placeholders that inherit geometry from the
+    // slide layout parse as `ShapePosition { x: 0, y: 0, cx: 0, cy: 0 }`
+    // — wrapping those in TextBox tells the renderer "place this 0×0
+    // rectangle at (0, 0)" which collapses every paragraph onto the
+    // top-left corner. Treat all-zeros as "no position" so the
+    // content flows normally instead.
+    let real_position = position.filter(|p| p.cx > 0 && p.cy > 0);
+    if let Some(pos) = real_position {
+        elements.push(Element::TextBox(TextBox {
+            content,
+            x_emu: Some(pos.x),
+            y_emu: Some(pos.y),
+            width_emu: Some(pos.cx.max(0) as u64),
+            height_emu: Some(pos.cy.max(0) as u64),
+            ..Default::default()
+        }));
+    } else {
+        elements.extend(content);
+    }
+}
+
+/// Whether `para` is a list item: it declares a bullet (`buChar`,
+/// `buAutoNum`, `buBlip`), or it is indented and does not switch bullets
+/// off (`buNone`).
+fn is_list_paragraph(para: &crate::pptx::TextParagraph) -> bool {
+    use crate::pptx::BulletStyle;
+    match para.bullet {
+        Some(BulletStyle::Char(_) | BulletStyle::AutoNum { .. } | BulletStyle::Picture { .. }) => {
+            true
+        },
+        Some(BulletStyle::None) => false,
+        None => para.level > 0,
+    }
+}
+
+/// `Some(true)` for a numbered paragraph, `Some(false)` for a bulleted one,
+/// `None` when it declares neither (an inherited bullet).
+fn paragraph_is_ordered(para: &crate::pptx::TextParagraph) -> Option<bool> {
+    use crate::pptx::BulletStyle;
+    match para.bullet {
+        Some(BulletStyle::AutoNum { .. }) => Some(true),
+        Some(BulletStyle::Char(_) | BulletStyle::Picture { .. }) => Some(false),
+        _ => None,
+    }
+}
+
+/// Convert a text body into block elements: each run of consecutive list
+/// paragraphs becomes one `List`, every other paragraph a `Paragraph`.
+///
+/// Shared by `to_ir()` and the direct markdown renderer, so the two cannot
+/// lay a slide out differently. The whole body used to become one list as
+/// soon as any paragraph was bulleted, so plain paragraphs rendered as
+/// bullets and a numbered run after a bulleted one lost its numbers.
+pub(crate) fn convert_text_body(body: &crate::pptx::TextBody, elements: &mut Vec<Element>) {
+    let paras = &body.paragraphs;
+    let mut i = 0;
+    while i < paras.len() {
+        if !is_list_paragraph(&paras[i]) {
+            convert_plain_text_paragraph(&paras[i], elements);
+            i += 1;
+            continue;
+        }
+        // One list: consecutive list paragraphs, until a paragraph at the
+        // list's top level switches between numbered and bulleted.
+        let start = i;
+        let mut top_level = paras[i].level;
+        let mut top_ordered = paragraph_is_ordered(&paras[i]);
+        i += 1;
+        while i < paras.len() && is_list_paragraph(&paras[i]) {
+            let p = &paras[i];
+            if p.level <= top_level {
+                let kind = paragraph_is_ordered(p);
+                if kind.is_some() && top_ordered.is_some() && kind != top_ordered {
+                    break;
+                }
+                top_level = p.level;
+                top_ordered = top_ordered.or(kind);
+            }
+            i += 1;
+        }
+        elements.push(Element::List(convert_list_run(&paras[start..i])));
+    }
+}
+
+/// One run of list paragraphs as a nested `List`. The shallowest bulleted
+/// paragraph decides the list's marker style and start value.
+fn convert_list_run(paras: &[crate::pptx::TextParagraph]) -> List {
+    use crate::pptx::BulletStyle;
+    let mut items = Vec::new();
+    let mut top_level: Option<u32> = None;
+    let mut ordered = false;
+    let mut style: Option<ListStyle> = None;
+    let mut start_number: Option<u32> = None;
+    for para in paras {
+        if top_level.is_none_or(|t| para.level < t) {
+            if let Some(b) = para.bullet.as_ref() {
+                top_level = Some(para.level);
+                match b {
+                    BulletStyle::AutoNum { scheme, start_at } => {
+                        ordered = true;
+                        style = Some(auto_num_style(scheme));
+                        start_number = start_at.filter(|&n| n != 1);
+                    },
+                    // A picture bullet is an unordered marker drawn
+                    // as an image.
+                    BulletStyle::Char(_) | BulletStyle::Picture { .. } => {
+                        ordered = false;
+                        style = Some(ListStyle::Bullet);
+                    },
+                    BulletStyle::None => {},
+                }
+            }
+        }
+        items.push((para.level as u8, convert_text_paragraph_inline(para)));
+    }
+    let mut list = crate::ir::build_nested_list(ordered, &items, 0);
+    list.style = style;
+    list.start_number = start_number;
+    list
+}
+
+fn convert_plain_text_paragraph(para: &crate::pptx::TextParagraph, elements: &mut Vec<Element>) {
+    let content = convert_text_paragraph_inline(para);
+    // Honour space_before from PPTX so spacer paragraphs
+    // emitted by pdf_to_ir round-trip with their full vertical
+    // gap. Convert hundredths-of-pt → twips: 1pt = 20 twips,
+    // so pt*100 → twips = (pt*100)/5. Plain division keeps the
+    // round-trip exact for values that are multiples of 5;
+    // div_ceil would inflate every non-multiple by 1 twip.
+    let space_before_twips = para
+        .space_before_hundredths_pt
+        .map(|h| h / 5)
+        .or_else(|| percent_spacing_twips(para, para.space_before));
+    // Empty paragraphs serve as vertical spacers — keep them
+    // in the IR even when content is empty so the renderer
+    // can advance the cursor by the requested amount.
+    if !content.is_empty() || space_before_twips.is_some() {
+        elements.push(Element::Paragraph(Paragraph {
+            content,
+            alignment: para.alignment.clone(),
+            space_before_twips,
+            space_after_twips: match para.space_after {
+                Some(crate::pptx::TextSpacing::Points(h)) => Some(h / 5),
+                pct => percent_spacing_twips(para, pct),
+            },
+            line_spacing: para.line_spacing.map(|s| match s {
+                // Same unit as DOCX `w:line` with lineRule=auto:
+                // 240ths of a line (100000 = single = 240).
+                crate::pptx::TextSpacing::Percent(p) => LineSpacing::Auto(
+                    u32::try_from(u64::from(p) * 240 / 100_000).unwrap_or(u32::MAX),
+                ),
+                crate::pptx::TextSpacing::Points(h) => LineSpacing::Exact(h / 5),
+            }),
+            indent_left_twips: para.margin_left_emu.map(emu_to_twips),
+            indent_right_twips: para.margin_right_emu.map(emu_to_twips),
+            first_line_indent_twips: para.indent_emu.map(emu_to_twips),
+            tabs: para
+                .tab_stops
+                .iter()
+                .map(|t| TabStop {
+                    position_twips: emu_to_twips(t.position_emu),
+                    alignment: match t.alignment.as_deref() {
+                        Some("ctr") => TabAlignment::Center,
+                        Some("r") => TabAlignment::Right,
+                        Some("dec") => TabAlignment::Decimal,
+                        _ => TabAlignment::Left,
+                    },
+                    leader: TabLeader::None,
+                })
+                .collect(),
+            ..Default::default()
+        }));
+    }
+}
+
+/// Text size a percent spacing is measured against when no run in the
+/// paragraph resolves one through the inheritance chain: 18 pt, the size
+/// PowerPoint and LibreOffice's OOXML import both fall back to.
+const DEFAULT_TEXT_SIZE_HUNDREDTHS_PT: u32 = 1800;
+
+/// A percent-form space before/after (`<a:spcPct>` inside `<a:spcBef>` /
+/// `<a:spcAft>`, ECMA-376 Part 1 §21.1.2.2.11: "a percentage of the text
+/// size") as twips, measured against the first run's resolved font size
+/// (its own `sz`, or the size the list-style / placeholder / master chain
+/// filled in). `None` for any other spacing form.
+fn percent_spacing_twips(
+    para: &crate::pptx::TextParagraph,
+    spacing: Option<crate::pptx::TextSpacing>,
+) -> Option<u32> {
+    let crate::pptx::TextSpacing::Percent(pct) = spacing? else {
+        return None;
+    };
+    let size = para
+        .content
+        .iter()
+        .find_map(|c| match c {
+            crate::pptx::TextContent::Run(r) => r.font_size_hundredths_pt,
+            _ => None,
+        })
+        .unwrap_or(DEFAULT_TEXT_SIZE_HUNDREDTHS_PT);
+    // hundredths-pt × (pct / 100000) × 20 twips/pt ÷ 100.
+    u32::try_from(u64::from(size) * u64::from(pct) / 500_000).ok()
+}
+
+/// EMU → twips (635 EMU per twip), saturating at the `i32` range.
+fn emu_to_twips(emu: i64) -> i32 {
+    i32::try_from(emu / 635).unwrap_or(if emu < 0 { i32::MIN } else { i32::MAX })
+}
+
+/// Resolve a parsed `HyperlinkInfo` (run-level `a:rPr/a:hlinkClick` or
+/// shape-level `p:cNvPr/a:hlinkClick`) into the IR's flat URL string.
+/// Internal targets become `#fragment` references, matching how DOCX's
+/// own `hyperlink_url` treats `w:anchor`.
+fn hyperlink_info_url(info: &crate::pptx::HyperlinkInfo) -> Option<String> {
+    match &info.target {
+        crate::pptx::HyperlinkTarget::External(url) => copied_url(url),
+        crate::pptx::HyperlinkTarget::Internal(loc) if !loc.is_empty() => {
+            // `#` and the target, charged before either is copied.
+            crate::limits::charge_copied_text(loc.len() + 1).then(|| format!("#{loc}"))
+        },
+        crate::pptx::HyperlinkTarget::Internal(_) => None,
+    }
+}
+
+/// A target shared in the document, copied into one IR field. The copy is
+/// charged to the copied-text budget first, so a relationship target that many
+/// runs name cannot be multiplied without bound; `None` once the budget is
+/// spent.
+fn copied_url(url: &str) -> Option<String> {
+    crate::limits::charge_copied_text(url.len()).then(|| url.to_string())
+}
+
+fn convert_text_paragraph_inline(para: &crate::pptx::TextParagraph) -> Vec<InlineContent> {
+    let mut content = Vec::new();
+    for tc in &para.content {
+        match tc {
+            crate::pptx::TextContent::Run(run) => {
+                if !run.text.is_empty() {
+                    let hyperlink = run.hyperlink.as_ref().and_then(hyperlink_info_url);
+                    let font_size_half_pt = run.font_size_hundredths_pt.map(|hp| {
+                        crate::core::units::HalfPoint::from_drawingml_sz(hp)
+                            .0
+                            .max(1)
+                    });
+                    // `u`, `latin@typeface`, `baseline`, `cap` and `spc`
+                    // all reach the IR from DOCX; they used to stop here
+                    // for PPTX, so the same formatting survived one format
+                    // and not the other.
+                    let underline = run.underline.as_deref().map(|u| match u {
+                        "none" => UnderlineStyle::None,
+                        "dbl" => UnderlineStyle::Double,
+                        "heavy" | "wavyHeavy" => UnderlineStyle::Thick,
+                        "dotted" | "dottedHeavy" => UnderlineStyle::Dotted,
+                        "dash" | "dashHeavy" | "dashLong" | "dashLongHeavy" => UnderlineStyle::Dash,
+                        "dotDash" | "dotDashHeavy" => UnderlineStyle::DotDash,
+                        "dotDotDash" | "dotDotDashHeavy" => UnderlineStyle::DotDotDash,
+                        "wavy" | "wavyDbl" => UnderlineStyle::Wave,
+                        "words" => UnderlineStyle::Words,
+                        _ => UnderlineStyle::Single,
+                    });
+                    // `baseline` is in thousandths of a percent of the font
+                    // size: positive raises (superscript), negative lowers.
+                    let vertical_align = run.baseline.map(|b| match b {
+                        0 => VerticalAlign::Baseline,
+                        b if b > 0 => VerticalAlign::Superscript,
+                        _ => VerticalAlign::Subscript,
+                    });
+                    content.push(InlineContent::Text(TextSpan {
+                        text: run.text.clone(),
+                        bold: run.bold.unwrap_or(false),
+                        italic: run.italic.unwrap_or(false),
+                        strikethrough: run.strikethrough,
+                        hyperlink,
+                        font_size_half_pt,
+                        color: run.color_rgb,
+                        underline,
+                        font_name: run.font_name.clone(),
+                        vertical_align,
+                        all_caps: run.caps.as_deref() == Some("all"),
+                        small_caps: run.caps.as_deref() == Some("small"),
+                        // DrawingML `spc` is hundredths of a point; the IR
+                        // field uses the twentieths-of-a-point units the
+                        // DOCX writer emits, so scale by 1/5.
+                        char_spacing_half_pt: run.char_spacing_hundredths_pt.map(|s| s / 5),
+                        hyperlink_tooltip: run.hyperlink.as_ref().and_then(|h| h.tooltip.clone()),
+                        ..Default::default()
+                    }));
+                }
+            },
+            crate::pptx::TextContent::LineBreak => {
+                content.push(InlineContent::LineBreak);
+            },
+            crate::pptx::TextContent::Field(field) => {
+                if !field.text.is_empty() {
+                    content.push(InlineContent::Text(TextSpan::plain(field.text.clone())));
+                }
+            },
+        }
+    }
+    content
+}
+
+/// Map an `<a:buAutoNum type="…">` scheme onto the IR's marker style.
+fn auto_num_style(scheme: &str) -> ListStyle {
+    match scheme {
+        s if s.starts_with("alphaLc") => ListStyle::LowerAlpha,
+        s if s.starts_with("alphaUc") => ListStyle::UpperAlpha,
+        s if s.starts_with("romanLc") => ListStyle::LowerRoman,
+        s if s.starts_with("romanUc") => ListStyle::UpperRoman,
+        _ => ListStyle::Decimal,
+    }
+}
+
+fn convert_pptx_table(table: &crate::pptx::Table) -> Element {
+    let mut ir_rows = Vec::new();
+    let last_idx = table.rows.len().saturating_sub(1);
+
+    for (row_idx, row) in table.rows.iter().enumerate() {
+        let mut ir_cells = Vec::new();
+
+        for cell in &row.cells {
+            // Skip merged cells
+            if cell.h_merge || cell.v_merge {
+                continue;
+            }
+
+            let mut cell_elements = Vec::new();
+            if let Some(ref tb) = cell.text_body {
+                for para in &tb.paragraphs {
+                    let content = convert_text_paragraph_inline(para);
+                    if !content.is_empty() {
+                        cell_elements.push(Element::Paragraph(Paragraph {
+                            content,
+                            alignment: para.alignment.clone(),
+                            ..Default::default()
+                        }));
+                    }
+                }
+            }
+
+            ir_cells.push(TableCell {
+                content: cell_elements,
+                col_span: cell.grid_span,
+                row_span: cell.row_span,
+                ..Default::default()
+            });
+        }
+
+        // `<a:tblPr firstRow="1">` is how a DrawingML table declares a
+        // header row. Assuming row 0 is always one labelled ordinary data
+        // as headers in every table that declares none.
+        ir_rows.push(TableRow {
+            cells: ir_cells,
+            is_header: (row_idx == 0 && table.first_row_header)
+                || (row_idx == last_idx && row_idx != 0 && table.last_row_header),
+            repeat_as_header: row_idx == 0 && table.first_row_header,
+            ..Default::default()
+        });
+    }
+
+    Element::Table(Table {
+        rows: ir_rows,
+        ..Default::default()
+    })
+}
+
+/// Map a lowercase file extension (`"png"`, `"jpeg"`, `"emf"`, …) to
+/// the matching `ImageFormat` variant. Used by `convert_shape` when
+/// converting a parsed PPTX `<p:pic>` whose underlying media part the
+/// PPTX reader resolved into bytes + extension.
+fn image_format_from_ext(ext: &str) -> Option<ImageFormat> {
+    match ext {
+        "png" => Some(ImageFormat::Png),
+        "jpg" | "jpeg" => Some(ImageFormat::Jpeg),
+        "gif" => Some(ImageFormat::Gif),
+        "tif" | "tiff" => Some(ImageFormat::Tiff),
+        "bmp" => Some(ImageFormat::Bmp),
+        "emf" => Some(ImageFormat::Emf),
+        "wmf" => Some(ImageFormat::Wmf),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::pptx::shape::{TextBody, TextContent, TextParagraph, TextRun};
+
+    fn bullet(level: u32, text: &str) -> TextParagraph {
+        TextParagraph {
+            level,
+            content: vec![TextContent::Run(TextRun {
+                text: text.to_string(),
+                ..Default::default()
+            })],
+            ..Default::default()
+        }
+    }
+
+    fn list_texts(list: &crate::ir::List) -> Vec<String> {
+        list.items
+            .iter()
+            .map(|li| {
+                let mut out = String::new();
+                for el in &li.content {
+                    if let Element::Paragraph(p) = el {
+                        for c in &p.content {
+                            if let crate::ir::InlineContent::Text(t) = c {
+                                out.push_str(&t.text);
+                            }
+                        }
+                    }
+                }
+                out
+            })
+            .collect()
+    }
+
+    /// An absurd `p:sldSz` truncated through `as u32` into an arbitrary
+    /// page size; an out-of-range size must yield no page size at all.
+    #[test]
+    fn test_out_of_range_slide_size_does_not_become_a_page_size() {
+        use crate::pptx::SlideSize;
+        let ok = slide_page_setup(&SlideSize {
+            cx: 12_192_000,
+            cy: 6_858_000,
+        })
+        .expect("a 16:9 slide is legal");
+        assert_eq!((ok.width_twips, ok.height_twips, ok.landscape), (19_200, 10_800, true));
+        for (cx, cy) in [
+            (i64::MAX, 6_858_000),
+            (4_294_967_296 * 635, 6_858_000),
+            (0, 6_858_000),
+            (-5, 6_858_000),
+            (12_192_000, 51_206_401),
+        ] {
+            assert!(
+                slide_page_setup(&SlideSize { cx, cy }).is_none(),
+                "{cx}x{cy} must not produce a page size"
+            );
+        }
+    }
+
+    /// A non-text AutoShape (decorative icon, action
+    /// button, …) whose only content is its accessibility description
+    /// used to produce zero IR output at all, unlike Picture shapes,
+    /// where alt text already survives.
+    #[test]
+    fn test_non_text_autoshape_alt_text_reaches_the_ir() {
+        let shape = crate::pptx::Shape::AutoShape(crate::pptx::shape::AutoShape {
+            id: 1,
+            name: "Icon 1".to_string(),
+            alt_text: Some("SRS_Globe_lr2".to_string()),
+            position: None,
+            text_body: None,
+            placeholder: None,
+            hyperlink: None,
+        });
+        let mut elements = Vec::new();
+        convert_shape(&shape, &mut elements);
+        assert_eq!(elements.len(), 1, "expected one placeholder element, got {elements:?}");
+        match &elements[0] {
+            Element::Image(img) => {
+                assert_eq!(img.alt_text.as_deref(), Some("SRS_Globe_lr2"));
+                assert!(img.data.is_none(), "a non-text AutoShape has no image bytes");
+            },
+            other => panic!("expected Element::Image, got {other:?}"),
+        }
+    }
+
+    /// This crate's own PPTX writer always gives a body/
+    /// title placeholder shape an explicit `<a:xfrm>` (for consistent
+    /// rendering across viewers that don't resolve slide-layout
+    /// inheritance), which used to be indistinguishable on read from a
+    /// real, deliberately positioned free-floating text box — every
+    /// deck this crate wrote got its body content wrapped in a spurious
+    /// `Element::TextBox` on the very next read. A body placeholder's
+    /// content must flow as ordinary elements even when it carries a
+    /// real (non-zero) position.
+    #[test]
+    fn test_a_body_placeholder_with_an_explicit_position_still_flows_not_wraps() {
+        use crate::pptx::shape::{AutoShape, PlaceholderInfo, ShapePosition, TextBody};
+        let shape = crate::pptx::Shape::AutoShape(AutoShape {
+            id: 2,
+            name: "Content Placeholder 2".to_string(),
+            alt_text: None,
+            position: Some(ShapePosition {
+                x: 100,
+                y: 200,
+                cx: 300,
+                cy: 400,
+            }),
+            text_body: Some(TextBody {
+                paragraphs: vec![bullet(0, "Body text")],
+            }),
+            placeholder: Some(PlaceholderInfo {
+                ph_type: Some("body".to_string()),
+                idx: Some(1),
+            }),
+            hyperlink: None,
+        });
+        let mut elements = Vec::new();
+        convert_shape(&shape, &mut elements);
+        assert!(
+            !elements.iter().any(|e| matches!(e, Element::TextBox(_))),
+            "a body placeholder's content must not be wrapped in a positioned TextBox: {elements:?}"
+        );
+        assert!(
+            elements.iter().any(|e| matches!(e, Element::Paragraph(_))),
+            "the body placeholder's text must still reach the IR as flowed content: {elements:?}"
+        );
+    }
+
+    /// A placeholder's `ph_type` (subtitle/date/footer/etc.,
+    /// richer than the title/body split `is_title_placeholder`/
+    /// `is_body_placeholder` collapse everything else into) must reach
+    /// `Paragraph::placeholder_role` in the IR, not be discarded after
+    /// the title/body classification above is done with it.
+    #[test]
+    fn test_placeholder_ph_type_reaches_paragraph_placeholder_role() {
+        use crate::pptx::shape::{AutoShape, PlaceholderInfo, ShapePosition, TextBody};
+        let shape = crate::pptx::Shape::AutoShape(AutoShape {
+            id: 4,
+            name: "Date Placeholder 4".to_string(),
+            alt_text: None,
+            position: Some(ShapePosition {
+                x: 100,
+                y: 200,
+                cx: 300,
+                cy: 400,
+            }),
+            text_body: Some(TextBody {
+                paragraphs: vec![bullet(0, "9/19/2026")],
+            }),
+            placeholder: Some(PlaceholderInfo {
+                ph_type: Some("dt".to_string()),
+                idx: Some(2),
+            }),
+            hyperlink: None,
+        });
+        let mut elements = Vec::new();
+        convert_shape(&shape, &mut elements);
+        // A placeholder with a real (non-zero) position wraps its content
+        // in a positioned `TextBox` (see `push_positional_textbox`), so
+        // the tagged `Paragraph` lives one level down from `elements`.
+        let inner = match elements.as_slice() {
+            [Element::TextBox(tb)] => &tb.content,
+            _ => &elements,
+        };
+        let paragraph_roles: Vec<Option<String>> = inner
+            .iter()
+            .filter_map(|e| match e {
+                Element::Paragraph(p) => Some(p.placeholder_role.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            paragraph_roles,
+            vec![Some("dt".to_string())],
+            "the date placeholder's own paragraph must carry its role: {elements:?}"
+        );
+    }
+
+    /// A genuine free-floating text box (no `<p:ph>` at all) must keep
+    /// its positioned-`TextBox` wrap even though it carries the exact
+    /// same kind of real position a body placeholder now flows past.
+    #[test]
+    fn test_a_non_placeholder_shape_with_a_position_still_wraps() {
+        use crate::pptx::shape::{AutoShape, ShapePosition, TextBody};
+        let shape = crate::pptx::Shape::AutoShape(AutoShape {
+            id: 3,
+            name: "TextBox 3".to_string(),
+            alt_text: None,
+            position: Some(ShapePosition {
+                x: 100,
+                y: 200,
+                cx: 300,
+                cy: 400,
+            }),
+            text_body: Some(TextBody {
+                paragraphs: vec![bullet(0, "Floating text")],
+            }),
+            placeholder: None,
+            hyperlink: None,
+        });
+        let mut elements = Vec::new();
+        convert_shape(&shape, &mut elements);
+        assert!(
+            elements.iter().any(|e| matches!(e, Element::TextBox(_))),
+            "a real free-floating text box must keep its positioned wrap: {elements:?}"
+        );
+    }
+
+    /// A placeholder whose bullets all sit at outline level 1 — ordinary
+    /// PowerPoint, and the shape that used to lose every bullet after the
+    /// first when the flat run was folded into the IR list tree.
+    #[test]
+    fn test_uniformly_indented_bullets_all_survive() {
+        let body = TextBody {
+            paragraphs: vec![bullet(1, "first"), bullet(1, "second"), bullet(1, "third")],
+        };
+
+        let mut elements = Vec::new();
+        convert_text_body(&body, &mut elements);
+
+        let list = elements
+            .iter()
+            .find_map(|el| match el {
+                Element::List(l) => Some(l),
+                _ => None,
+            })
+            .expect("a list is produced");
+
+        assert_eq!(list_texts(list), vec!["first", "second", "third"], "no bullet may be dropped");
+    }
+}

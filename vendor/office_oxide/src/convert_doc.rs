@@ -1,0 +1,2667 @@
+use crate::doc::{
+    ChpProps, DocDocument, DocParagraph, HyperlinkSpan, LevelSource, ListFormatting, OutlineLevel,
+    PapProps, TapInfo,
+};
+use crate::format::DocumentFormat;
+use crate::ir::*;
+
+/// Convert a parsed legacy `.doc` into the intermediate representation.
+///
+/// When the FIB advertised a PlcfBtePapx, `DocDocument` carries structured
+/// paragraphs with PAP flags and we walk them in order to rebuild tables
+/// (and, eventually, lists). Otherwise we fall back to a line-based
+/// heuristic over the sanitised text — the original `.doc` behaviour.
+pub(crate) fn doc_to_ir(doc: &DocDocument) -> DocumentIR {
+    let paragraphs = doc.paragraphs();
+    // One whole-document decision, taken before the walk. Keyed on a level
+    // the paragraph states itself (`sprmPOutLvl`), not on one resolved from
+    // its style: a document may style a few paragraphs (e.g. a body heading)
+    // while leaving its section heads as unstyled ALL-CAPS lines, and
+    // switching the guess off on a style-resolved level would silence those
+    // heads. Style-derived levels are still used — the walk below emits them
+    // as headings — they just do not, by themselves, disable the heuristic.
+    //
+    // Retiring the line-shape guess entirely is a separate, data-driven piece
+    // of work: the guesses are genuinely mixed, and tying the new style-sheet
+    // path to that decision would be a side effect, not a choice.
+    let has_structured_headings = paragraphs.iter().any(|p| {
+        matches!(
+            p.props.outline_level,
+            Some(OutlineLevel::Heading {
+                source: LevelSource::Sprm,
+                ..
+            })
+        )
+    });
+    let mut warnings = doc.warnings().to_vec();
+
+    // One IR `Section` per document section. `build_paragraphs` ends a
+    // section's last paragraph at its section mark (terminator 0x0C, only
+    // where `PlcfSed` puts a section end), so the paragraphs split there.
+    let mut section_bodies: Vec<Vec<Element>> = Vec::new();
+    // Main-document text boxes whose shape anchor resolved (`PlcSpaMom`,
+    // [MS-DOC] §2.8.27): each is placed after the paragraph holding its
+    // anchor. Only the structured walk knows paragraph CPs; the line
+    // heuristic keeps every box trailing the document as before.
+    let place_anchored_boxes = !paragraphs.is_empty();
+    let mut anchored_boxes: Vec<(u32, Element)> = if place_anchored_boxes {
+        doc.subdocuments()
+            .iter()
+            .filter(|sub| sub.kind == crate::doc::SubDocumentKind::TextBoxes)
+            .flat_map(|sub| sub.anchored_parts())
+            .filter_map(|(body, anchor)| {
+                let anchor = anchor?;
+                let content = story_paragraphs(body);
+                (!content.is_empty()).then(|| {
+                    (
+                        anchor,
+                        Element::TextBox(TextBox {
+                            content,
+                            ..Default::default()
+                        }),
+                    )
+                })
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    anchored_boxes.sort_by_key(|&(cp, _)| cp);
+    let mut anchored_boxes = anchored_boxes.into_iter().peekable();
+    if !paragraphs.is_empty() {
+        let mut depth_anomalies = 0;
+        for group in paragraphs.split_inclusive(|p| p.terminator == '\u{C}') {
+            let mut elements = Vec::new();
+            let mut chunk_start = 0;
+            let mut pending: Vec<Element> = Vec::new();
+            for (j, p) in group.iter().enumerate() {
+                while let Some((_, tb)) = anchored_boxes.next_if(|&(cp, _)| cp < p.cp_end) {
+                    pending.push(tb);
+                }
+                // A box anchored inside a table or a list waits for the
+                // structure to end, so it never splits one in two.
+                if pending.is_empty() || !can_break_after(p, group.get(j + 1)) {
+                    continue;
+                }
+                depth_anomalies += walk_paragraphs(
+                    &group[chunk_start..=j],
+                    has_structured_headings,
+                    &mut elements,
+                    doc.list_formatting(),
+                );
+                elements.append(&mut pending);
+                chunk_start = j + 1;
+            }
+            depth_anomalies += walk_paragraphs(
+                &group[chunk_start..],
+                has_structured_headings,
+                &mut elements,
+                doc.list_formatting(),
+            );
+            elements.append(&mut pending);
+            section_bodies.push(elements);
+        }
+        // An anchor past the last paragraph (a truncated structured view):
+        // the box still reaches the document, at its end.
+        if let Some(last) = section_bodies.last_mut() {
+            last.extend(anchored_boxes.map(|(_, tb)| tb));
+        }
+        if depth_anomalies > 0 {
+            warnings.push(format!(
+                "{depth_anomalies} table paragraph(s) had a nesting depth beyond {MAX_TABLE_DEPTH} \
+                 and were folded into the deepest supported level"
+            ));
+        }
+    } else {
+        let mut elements = Vec::new();
+        line_heuristic(doc.plain_text_ref(), &mut elements);
+        section_bodies.push(elements);
+    }
+
+    // The whole heading, not its first span: a heading with a formatting
+    // change mid-way gave a title that matched no heading, so the
+    // renderers printed it twice.
+    let first_heading = |elements: &[Element]| {
+        elements.iter().find_map(|e| match e {
+            Element::Heading(h) => Some(inline_to_text(&h.content)),
+            _ => None,
+        })
+    };
+    let heading_title = section_bodies.iter().find_map(|b| first_heading(b));
+    // The file's own declared title (from `\x05SummaryInformation`) beats
+    // a line-shape guess whenever both exist — a document can style
+    // *some* headings and still use plain ALL-CAPS lines for others
+    //, but the declared title is never a guess.
+    let summary = doc.summary_properties();
+    let title = summary
+        .and_then(|s| s.title.clone())
+        .filter(|t| !t.is_empty())
+        .or_else(|| heading_title.clone());
+
+    // Each section's title is the heading the section itself carries, as
+    // in every other converter. Giving it the file's declared title
+    // (metadata, not content) made the IR renderers print a line the
+    // document's text does not have.
+    //
+    // Each section gets its own `PlcfHdd` headers/footers (already
+    // inheritance-resolved per [MS-DOC] "Plcfhdd"); a section past the
+    // stories the file holds reuses the last. When PlcfHdd yielded nothing
+    // (older/malformed files), every field is `None` and the generic
+    // TextBox fallback in the loop below still applies.
+    let hfs = doc.header_footers();
+    // Every section gets its own copy of the stories it shows, so a document
+    // of thousands of sections multiplies one header into thousands. The
+    // first copy of a story is the text the piece table already charged to
+    // the document's budget; each further copy of the same story is charged
+    // to what is left of it before it is made, and the section that does not
+    // fit, and those after it, get no header or footer.
+    let mut hf_budget = doc.text_budget();
+    let mut first_copies: std::collections::HashSet<usize> = std::collections::HashSet::new();
+    let mut headers_cut = false;
+    let mut sections: Vec<Section> = section_bodies
+        .into_iter()
+        .enumerate()
+        .map(|(i, elements)| {
+            let mut section = Section {
+                title: first_heading(&elements),
+                elements,
+                ..Default::default()
+            };
+            if let Some(hf) = hfs.get(i).or(hfs.last()) {
+                let stories = [
+                    &hf.even_header,
+                    &hf.odd_header,
+                    &hf.even_footer,
+                    &hf.odd_footer,
+                    &hf.first_header,
+                    &hf.first_footer,
+                ];
+                let size: usize = stories
+                    .iter()
+                    .filter_map(|s| s.as_deref())
+                    // A story seen for the first time is already paid for.
+                    .filter(|s| !first_copies.insert(s.as_ptr() as usize))
+                    .map(str::len)
+                    .sum();
+                if !hf_budget.charge(size) {
+                    headers_cut = true;
+                    return section;
+                }
+                section.even_page_header = hf.even_header.as_deref().map(text_to_header_footer);
+                section.header = hf.odd_header.as_deref().map(text_to_header_footer);
+                section.even_page_footer = hf.even_footer.as_deref().map(text_to_header_footer);
+                section.footer = hf.odd_footer.as_deref().map(text_to_header_footer);
+                section.first_page_header = hf.first_header.as_deref().map(text_to_header_footer);
+                section.first_page_footer = hf.first_footer.as_deref().map(text_to_header_footer);
+            }
+            section
+        })
+        .collect();
+    if headers_cut {
+        warnings.push(hf_budget.notice());
+    }
+    let header_footer_structured = hfs.iter().any(|hf| !hf.is_empty());
+
+    // Footnotes, headers, comments, endnotes and text boxes live after the
+    // main text in the same character space. Their `ccp*` lengths were
+    // parsed and never used, so none of this reached a consumer.
+    if let Some(section) = sections.last_mut() {
+        let mut next_id = 0u32;
+        for sub in doc.subdocuments() {
+            // Already represented structurally on `Section.header`/
+            // `.footer`/etc above — don't also dump the merged blob as a
+            // generic TextBox.
+            if sub.kind == crate::doc::SubDocumentKind::HeadersFooters && header_footer_structured {
+                continue;
+            }
+            // `PlcfandTxt`/`PlcfandRef` successfully split this document's
+            // Comments substory into individual, correctly-attributed
+            // comments — emit one `Element::Endnote` per comment instead
+            // of falling through to the generic merged-substory path
+            // below.
+            if sub.kind == crate::doc::SubDocumentKind::Comments && !doc.comments().is_empty() {
+                for comment in doc.comments() {
+                    let content: Vec<Element> = comment
+                        .text
+                        .lines()
+                        .filter(|l| !l.trim().is_empty())
+                        .map(|l| {
+                            Element::Paragraph(Paragraph {
+                                content: vec![InlineContent::Text(TextSpan::plain(l))],
+                                ..Default::default()
+                            })
+                        })
+                        .collect();
+                    if content.is_empty() {
+                        continue;
+                    }
+                    section.elements.push(Element::Endnote(Note {
+                        id: next_id,
+                        marker: Some(subdocument_label(sub.kind).to_string()),
+                        content,
+                        author: comment.author.clone(),
+                    }));
+                    next_id += 1;
+                }
+                continue;
+            }
+            // Footnote/endnote bodies are self-delimited: each one starts
+            // with the literal auto-number reference-mark character
+            // (`\u{2}`) in the substory's own text — confirmed on the full
+            // local corpus (footnotes 49/51 files, endnotes 5/5 files that
+            // had one). Comments carry no such marker in their substory
+            // (0/12 files); they're split above via `PlcfandTxt` instead
+            // when that PLC parses cleanly. This is the
+            // fallback path for a Comments substory whose `doc.comments()`
+            // came back empty (PLC absent/malformed/mismatched) — it stays
+            // merged into one Note, same as before endnote/comment splitting existed.
+            let bodies: Vec<&str> = if sub.parts.is_empty() {
+                vec![sub.text.as_str()]
+            } else if sub.kind == crate::doc::SubDocumentKind::TextBoxes && place_anchored_boxes {
+                // Boxes with a resolved anchor were placed in the body.
+                sub.anchored_parts()
+                    .filter(|(_, anchor)| anchor.is_none())
+                    .map(|(body, _)| body)
+                    .collect()
+            } else {
+                sub.parts.iter().map(String::as_str).collect()
+            };
+
+            for body in bodies {
+                let content = story_paragraphs(body);
+                if content.is_empty() {
+                    continue;
+                }
+                // A single name in GrpXstAtnOwners unambiguously authored
+                // every comment in the document — real-world common case.
+                // Multiple names would need per-comment PlcfAtn/ATRD
+                // correlation (not yet implemented) to attribute
+                // correctly, so leave it unset rather than guess.
+                let author = match sub.kind {
+                    crate::doc::SubDocumentKind::Comments => match doc.comment_authors() {
+                        [single] => Some(single.clone()),
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                let note = Note {
+                    id: next_id,
+                    marker: Some(subdocument_label(sub.kind).to_string()),
+                    content,
+                    author,
+                };
+                next_id += 1;
+                section.elements.push(match sub.kind {
+                    crate::doc::SubDocumentKind::Footnotes => Element::Footnote(note),
+                    crate::doc::SubDocumentKind::HeadersFooters
+                    | crate::doc::SubDocumentKind::TextBoxes
+                    | crate::doc::SubDocumentKind::HeaderTextBoxes => Element::TextBox(TextBox {
+                        content: note.content,
+                        ..Default::default()
+                    }),
+                    _ => Element::Endnote(note),
+                });
+            }
+        }
+    }
+    // Extracted pictures never reached the IR, so every image in a legacy
+    // document was silently dropped on conversion even though the bytes
+    // were already in hand.
+    crate::convert_xls::append_legacy_images(&mut sections, doc.images());
+    warnings.extend(doc.image_warnings());
+
+    // Embedded OLE objects — at minimum, recognize each
+    // object exists and surface its identity, even without extracting
+    // its native payload. Mirrors the identical fix for legacy PPT OLE objects:
+    // a data-less Element::Image with a descriptive alt_text, the same
+    // precedent PPTX established for a data-less AutoShape placeholder.
+    if !doc.ole_objects().is_empty() {
+        if sections.is_empty() {
+            sections.push(Section::default());
+        }
+        let last = sections.last_mut().expect("just ensured non-empty");
+        for obj in doc.ole_objects() {
+            last.elements.push(Element::Image(Image {
+                alt_text: Some(obj.description.clone()),
+                data: None,
+                ..Default::default()
+            }));
+            // The text of an embedded Word document, which the placeholder
+            // stands for, follows it.
+            for line in obj.text.iter().flat_map(|t| t.lines()) {
+                if !line.trim().is_empty() {
+                    last.elements.push(Element::Paragraph(Paragraph {
+                        content: vec![InlineContent::Text(TextSpan::plain(line))],
+                        ..Default::default()
+                    }));
+                }
+            }
+        }
+    }
+
+    DocumentIR {
+        metadata: Metadata {
+            format: DocumentFormat::Doc,
+            title,
+            author: summary
+                .and_then(|s| s.author.clone())
+                .filter(|s| !s.is_empty()),
+            subject: summary
+                .and_then(|s| s.subject.clone())
+                .filter(|s| !s.is_empty()),
+            keywords: summary
+                .and_then(|s| s.keywords.as_deref())
+                .map(crate::convert_docx::split_keywords)
+                .unwrap_or_default(),
+            description: summary
+                .and_then(|s| s.comments.clone())
+                .filter(|s| !s.is_empty()),
+            created: summary.and_then(|s| s.created.clone()),
+            modified: summary.and_then(|s| s.modified.clone()),
+            has_macros: doc.has_macros(),
+            text_truncated: !doc.text_complete() || headers_cut || doc.images_left_out(),
+            warnings,
+            ..crate::core::core_properties::legacy_metadata_extras(summary)
+        },
+        sections,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Structured-paragraph walk (tables)
+// ---------------------------------------------------------------------------
+// A paragraph's `sprmPItap` (0x6649) is its table nesting depth ([MS-DOC]
+// §2.6.2): 1 is the outermost table, and the cells of a table at depth N + 1
+// sit inside a cell of the table at depth N, before that cell's own end mark.
+// The walk keeps one builder per open depth; a table that closes (a shallower
+// paragraph arrives) becomes a block of the cell that held it. Merged-cell
+// spans are computed per table from `rgdxaCenter` and the vertical-merge
+// flags as described below.
+
+/// A completed table row awaiting span resolution: its cells plus the row
+/// definition (TAP) from the row-terminator paragraph, when one was present.
+struct PendingRow {
+    /// Cells of the row; each cell is its block elements.
+    cells: Vec<Vec<Element>>,
+    /// Parsed `sprmTDefTable` of the row mark. `None` for rows closed without
+    /// an explicit terminator, which then get `col_span = row_span = 1`.
+    tap: Option<TapInfo>,
+    /// `sprmTTableHeader` on the row mark: a header row, repeated on each page.
+    header: bool,
+}
+
+/// The deepest table nesting honoured (15 levels); anything deeper is folded
+/// into this one so the tree, and the walk that builds it, stay bounded. A
+/// bound for hostile input, not a limit taken from a specification.
+const MAX_TABLE_DEPTH: usize = 15;
+
+/// The table being built at one nesting depth.
+#[derive(Default)]
+struct TableLevel {
+    /// Completed rows.
+    rows: Vec<PendingRow>,
+    /// Cells of the row under construction; each cell is its block elements.
+    row_cells: Vec<Vec<Element>>,
+    /// Block elements of the cell under construction: its paragraphs, and any
+    /// tables nested in it that have already closed.
+    cell: Vec<Element>,
+}
+
+impl TableLevel {
+    /// The table this level built, with any cell or row left without its
+    /// terminator (the text ends inside the table) kept, without a TAP.
+    fn finish(mut self) -> Option<Table> {
+        if !self.cell.is_empty() {
+            self.row_cells.push(std::mem::take(&mut self.cell));
+        }
+        if !self.row_cells.is_empty() {
+            let cells = std::mem::take(&mut self.row_cells);
+            self.rows.push(PendingRow {
+                cells,
+                tap: None,
+                header: false,
+            });
+        }
+        (!self.rows.is_empty()).then(|| Table {
+            rows: build_table_rows(&self.rows),
+            ..Default::default()
+        })
+    }
+}
+
+/// Accumulator for the table currently being built from a run of `fInTable`
+/// paragraphs. A row ends at a table-trailing-mark paragraph (one carrying
+/// `sprmTDefTable`); a cell ends at a `\x07`-terminated paragraph within a row.
+///
+/// `levels[d - 1]` is the table open at depth `d`. A paragraph at depth `d`
+/// belongs to `levels[d - 1]`; reaching it first closes every deeper level,
+/// each into the cell of its parent that holds it, and opens a new level when
+/// `d` is one deeper than the table open now.
+struct TableBuilder {
+    /// The open tables, outermost first. Empty when not inside a table run.
+    levels: Vec<TableLevel>,
+    /// Paragraphs whose nesting depth exceeds [`MAX_TABLE_DEPTH`]. They are
+    /// kept, folded into the deepest level, and counted for the caller.
+    depth_anomalies: usize,
+}
+
+impl TableBuilder {
+    fn new() -> Self {
+        Self {
+            levels: Vec::new(),
+            depth_anomalies: 0,
+        }
+    }
+
+    /// Make `levels[depth - 1]` the innermost open table (closing deeper ones,
+    /// opening the missing ones) and return its index.
+    ///
+    /// A paragraph at depth `d` implies a table at every depth above it, so an
+    /// enclosing table that has not been seen yet is opened here: the first cell
+    /// of a table can begin with a nested table, which then arrives before any
+    /// paragraph of its own.
+    fn enter(&mut self, depth: u8) -> usize {
+        let mut want = usize::from(depth).max(1);
+        if want > MAX_TABLE_DEPTH {
+            self.depth_anomalies += 1;
+            want = MAX_TABLE_DEPTH;
+        }
+        while self.levels.len() > want {
+            self.close_innermost();
+        }
+        while self.levels.len() < want {
+            self.levels.push(TableLevel::default());
+        }
+        want - 1
+    }
+
+    /// Close the innermost table into the cell of its parent that holds it.
+    /// Only called with a parent open.
+    fn close_innermost(&mut self) {
+        let Some(level) = self.levels.pop() else {
+            return;
+        };
+        if let (Some(table), Some(parent)) = (level.finish(), self.levels.last_mut()) {
+            parent.cell.push(Element::Table(table));
+        }
+    }
+
+    /// Add a cell paragraph (`fInTable`, not a row mark).
+    ///
+    /// A `\x07` terminator (or, in a nested table, the inner-cell flag) closes
+    /// the current cell; any other terminator (e.g. `\r`) is an interior
+    /// paragraph break within the same cell.
+    fn add_cell_paragraph(&mut self, p: &DocParagraph) {
+        let level = self.enter(p.props.itap);
+        let level = &mut self.levels[level];
+        if !p.text.is_empty() {
+            level.cell.push(Element::Paragraph(Paragraph {
+                content: inline_content_for(&p.text, &p.hyperlinks, &p.chp_runs),
+                // `tabs` is always empty in the tables-only build (it is
+                // populated by the list/tab-stop PR); cloning keeps the IR
+                // shape uniform with the list path.
+                tabs: p.props.tabs.clone(),
+                alignment: p.props.alignment.clone(),
+                indent_left_twips: p.props.indent_left_twips,
+                indent_right_twips: p.props.indent_right_twips,
+                first_line_indent_twips: p.props.first_line_indent_twips,
+                space_before_twips: p.props.space_before_twips,
+                space_after_twips: p.props.space_after_twips,
+                line_spacing: p.props.line_spacing.clone(),
+                style: p.props.style_name.clone(),
+                ..Default::default()
+            }));
+        }
+        // An outermost cell ends with `\x07`; a cell of a nested table ends
+        // with a paragraph mark flagged `sprmPFInnerTableCell`.
+        if p.terminator == '\u{7}' || p.props.f_inner_table_cell {
+            level.row_cells.push(std::mem::take(&mut level.cell));
+        }
+    }
+
+    /// A row-terminator paragraph at nesting depth `depth`: close the
+    /// in-flight cell, then the row.
+    fn end_row(&mut self, tap: Option<TapInfo>, depth: u8, header: bool) {
+        let level = self.enter(depth);
+        let level = &mut self.levels[level];
+        if !level.cell.is_empty() {
+            level.row_cells.push(std::mem::take(&mut level.cell));
+        }
+        let cells = std::mem::take(&mut level.row_cells);
+        level.rows.push(PendingRow { cells, tap, header });
+    }
+
+    /// Flush every open table as an `Element::Table`. Called when prose (a
+    /// non-`fInTable` paragraph) interrupts a table run, and at end-of-doc.
+    fn flush(&mut self, elements: &mut Vec<Element>) {
+        while self.levels.len() > 1 {
+            self.close_innermost();
+        }
+        if let Some(table) = self.levels.pop().and_then(TableLevel::finish) {
+            elements.push(Element::Table(table));
+        }
+    }
+}
+
+/// The vertical-merge state lives in a 2-bit field of the `TCGRF` `rgf`
+/// (MS-DOC §2.9.185 `TCGRF`): bits 5-6, `fVertMerge`. The three legal values
+/// are `fvmClear = 0` (not merged; the default, so it has no constant here),
+/// `fvmMerge = 1` (continuation of the merge started above), and
+/// `fvmRestart = 3` (first cell of a merge). As raw `rgf` bits that is
+/// `fvmMerge = 0x0020` and `fvmRestart = 0x0060` (both bits set).
+const FVM_MERGE: u8 = 1; // rgf 0x0020
+const FVM_RESTART: u8 = 3; // rgf 0x0060
+
+/// Extract the 2-bit `fVertMerge` state from `TCGRF.rgf` (bits 5-6).
+fn vert_merge_state(rgf: u16) -> u8 {
+    ((rgf >> 5) & 0x03) as u8
+}
+/// When unifying column-grid edges across rows, boundaries within this many
+/// twips are snapped together. Word rounds boundary positions per row, so
+/// otherwise-near-identical edges inject a spurious grid edge and inflate
+/// `col_span` for every cell spanning it (LibreOffice uses the same
+/// `nTolerance = 4` in `FindMergeGroup`).
+const EDGE_TOLERANCE_TWIPS: i32 = 4;
+
+/// Resolve merged-cell spans for the accumulated rows.
+///
+/// The column grid is the sorted union of every row's `rgdxaCenter`
+/// boundaries — the same array Apache POI's `buildTableCellEdgesArray`
+/// computes. A cell's `col_span` is the number of grid edges inside its own
+/// boundary interval `[centers[i], centers[i+1])`, which matches POI's
+/// `getNumberColumnsSpanned`. `row_span` follows `fVertMerge`/`fVertRestart`
+/// down the column (see [`resolve_vertical_merges`]); continuation cells are
+/// absorbed into the cell above and not emitted (the same convention as the
+/// `.docx` converter).
+fn build_table_rows(pending: &[PendingRow]) -> Vec<TableRow> {
+    let mut edges: Vec<i32> = pending
+        .iter()
+        .filter_map(|r| r.tap.as_ref())
+        .flat_map(|tap| tap.centers.iter().map(|&c| c as i32))
+        .collect();
+    edges.sort_unstable();
+    // Dedup with tolerance: keep an edge only when it is more than
+    // `EDGE_TOLERANCE_TWIPS` above the previous kept edge.
+    let mut grid: Vec<i32> = Vec::with_capacity(edges.len());
+    for e in edges {
+        if grid
+            .last()
+            .is_none_or(|&last| e - last > EDGE_TOLERANCE_TWIPS)
+        {
+            grid.push(e);
+        }
+    }
+
+    let merges = resolve_vertical_merges(pending);
+    // What the absorbed continuations hold, by the merged cell it joins.
+    let mut carried: std::collections::HashMap<(usize, usize), Vec<Element>> =
+        std::collections::HashMap::new();
+    for &(origin, (row, col)) in &merges.carried {
+        carried
+            .entry(origin)
+            .or_default()
+            .extend(pending[row].cells[col].iter().cloned());
+    }
+    pending
+        .iter()
+        .enumerate()
+        .map(|(row_idx, prow)| {
+            let cells = match &prow.tap {
+                Some(tap)
+                    if tap.centers.len() == tap.cells.len() + 1
+                        && tap.cells.len() == prow.cells.len() =>
+                {
+                    let (absorbed, spans) = &merges.cells[row_idx];
+                    (0..tap.cells.len())
+                        .filter_map(|col| {
+                            if absorbed[col] {
+                                return None; // vertical-merge continuation
+                            }
+                            let mut content = prow.cells[col].clone();
+                            if let Some(more) = carried.remove(&(row_idx, col)) {
+                                content.extend(more);
+                            }
+                            Some(TableCell {
+                                content,
+                                col_span: count_grid_edges(&tap.centers, col, &grid),
+                                row_span: spans[col],
+                                ..Default::default()
+                            })
+                        })
+                        .collect()
+                },
+                // No TAP or a cell-count mismatch — plain 1×1 cells.
+                _ => prow
+                    .cells
+                    .iter()
+                    .cloned()
+                    .map(|content| TableCell {
+                        content,
+                        col_span: 1,
+                        row_span: 1,
+                        ..Default::default()
+                    })
+                    .collect(),
+            };
+            TableRow {
+                cells,
+                // The same pair .docx sets from `w:tblHeader`.
+                is_header: prow.header,
+                repeat_as_header: prow.header,
+                ..Default::default()
+            }
+        })
+        .collect()
+}
+
+/// A vertical merge still open at the bottom of the rows read so far: the
+/// boundaries of the cell that started it, and that cell.
+struct OpenMerge {
+    left: i32,
+    right: i32,
+    origin: (usize, usize),
+}
+
+/// Boundaries are bucketed this many twips wide, one more than
+/// [`EDGE_TOLERANCE_TWIPS`]: two boundaries in one bucket differ by at most the
+/// tolerance, and two within the tolerance of each other lie in the same or in
+/// adjacent buckets.
+const BUCKET_TWIPS: i32 = EDGE_TOLERANCE_TWIPS + 1;
+
+/// The bucket of a cell's left and right boundary.
+type Bucket = (i32, i32);
+
+/// The merges still open, by bucket, each list in the order the merges were
+/// opened.
+type OpenMerges = std::collections::HashMap<Bucket, std::collections::VecDeque<OpenMerge>>;
+
+fn bucket_of(left: i32, right: i32) -> Bucket {
+    (left.div_euclid(BUCKET_TWIPS), right.div_euclid(BUCKET_TWIPS))
+}
+
+/// Take an open merge whose left and right boundaries are both within
+/// [`EDGE_TOLERANCE_TWIPS`] of these.
+///
+/// Every merge in the same bucket matches, so the common case (a continuation on
+/// the same boundaries as its merge) is one lookup however many merges share
+/// them, and the oldest of those is taken. Only if that bucket is empty does a
+/// continuation a little off look at the eight neighbouring buckets, where only
+/// some merges match; it takes the first that does, in a fixed bucket order. Two
+/// merges can both match one continuation only when their cells lie within twice
+/// the tolerance of each other on both edges, which with increasing boundaries
+/// needs a cell no wider than that.
+fn take_open_merge(open: &mut OpenMerges, left: i32, right: i32) -> Option<OpenMerge> {
+    let (bl, br) = bucket_of(left, right);
+    if let Some(m) = open.get_mut(&(bl, br)).and_then(|l| l.pop_front()) {
+        return Some(m);
+    }
+    for dl in -1..=1 {
+        for dr in -1..=1 {
+            if (dl, dr) == (0, 0) {
+                continue;
+            }
+            let Some(list) = open.get_mut(&(bl + dl, br + dr)) else {
+                continue;
+            };
+            let fits = |m: &OpenMerge| {
+                (m.left - left).abs() <= EDGE_TOLERANCE_TWIPS
+                    && (m.right - right).abs() <= EDGE_TOLERANCE_TWIPS
+            };
+            if let Some(i) = list.iter().position(fits) {
+                return list.remove(i);
+            }
+        }
+    }
+    None
+}
+
+/// The merges resolved for every row of a table.
+struct VerticalMerges {
+    /// Per row, `(is_absorbed, row_span)` for each of its cells.
+    cells: Vec<(Vec<bool>, Vec<u32>)>,
+    /// `(merged cell, continuation)` for every absorbed continuation that holds
+    /// something, in row order: its content belongs to the merged cell.
+    carried: Vec<((usize, usize), (usize, usize))>,
+}
+
+/// Whether a cell holds nothing but empty paragraphs, as Word writes the
+/// continuation of a vertical merge.
+fn cell_is_empty(content: &[Element]) -> bool {
+    content.iter().all(|e| match e {
+        Element::Paragraph(p) => p.content.iter().all(|c| match c {
+            InlineContent::Text(t) => t.text.trim().is_empty(),
+            InlineContent::LineBreak => true,
+            _ => false,
+        }),
+        _ => false,
+    })
+}
+
+/// Resolve the vertical merges of the accumulated rows.
+///
+/// The 2-bit `fVertMerge` field (MS-DOC `TCGRF`) drives the logic:
+/// `fvmRestart` starts a new merge, `fvmMerge` continues the merge above, and
+/// `fvmClear` is an ordinary cell. A merge runs down a *column*: a `fvmMerge`
+/// cell continues the open merge that covers the same columns, its left and
+/// right boundary each within [`EDGE_TOLERANCE_TWIPS`] of those of the cell that
+/// started the merge, not the cell with the same index, since the rows above and
+/// below can have different numbers of cells (horizontally merged cells above,
+/// for one). A continuation is absorbed into the cell that started the merge,
+/// which carries the `row_span`; if it holds anything, its content is added to
+/// the merged cell, so nothing is dropped. A `fvmMerge` cell with no open merge
+/// over its columns (none above, or one of a different width) has nothing to
+/// continue and stays an ordinary cell. Every `fvmRestart` is a genuine new
+/// merge, never a continuation: one that immediately follows another opens its
+/// own. A row without a usable row definition ends every open merge. The only
+/// other representable 2-bit value (the reserved `0x0040`) is treated as
+/// `fvmClear` rather than panicking, keeping decoding robust against malformed
+/// input.
+///
+/// One pass over the rows. A continuation on the boundaries of its merge is a
+/// single hash lookup however many merges share them; one slightly off scans
+/// the merges of the neighbouring buckets, at most the 255 cells of a row.
+fn resolve_vertical_merges(pending: &[PendingRow]) -> VerticalMerges {
+    let mut cells: Vec<(Vec<bool>, Vec<u32>)> = pending
+        .iter()
+        .map(|r| {
+            let n = r.tap.as_ref().map_or(0, |t| t.cells.len());
+            (vec![false; n], vec![1u32; n])
+        })
+        .collect();
+    let mut carried = Vec::new();
+    let mut open = OpenMerges::new();
+    for (row, prow) in pending.iter().enumerate() {
+        let usable = prow.tap.as_ref().filter(|tap| {
+            tap.centers.len() == tap.cells.len() + 1 && tap.cells.len() == prow.cells.len()
+        });
+        let Some(tap) = usable else {
+            open.clear();
+            continue;
+        };
+        let mut next = OpenMerges::new();
+        for (col, tc) in tap.cells.iter().enumerate() {
+            let left = i32::from(tap.centers[col]);
+            let right = i32::from(tap.centers[col + 1]);
+            match vert_merge_state(tc.rgf) {
+                FVM_RESTART => {
+                    next.entry(bucket_of(left, right))
+                        .or_default()
+                        .push_back(OpenMerge {
+                            left,
+                            right,
+                            origin: (row, col),
+                        })
+                },
+                FVM_MERGE => {
+                    if let Some(merge) = take_open_merge(&mut open, left, right) {
+                        let origin = merge.origin;
+                        cells[origin.0].1[origin.1] += 1;
+                        cells[row].0[col] = true;
+                        if !cell_is_empty(&prow.cells[col]) {
+                            carried.push((origin, (row, col)));
+                        }
+                        // The merge keeps the boundaries it started with, so
+                        // continuations that each drift a few twips do not chain
+                        // across the table.
+                        next.entry(bucket_of(merge.left, merge.right))
+                            .or_default()
+                            .push_back(merge);
+                    }
+                },
+                _ => {},
+            }
+        }
+        open = next;
+    }
+    VerticalMerges { cells, carried }
+}
+
+/// Number of column-grid edges inside the cell's boundary interval
+/// `[centers[col], centers[col+1])`. At least 1, since `centers[col]`
+/// itself is always a grid edge.
+fn count_grid_edges(centers: &[i16], col: usize, grid: &[i32]) -> u32 {
+    let lo = centers[col] as i32;
+    let hi = centers[col + 1] as i32;
+    // `grid` is sorted, so the edges in `[lo, hi)` are a run found by search;
+    // scanning all of it for every cell is cells x edges.
+    let below = |bound: i32| {
+        grid.partition_point(|&e| {
+            #[cfg(test)]
+            GRID_PROBES.with(|p| p.set(p.get() + 1));
+            e < bound
+        })
+    };
+    below(hi).saturating_sub(below(lo)).max(1) as u32
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How many grid edges `count_grid_edges` has compared, on this thread.
+    static GRID_PROBES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Walk structured paragraphs in document order, emitting tables, lists,
+/// and prose.
+///
+/// List handling is a first cut: consecutive paragraphs that carry a list
+/// level SPRM (`0x460B` / `ilvl`) are grouped into one `Element::List`,
+/// with nesting driven by `ilvl`. The ordered-vs-bullet distinction and
+/// list-id (`ilfo`) grouping require the style table + PlcfLst/LSTF/LVL
+/// chain, which is out of scope here; lists therefore default to bullet
+/// (unordered). Lists whose `ilfo` is inherited only via a paragraph style
+/// (no direct SPRM) are not yet detected and fall through as prose — a
+/// graceful no-op rather than a regression.
+///
+/// `.doc` list levels are not guaranteed to start at 0 (Word writes the
+/// level as stored in the list definition, which may begin at 1), so each
+/// run's base level is taken as the minimum `ilvl` in that run — see
+/// `flush_list`.
+///
+/// A paragraph is a list item iff its `ilfo` (sprmPIlfo, `0x460B`) is a valid
+/// list index, per [MS-DOC] §2.4.6.3 ("If iLfoCur is zero, the paragraph is not
+/// part of a list"). The operand is decoded as a signed `i16`:
+/// `0x0000` / `0xF801` mean "not in a list"; `0x0001`–`0x07FE` are 1-based
+/// indices into `PlfLfo.rgLfo`; `0xF802`–`0xFFFF` are the negation of a 1-based
+/// index and are still list items. `None` (no sprmPIlfo) defaults to prose.
+/// A subdocument story's text as one plain paragraph per non-blank line.
+fn story_paragraphs(body: &str) -> Vec<Element> {
+    body.lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| {
+            Element::Paragraph(Paragraph {
+                content: vec![InlineContent::Text(TextSpan::plain(l))],
+                ..Default::default()
+            })
+        })
+        .collect()
+}
+
+/// Whether the structured walk can be cut after `p` without splitting a
+/// table (the next paragraph is still inside one) or a list (both are
+/// list items, which `walk_paragraphs` would otherwise emit as two lists).
+fn can_break_after(p: &DocParagraph, next: Option<&DocParagraph>) -> bool {
+    let Some(next) = next else {
+        return true;
+    };
+    let is_list =
+        |q: &DocParagraph| q.props.outline_level.is_none() && is_doc_list_item(q.props.ilfo);
+    !(next.props.f_in_table
+        || next.props.is_table_trailing_mark
+        || p.props.f_in_table && !p.props.is_table_trailing_mark
+        || is_list(p) && is_list(next))
+}
+
+fn is_doc_list_item(ilfo: Option<i16>) -> bool {
+    match ilfo {
+        None | Some(0) | Some(-2047) => false, // 0x0000 / 0xF801: not in a list
+        // 0xF802..=0xFFFF (i16 -2046..=-1): the negation of a 1-based index,
+        // still a list item; `ListFormatting::level_for` resolves it.
+        Some(v) if (1..=0x07FE).contains(&v) => true, // 0x0001..0x07FE normal
+        Some(v) if (-0x07FE..=-1).contains(&v) => true, // 0xF802..0xFFFF negated
+        _ => false,                                   // 0x07FF and other non-spec
+    }
+}
+
+/// One accumulated list item: its level, inline content and paragraph style.
+type ListItemSource = (u8, Vec<InlineContent>, Option<String>);
+
+/// Returns how many paragraphs had a table nesting depth beyond what is
+/// honoured ([`MAX_TABLE_DEPTH`]) and were folded into the deepest level.
+fn walk_paragraphs(
+    paragraphs: &[DocParagraph],
+    has_structured_headings: bool,
+    elements: &mut Vec<Element>,
+    list_formatting: &ListFormatting,
+) -> usize {
+    let mut table = TableBuilder::new();
+    let mut list_items: Vec<ListItemSource> = Vec::new();
+    // The run's own `ilfo` — every item in one contiguous list
+    // run shares the same `ilfo`/`ilvl`-derived list identity in practice
+    // (a change of `ilfo` mid-run would itself interrupt list-item
+    // membership via `is_doc_list_item`), so the first item's value is
+    // enough to resolve `start_number`/`ordered` for the whole run.
+    let mut list_ilfo: Option<i16> = None;
+
+    for p in paragraphs {
+        if p.props.is_table_trailing_mark {
+            flush_list(&mut list_items, list_ilfo.take(), list_formatting, elements);
+            // A row end carries no text in a well-formed file. A damaged
+            // property list can mark a paragraph that does as the row end; its
+            // text is a cell's content, and dropping it would lose it silently.
+            if !p.text.is_empty() {
+                table.add_cell_paragraph(p);
+            }
+            table.end_row(p.props.tap.clone(), p.props.itap, p.props.f_table_header);
+        } else if p.props.f_in_table {
+            flush_list(&mut list_items, list_ilfo.take(), list_formatting, elements);
+            table.add_cell_paragraph(p);
+        } else if let Some(OutlineLevel::Heading { level, .. }) = p.props.outline_level {
+            // Outline level wins over list membership, exactly like the
+            // DOCX converter: Word's multilevel-list "Heading" gallery
+            // attaches an ilfo to the heading styles themselves, so a
+            // numbered heading ("1. Introduction") is the normal shape of
+            // a heading in real documents. Checking ilfo first turned
+            // every one of them into a list item and left no Headings in
+            // the IR at all.
+            table.flush(elements);
+            flush_list(&mut list_items, list_ilfo.take(), list_formatting, elements);
+            emit_heading(&p.text, level + 1, elements, &p.hyperlinks, &p.chp_runs);
+        } else if is_doc_list_item(p.props.ilfo) {
+            // List membership is keyed on `ilfo` (sprmPIlfo, `0x460B`), not on
+            // `ilvl`: per [MS-DOC] §2.4.6.3 a paragraph is a list item only when
+            // its `ilfo` is a valid list index. `ilvl` still drives nesting.
+            table.flush(elements);
+            let ilvl = p.props.ilvl.unwrap_or(0);
+            if list_ilfo.is_none() {
+                list_ilfo = p.props.ilfo;
+            }
+            list_items.push((
+                ilvl,
+                inline_content_for(&p.text, &p.hyperlinks, &p.chp_runs),
+                p.props.style_name.clone(),
+            ));
+        } else {
+            table.flush(elements);
+            flush_list(&mut list_items, list_ilfo.take(), list_formatting, elements);
+            // The walk above already routed every `Heading` (SPRM or style) to
+            // `emit_heading`, so `outline_level` here is only `BodyText` or
+            // `None`. A paragraph that explicitly says it is body text (even
+            // when its style is a heading) and one that only resolved a level
+            // from a style both take the paragraph branch: `has_structured_headings`
+            // keeps the line-shape guess switched off without inventing a heading.
+            if matches!(p.props.outline_level, Some(OutlineLevel::BodyText))
+                || (p.props.outline_level.is_none() && has_structured_headings)
+            {
+                elements.push(Element::Paragraph(Paragraph {
+                    content: inline_content_for(&p.text, &p.hyperlinks, &p.chp_runs),
+                    tabs: p.props.tabs.clone(),
+                    alignment: p.props.alignment.clone(),
+                    indent_left_twips: p.props.indent_left_twips,
+                    indent_right_twips: p.props.indent_right_twips,
+                    first_line_indent_twips: p.props.first_line_indent_twips,
+                    space_before_twips: p.props.space_before_twips,
+                    space_after_twips: p.props.space_after_twips,
+                    line_spacing: p.props.line_spacing.clone(),
+                    style: p.props.style_name.clone(),
+                    ..Default::default()
+                }));
+            } else {
+                emit_prose(&p.text, &p.props, elements, &p.hyperlinks, &p.chp_runs);
+            }
+        }
+    }
+    table.flush(elements);
+    flush_list(&mut list_items, list_ilfo.take(), list_formatting, elements);
+    table.depth_anomalies
+}
+
+/// Emit the accumulated list run as an `Element::List` and clear it.
+///
+/// `ilfo` is the run's own list identity: resolved through
+/// `list_formatting` to the declared start-at value and number format for
+/// the run's base level. `None` (no `PlfLst`/`PlfLfo` data, or an `ilfo`
+/// that doesn't resolve) degrades to the pre-list-format contract — bullet,
+/// `start_number: None` — rather than erroring.
+fn flush_list(
+    items: &mut Vec<ListItemSource>,
+    ilfo: Option<i16>,
+    list_formatting: &ListFormatting,
+    elements: &mut Vec<Element>,
+) {
+    if items.is_empty() {
+        return;
+    }
+    // `.doc` list levels are not guaranteed to start at 0; use the shallowest
+    // level in this run as the base so a run whose top level is e.g. 1 is not
+    // collapsed by `build_nested_list` (which would otherwise treat every
+    // item as a child of the first and drop the rest when base_level is 0).
+    let base_level = items.iter().map(|(lvl, _, _)| *lvl).min().unwrap_or(0);
+    let level = ilfo.and_then(|ilfo| list_formatting.level_for(ilfo, base_level));
+    let ordered = level.is_some_and(|l| l.is_numbered());
+    let start_number = level
+        .filter(|l| l.is_numbered() && l.start_at != 1)
+        .map(|l| l.start_at as u32);
+
+    let flat: Vec<(u8, Vec<InlineContent>)> = items
+        .iter()
+        .map(|(lvl, content, _)| (*lvl, content.clone()))
+        .collect();
+    let mut list = build_nested_list(ordered, &flat, base_level);
+    crate::ir::assign_list_item_styles(&mut list, &mut items.drain(..).map(|(_, _, style)| style));
+    list.start_number = start_number;
+    elements.push(Element::List(list));
+    items.clear();
+}
+
+/// Turn a paragraph's text into inline content, preserving soft line breaks.
+///
+/// `sanitize_text` maps the Word soft-line-break control (`0x0B`) to `'\n'`;
+/// within a single structured paragraph's inner text that is the only source
+/// of `'\n'`, so each `'\n'` becomes an `InlineContent::LineBreak` instead of
+/// being flattened into one run.
+///
+/// `hyperlinks` are `HYPERLINK` field display-text spans as byte ranges into
+/// `text`; `chp_runs` are character-property run boundaries,
+/// also byte ranges into `text` — both empty for callers with
+/// no per-paragraph data (e.g. the line-shape heading heuristic, which
+/// works over the flat, already-sanitized document text rather than a
+/// single `DocParagraph`).
+fn inline_content_for(
+    text: &str,
+    hyperlinks: &[HyperlinkSpan],
+    chp_runs: &[(std::ops::Range<usize>, ChpProps)],
+) -> Vec<InlineContent> {
+    let mut out = Vec::new();
+    let mut base = 0usize;
+    for seg in text.split('\n') {
+        push_segment(seg, base, hyperlinks, chp_runs, &mut out);
+        base += seg.len() + 1; // +1 for the '\n' the split consumed
+        out.push(InlineContent::LineBreak);
+    }
+    // Drop the trailing `LineBreak` appended after the final segment.
+    if matches!(out.last(), Some(InlineContent::LineBreak)) {
+        out.pop();
+    }
+    if out.is_empty() {
+        // Genuinely empty input: keep a single empty run so the content
+        // vector is not zero-length.
+        out.push(InlineContent::Text(TextSpan::plain(text)));
+    }
+    out
+}
+
+/// Apply one `ChpProps` to a plain `TextSpan` built from `text`.
+fn styled_span(text: &str, props: &ChpProps) -> TextSpan {
+    TextSpan {
+        bold: props.bold,
+        italic: props.italic,
+        underline: props.underline.clone(),
+        color: props.color,
+        font_size_half_pt: props.font_size_half_pt,
+        strikethrough: props.strike,
+        vertical_align: props.vertical_align(),
+        highlight: props.highlight,
+        all_caps: props.all_caps,
+        small_caps: props.small_caps,
+        ..TextSpan::plain(text)
+    }
+}
+
+/// Push one line-break-free segment of text as one or more `TextSpan`s,
+/// splitting on every hyperlink and character-property run
+/// boundary that overlaps it. `base` is `seg`'s own byte offset within the
+/// original (pre-split) text, so `hyperlinks`'/`chp_runs`' ranges (computed
+/// against that same original text) line up correctly.
+fn push_segment(
+    seg: &str,
+    base: usize,
+    hyperlinks: &[HyperlinkSpan],
+    chp_runs: &[(std::ops::Range<usize>, ChpProps)],
+    out: &mut Vec<InlineContent>,
+) {
+    if seg.is_empty() {
+        return;
+    }
+    let seg_start = base;
+    let seg_end = base + seg.len();
+
+    // Every point where either a hyperlink or a CHP run starts/ends within
+    // this segment is a potential span boundary; walking the sorted, deduped
+    // union of both (plus the segment's own bounds) guarantees each
+    // resulting sub-slice has one unambiguous hyperlink state and one
+    // unambiguous `ChpProps` — `resolve_chp_segments` already guarantees
+    // `chp_runs` fully and contiguously covers the paragraph, so no
+    // sub-slice here can straddle two different CHP runs.
+    let mut breakpoints: Vec<usize> = vec![seg_start, seg_end];
+    for h in hyperlinks {
+        if h.range.start > seg_start && h.range.start < seg_end {
+            breakpoints.push(h.range.start);
+        }
+        if h.range.end > seg_start && h.range.end < seg_end {
+            breakpoints.push(h.range.end);
+        }
+    }
+    for (r, _) in chp_runs {
+        if r.start > seg_start && r.start < seg_end {
+            breakpoints.push(r.start);
+        }
+        if r.end > seg_start && r.end < seg_end {
+            breakpoints.push(r.end);
+        }
+    }
+    breakpoints.sort_unstable();
+    breakpoints.dedup();
+
+    for pair in breakpoints.windows(2) {
+        let (a, b) = (pair[0], pair[1]);
+        if a >= b {
+            continue;
+        }
+        let slice = &seg[a - seg_start..b - seg_start];
+        if slice.is_empty() {
+            continue;
+        }
+        let hyperlink = hyperlinks
+            .iter()
+            .find(|h| h.range.start <= a && b <= h.range.end);
+        let props = chp_runs
+            .iter()
+            .find(|(r, _)| r.start <= a && b <= r.end)
+            .map(|(_, p)| p);
+        let mut span = match props {
+            Some(p) => styled_span(slice, p),
+            None => TextSpan::plain(slice),
+        };
+        if let Some(h) = hyperlink {
+            span.hyperlink = Some(h.url.clone());
+        }
+        out.push(InlineContent::Text(span));
+    }
+}
+
+/// Shift `hyperlinks`' byte ranges by `-trim_start` (the number of bytes
+/// `text.trim()` removed from the front) and clip them to
+/// `[0, trimmed_len]`, dropping any span that trimming removed entirely.
+/// Needed because `emit_heading`/`emit_prose` call `inline_content_for` on
+/// `text.trim()`, not `text` itself, so the spans (computed against the
+/// untrimmed paragraph text) would otherwise point at the wrong bytes.
+fn shift_hyperlinks_for_trim(
+    hyperlinks: &[HyperlinkSpan],
+    trim_start: usize,
+    trimmed_len: usize,
+) -> Vec<HyperlinkSpan> {
+    hyperlinks
+        .iter()
+        .filter_map(|h| {
+            let start = h.range.start.saturating_sub(trim_start).min(trimmed_len);
+            let end = h.range.end.saturating_sub(trim_start).min(trimmed_len);
+            (start < end).then(|| HyperlinkSpan {
+                range: start..end,
+                url: h.url.clone(),
+            })
+        })
+        .collect()
+}
+
+/// As [`shift_hyperlinks_for_trim`], for CHP run boundaries.
+fn shift_chp_runs_for_trim(
+    chp_runs: &[(std::ops::Range<usize>, ChpProps)],
+    trim_start: usize,
+    trimmed_len: usize,
+) -> Vec<(std::ops::Range<usize>, ChpProps)> {
+    chp_runs
+        .iter()
+        .filter_map(|(r, props)| {
+            let start = r.start.saturating_sub(trim_start).min(trimmed_len);
+            let end = r.end.saturating_sub(trim_start).min(trimmed_len);
+            (start < end).then(|| (start..end, props.clone()))
+        })
+        .collect()
+}
+
+/// Emit a heading at an explicit level, honouring soft line breaks.
+fn emit_heading(
+    text: &str,
+    level: u8,
+    elements: &mut Vec<Element>,
+    hyperlinks: &[HyperlinkSpan],
+    chp_runs: &[(std::ops::Range<usize>, ChpProps)],
+) {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+    let trim_start = text.len() - text.trim_start().len();
+    let hyperlinks = shift_hyperlinks_for_trim(hyperlinks, trim_start, trimmed.len());
+    let chp_runs = shift_chp_runs_for_trim(chp_runs, trim_start, trimmed.len());
+    // A heading is not also bold text: forcing `bold` on every span
+    // rendered `# **Title**` / `<h1><strong>` — the same defect the DOCX
+    // converter had for a heading style's own `<w:b/>`. Real per-run
+    // formatting inside the heading is kept.
+    let content = inline_content_for(trimmed, &hyperlinks, &chp_runs);
+    elements.push(Element::Heading(Heading {
+        level: level.clamp(1, MAX_HEADING_DEPTH),
+        content,
+        ..Default::default()
+    }));
+}
+
+/// Guess headings from line shape — short, non-sentence, ALL-CAPS lines, or
+/// a short opening line.
+///
+/// This is a guess and is only reached for documents that carry no
+/// `sprmPOutLvl` at all. Running it alongside real outline levels produced
+/// two disagreeing answers for the same paragraphs in one document.
+fn emit_prose(
+    text: &str,
+    props: &PapProps,
+    elements: &mut Vec<Element>,
+    hyperlinks: &[HyperlinkSpan],
+    chp_runs: &[(std::ops::Range<usize>, ChpProps)],
+) {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+
+    let is_heading = trimmed.len() < 100
+        && !trimmed.ends_with('.')
+        && !trimmed.ends_with(',')
+        && !is_heading_guess_junk(trimmed)
+        && (trimmed
+            .chars()
+            .filter(|c| c.is_alphabetic())
+            .all(|c| c.is_uppercase())
+            || (elements.is_empty() && trimmed.len() < 60));
+
+    if is_heading {
+        // Honour soft line breaks inside headings too: split on `'\n'` (the
+        // sanitised form of `0x0B`) and keep each segment bold.
+        let trim_start = text.len() - text.trim_start().len();
+        let shifted = shift_hyperlinks_for_trim(hyperlinks, trim_start, trimmed.len());
+        let shifted_chp = shift_chp_runs_for_trim(chp_runs, trim_start, trimmed.len());
+        let content = inline_content_for(trimmed, &shifted, &shifted_chp);
+        elements.push(Element::Heading(Heading {
+            level: if elements.is_empty() { 1 } else { 2 },
+            content,
+            ..Default::default()
+        }));
+    } else {
+        elements.push(Element::Paragraph(Paragraph {
+            content: inline_content_for(text, hyperlinks, chp_runs),
+            tabs: props.tabs.clone(),
+            alignment: props.alignment.clone(),
+            indent_left_twips: props.indent_left_twips,
+            indent_right_twips: props.indent_right_twips,
+            first_line_indent_twips: props.first_line_indent_twips,
+            space_before_twips: props.space_before_twips,
+            space_after_twips: props.space_after_twips,
+            line_spacing: props.line_spacing.clone(),
+            style: props.style_name.clone(),
+            ..Default::default()
+        }));
+    }
+}
+
+/// Reject line shapes the ALL-CAPS / short-opening-line heading guess in
+/// `emit_prose` otherwise misclassifies as headings: pure separator lines,
+/// bare dates, UK postcodes, and "CCY - symbol" currency labels — all
+/// confirmed junk from the 246-file `.doc` corpus sweep that tightened the heading guess
+/// (`______________________________________________`, `11/16/2016`,
+/// `SW8 5NQ`, `GBP - £`). The guess otherwise stays as-is — no reference
+/// implementation does line-shape heading detection at all, so this only
+/// narrows an already-approximate fallback rather than trying to perfect
+/// it (`DRAFT`, a single common ALL-CAPS word, is left uncaught).
+fn is_heading_guess_junk(line: &str) -> bool {
+    (!line.chars().any(|c| c.is_alphanumeric()))
+        || is_bare_date(line)
+        || is_uk_postcode(line)
+        || is_currency_label(line)
+}
+
+/// A line that is *only* `D[D]/-M[M]/-Y[YYY]`-shaped — a whole date with no
+/// other text around it. Deliberately narrow: real headings almost never
+/// consist of exactly three all-digit, slash/dash-separated groups.
+fn is_bare_date(line: &str) -> bool {
+    let parts: Vec<&str> = line.split(['/', '-']).collect();
+    parts.len() == 3
+        && parts
+            .iter()
+            .all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()))
+        && parts[0].len() <= 2
+        && parts[1].len() <= 2
+        && matches!(parts[2].len(), 2 | 4)
+}
+
+/// A UK postcode shape: `<1-2 letters><digit>[letter/digit] <digit><2
+/// letters>` (e.g. `SW8 5NQ`). Not a full validator, just narrow enough
+/// that a genuine heading is unlikely to match it by accident.
+fn is_uk_postcode(line: &str) -> bool {
+    let Some((outward, inward)) = line.rsplit_once(' ') else {
+        return false;
+    };
+    let mut inward_chars = inward.chars();
+    let inward_ok = inward.chars().count() == 3
+        && inward_chars.next().is_some_and(|c| c.is_ascii_digit())
+        && inward_chars.all(|c| c.is_ascii_uppercase());
+    if !inward_ok {
+        return false;
+    }
+    let outward: Vec<char> = outward.chars().collect();
+    (2..=4).contains(&outward.len())
+        && outward[0].is_ascii_uppercase()
+        && outward.iter().any(|c| c.is_ascii_digit())
+        && outward.iter().all(|c| c.is_ascii_alphanumeric())
+}
+
+/// A `"CCY - symbol"`-shaped currency label (`GBP - £`, `EUR - €`): a
+/// 3-letter uppercase code followed by nothing but a currency symbol.
+fn is_currency_label(line: &str) -> bool {
+    let Some((code, rest)) = line.split_once(' ') else {
+        return false;
+    };
+    if code.len() != 3 || !code.chars().all(|c| c.is_ascii_uppercase()) {
+        return false;
+    }
+    let rest = rest.trim().strip_prefix('-').unwrap_or(rest).trim();
+    !rest.is_empty() && !rest.chars().any(|c| c.is_alphanumeric())
+}
+
+// ---------------------------------------------------------------------------
+// Fallback: line-based heuristic over sanitised text
+// ---------------------------------------------------------------------------
+
+fn line_heuristic(text: &str, elements: &mut Vec<Element>) {
+    for line in text.lines() {
+        emit_prose(line, &PapProps::default(), elements, &[], &[]);
+    }
+}
+
+/// Build a `HeaderFooter` from one `PlcfHdd`-delimited story's already
+/// sanitized text.
+fn text_to_header_footer(s: &str) -> HeaderFooter {
+    HeaderFooter {
+        content: s
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(|l| {
+                Element::Paragraph(Paragraph {
+                    content: vec![InlineContent::Text(TextSpan::plain(l))],
+                    ..Default::default()
+                })
+            })
+            .collect(),
+    }
+}
+
+/// Human-readable label for a `.doc` subdocument, used as the note marker.
+fn subdocument_label(kind: crate::doc::SubDocumentKind) -> &'static str {
+    use crate::doc::SubDocumentKind as K;
+    match kind {
+        K::Footnotes => "footnote",
+        K::HeadersFooters => "header/footer",
+        K::Comments => "comment",
+        K::Endnotes => "endnote",
+        K::TextBoxes => "text box",
+        K::HeaderTextBoxes => "header text box",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::doc::{DocParagraph, PapProps, TapCellInfo, TapInfo};
+    use crate::ir::{
+        Element, InlineContent, Paragraph, TabAlignment, TabLeader, TabStop, TextSpan,
+    };
+
+    /// Build a `TapInfo` from column-center boundaries (twips).
+    fn tap(centers: &[i16]) -> TapInfo {
+        let itc_mac = centers.len() - 1;
+        TapInfo {
+            itc_mac: itc_mac as u8,
+            centers: centers.to_vec(),
+            cells: vec![TapCellInfo::default(); itc_mac],
+        }
+    }
+
+    /// Regression for Medium #1: boundaries that differ by only a few twips
+    /// across rows (Word rounds per row) must be snapped together, otherwise
+    /// a spurious grid edge inflates `col_span` for every cell spanning it.
+    #[test]
+    fn test_column_edge_tolerance_collapses_near_boundaries() {
+        // Row 0 and row 1 share edges 0/2000; row 1's middle edge is 3 twips
+        // off (1003 vs 1000) — within `EDGE_TOLERANCE_TWIPS`.
+        let rows = vec![
+            PendingRow {
+                cells: vec![vec![], vec![]],
+                tap: Some(tap(&[0, 1000, 2000])),
+                header: false,
+            },
+            PendingRow {
+                cells: vec![vec![], vec![]],
+                tap: Some(tap(&[0, 1003, 2000])),
+                header: false,
+            },
+        ];
+        let out = build_table_rows(&rows);
+        assert_eq!(out.len(), 2);
+        // Without tolerance the extra edge (1003) makes this cell span 2
+        // columns; with tolerance it is a single column.
+        assert_eq!(
+            out[0].cells[1].col_span, 1,
+            "near-identical column edges must be snapped (Medium #1)"
+        );
+    }
+
+    /// Build a paragraph with the given text and PAP properties.
+    fn para(text: &str, props: PapProps) -> DocParagraph {
+        DocParagraph {
+            text: text.to_string(),
+            terminator: '\r',
+            props,
+            hyperlinks: Vec::new(),
+            cp_end: 0,
+            chp_runs: Vec::new(),
+        }
+    }
+
+    /// A `HYPERLINK` field's display text must reach
+    /// `TextSpan::hyperlink` in the IR, with the surrounding plain text on
+    /// either side kept as ordinary, unlinked runs.
+    #[test]
+    fn test_hyperlink_span_reaches_textspan_hyperlink_in_the_ir() {
+        let text = "Before text; Hyperlink text; after text.".to_string();
+        let link_start = text.find("Hyperlink text").unwrap();
+        let link_end = link_start + "Hyperlink text".len();
+        let p = DocParagraph {
+            text,
+            terminator: '\r',
+            props: PapProps::default(),
+            hyperlinks: vec![crate::doc::HyperlinkSpan {
+                range: link_start..link_end,
+                url: "http://testuri.org/".to_string(),
+            }],
+            cp_end: 0,
+            chp_runs: Vec::new(),
+        };
+        let mut els = Vec::new();
+        walk_paragraphs(&[p], false, &mut els, &ListFormatting::default());
+        let Element::Paragraph(par) = &els[0] else {
+            panic!("expected a paragraph, got {:?}", els[0]);
+        };
+        let spans: Vec<&TextSpan> = par
+            .content
+            .iter()
+            .filter_map(|c| match c {
+                InlineContent::Text(t) => Some(t),
+                _ => None,
+            })
+            .collect();
+        let linked = spans
+            .iter()
+            .find(|s| s.hyperlink.is_some())
+            .expect("a hyperlinked span must be present");
+        assert_eq!(linked.text, "Hyperlink text");
+        assert_eq!(linked.hyperlink.as_deref(), Some("http://testuri.org/"));
+        assert!(
+            spans
+                .iter()
+                .any(|s| s.hyperlink.is_none() && s.text.contains("Before text")),
+            "surrounding plain text must stay unlinked: {spans:?}"
+        );
+        assert!(
+            spans
+                .iter()
+                .any(|s| s.hyperlink.is_none() && s.text.contains("after text")),
+            "surrounding plain text must stay unlinked: {spans:?}"
+        );
+    }
+
+    /// Regression: real per-run character formatting
+    /// (bold/italic/underline/color/font-size) from CHPX reaches the IR's
+    /// `TextSpan`s, split at exactly the right byte boundaries — not the
+    /// always-`false`/`None` defaults from before this fix.
+    #[test]
+    fn test_chp_runs_reach_textspan_formatting_split_at_the_right_boundaries() {
+        let text = "Plain bold italic.".to_string();
+        let bold_start = text.find("bold").unwrap();
+        let bold_end = bold_start + "bold".len();
+        let italic_start = text.find("italic").unwrap();
+        let italic_end = italic_start + "italic".len();
+        let p = DocParagraph {
+            text,
+            terminator: '\r',
+            props: PapProps::default(),
+            hyperlinks: Vec::new(),
+            cp_end: 0,
+            chp_runs: vec![
+                (
+                    bold_start..bold_end,
+                    ChpProps {
+                        bold: true,
+                        color: Some([255, 0, 0]),
+                        ..Default::default()
+                    },
+                ),
+                (
+                    italic_start..italic_end,
+                    ChpProps {
+                        italic: true,
+                        underline: Some(crate::ir::UnderlineStyle::Single),
+                        font_size_half_pt: Some(28),
+                        ..Default::default()
+                    },
+                ),
+            ],
+        };
+        let mut els = Vec::new();
+        walk_paragraphs(&[p], false, &mut els, &ListFormatting::default());
+        let Element::Paragraph(par) = &els[0] else {
+            panic!("expected a paragraph, got {:?}", els[0]);
+        };
+        let spans: Vec<&TextSpan> = par
+            .content
+            .iter()
+            .filter_map(|c| match c {
+                InlineContent::Text(t) => Some(t),
+                _ => None,
+            })
+            .collect();
+
+        let plain = spans
+            .iter()
+            .find(|s| s.text == "Plain ")
+            .expect("leading plain span");
+        assert!(!plain.bold && !plain.italic, "unformatted text must stay unformatted");
+
+        let bold = spans.iter().find(|s| s.text == "bold").expect("bold span");
+        assert!(bold.bold);
+        assert!(!bold.italic);
+        assert_eq!(bold.color, Some([255, 0, 0]));
+
+        let italic = spans
+            .iter()
+            .find(|s| s.text == "italic")
+            .expect("italic span");
+        assert!(italic.italic);
+        assert!(!italic.bold);
+        assert_eq!(italic.underline, Some(crate::ir::UnderlineStyle::Single));
+        assert_eq!(italic.font_size_half_pt, Some(28));
+
+        assert!(
+            spans.iter().any(|s| s.text == " " && !s.bold && !s.italic),
+            "the gap between the two formatted runs must stay a separate, unformatted span: {spans:?}"
+        );
+    }
+
+    /// Strikethrough, super/subscript, highlight and caps decoded from
+    /// CHP SPRMs reach the IR's `TextSpan`; they were never set for DOC.
+    #[test]
+    fn test_chp_decoration_reaches_textspan() {
+        let props = ChpProps {
+            strike: true,
+            iss: Some(crate::ir::VerticalAlign::Superscript),
+            highlight: Some([0xFF, 0xFF, 0x00]),
+            all_caps: true,
+            small_caps: true,
+            ..Default::default()
+        };
+        let span = styled_span("x", &props);
+        assert!(span.strikethrough);
+        assert_eq!(span.vertical_align, Some(crate::ir::VerticalAlign::Superscript));
+        assert_eq!(span.highlight, Some([0xFF, 0xFF, 0x00]));
+        assert!(span.all_caps && span.small_caps);
+    }
+
+    /// Regression: paragraph alignment/indentation/spacing
+    /// from PAP SPRMs reach the IR's `Paragraph`, not the always-`None`
+    /// defaults from before this fix.
+    #[test]
+    fn test_pap_alignment_indent_and_spacing_reach_the_ir_paragraph() {
+        let props = PapProps {
+            alignment: Some(crate::ir::ParagraphAlignment::Center),
+            indent_left_twips: Some(720),
+            indent_right_twips: Some(360),
+            first_line_indent_twips: Some(-360),
+            space_before_twips: Some(200),
+            space_after_twips: Some(100),
+            line_spacing: Some(crate::ir::LineSpacing::Auto(360)),
+            ..Default::default()
+        };
+        let p = para("A centered, indented paragraph.", props);
+        let mut els = Vec::new();
+        walk_paragraphs(&[p], false, &mut els, &ListFormatting::default());
+        let Element::Paragraph(par) = &els[0] else {
+            panic!("expected a paragraph, got {:?}", els[0]);
+        };
+        assert_eq!(par.alignment, Some(crate::ir::ParagraphAlignment::Center));
+        assert_eq!(par.indent_left_twips, Some(720));
+        assert_eq!(par.indent_right_twips, Some(360));
+        assert_eq!(par.first_line_indent_twips, Some(-360));
+        assert_eq!(par.space_before_twips, Some(200));
+        assert_eq!(par.space_after_twips, Some(100));
+        assert_eq!(par.line_spacing, Some(crate::ir::LineSpacing::Auto(360)));
+    }
+
+    /// Medium #4: a soft line break (`0x0B`, which `sanitize_text` maps to
+    /// `'\n'`) inside a paragraph must survive as an `InlineContent::LineBreak`
+    /// rather than being flattened into one run.
+    #[test]
+    fn test_soft_line_break_becomes_inline_break() {
+        // Trailing '.' keeps this out of the heading heuristic so it routes to
+        // a Paragraph (where soft breaks are honoured).
+        let p = para(
+            "First line of the paragraph.\nSecond line of the paragraph.",
+            PapProps::default(),
+        );
+        let mut els = Vec::new();
+        walk_paragraphs(&[p], false, &mut els, &ListFormatting::default());
+        let Element::Paragraph(par) = &els[0] else {
+            panic!("expected a paragraph, got {:?}", els[0]);
+        };
+        assert!(
+            par.content
+                .iter()
+                .any(|c| matches!(c, InlineContent::LineBreak)),
+            "soft line break must produce an InlineContent::LineBreak"
+        );
+        let texts: Vec<&str> = par
+            .content
+            .iter()
+            .filter_map(|c| match c {
+                InlineContent::Text(t) => Some(t.text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            texts,
+            vec![
+                "First line of the paragraph.",
+                "Second line of the paragraph."
+            ]
+        );
+    }
+
+    /// A nested row mark with no enclosing table seen yet: the enclosing table
+    /// is implied (its first cell begins with the nested one), nothing is
+    /// reported, and no text the document does not have is written.
+    #[test]
+    fn test_nested_row_mark_opens_its_enclosing_table() {
+        let props = PapProps {
+            is_table_trailing_mark: true,
+            itap: 2,
+            tap: Some(tap(&[0, 1000, 2000])),
+            ..PapProps::default()
+        };
+        let row = para("", props);
+
+        let mut els = Vec::new();
+        let anomalies = walk_paragraphs(&[row], false, &mut els, &ListFormatting::default());
+
+        let Some(Element::Table(outer)) = els.first() else {
+            panic!("a table must be emitted: {els:?}");
+        };
+        assert!(
+            outer.rows[0].cells[0]
+                .content
+                .iter()
+                .any(|e| matches!(e, Element::Table(_))),
+            "the nested table sits in the implied outer table's first cell"
+        );
+        assert_eq!(anomalies, 0);
+        assert!(
+            !els.iter().any(|e| matches!(e, Element::Paragraph(_))),
+            "no notice paragraph may be written into the document: {els:?}"
+        );
+    }
+
+    /// List membership is keyed on `ilfo` (`sprmPIlfo`, `0x460B`), per
+    /// [MS-DOC] §2.4.6.3. `0x0000` and `0xF801` mean "not in a list" and the
+    /// paragraph must be ordinary prose even when an `ilvl` SPRM is present.
+    #[test]
+    fn test_ilfo_not_in_list_bands_are_prose() {
+        // `0x0000` (0) and `0xF801` (-2047 as signed i16) are the two
+        // documented "not in a list" markers. A non-spec value (2047) is also
+        // prose because it falls outside every valid band.
+        for ilfo in [0i16, -2047, 2047] {
+            let props = PapProps {
+                ilvl: Some(0),
+                ilfo: Some(ilfo),
+                ..PapProps::default()
+            };
+            let p = para("Not a list item.", props);
+            let mut els = Vec::new();
+            walk_paragraphs(&[p], false, &mut els, &ListFormatting::default());
+            assert!(
+                !els.iter().any(|e| matches!(e, Element::List(_))),
+                "ilfo {ilfo:#06x} must not build a list"
+            );
+            assert!(
+                els.iter().any(|e| matches!(e, Element::Paragraph(_))),
+                "ilfo {ilfo:#06x} must be emitted as ordinary prose"
+            );
+        }
+    }
+
+    /// A paragraph with a real outline level (heading) that
+    /// *also* carries a valid `ilfo` (Word's multilevel-list "Heading"
+    /// gallery attaches numPr/ilfo to the heading styles themselves) must
+    /// come out as a Heading, not a ListItem — this is the normal shape
+    /// of a numbered heading ("1. Introduction") in real documents.
+    #[test]
+    fn test_numbered_heading_wins_over_list_membership() {
+        let props = PapProps {
+            ilvl: Some(0),
+            ilfo: Some(1), // valid 1-based list index
+            outline_level: Some(OutlineLevel::Heading {
+                level: 0,
+                source: LevelSource::Sprm,
+            }), // Heading 1
+            ..PapProps::default()
+        };
+        let p = para("1. Introduction", props);
+        let mut els = Vec::new();
+        walk_paragraphs(&[p], false, &mut els, &ListFormatting::default());
+
+        assert!(
+            els.iter()
+                .any(|e| matches!(e, Element::Heading(h) if h.level == 1)),
+            "a numbered Heading 1 must be emitted as a Heading, got {els:#?}"
+        );
+        assert!(
+            !els.iter().any(|e| matches!(e, Element::List(_))),
+            "list membership must be dropped once the paragraph is a heading, got {els:#?}"
+        );
+    }
+
+    /// `0xF802`–`0xFFFF` is the negation of a 1-based index and is still a list
+    /// item; it must not be dropped to prose.
+    #[test]
+    fn test_ilfo_negated_band_is_list() {
+        let props = PapProps {
+            ilvl: Some(0),
+            ilfo: Some(-2046), // 0xF802
+            ..PapProps::default()
+        };
+        let p = para("A list item via the negated band.", props);
+        let mut els = Vec::new();
+        walk_paragraphs(&[p], false, &mut els, &ListFormatting::default());
+        assert!(
+            els.iter().any(|e| matches!(e, Element::List(_))),
+            "0xF802 (negated index) must still be a list item"
+        );
+    }
+
+    /// A negated `ilfo` ([MS-DOC] §2.6.2 `sprmPIlfo`: `0xF802`–`0xFFFF` is
+    /// the negation of a 1-based `PlfLfo` index) resolves to the same list
+    /// as its positive form. It was passed on negative and resolved to
+    /// nothing: a bullet with no start number even when the LFO said
+    /// otherwise.
+    #[test]
+    fn test_negated_ilfo_resolves_through_list_formatting() {
+        let list_formatting = crate::doc::ListFormatting::from_parts(
+            vec![(
+                7,
+                vec![crate::doc::ListLevel {
+                    start_at: 3,
+                    nfc: 0x00,
+                }],
+            )],
+            vec![7],
+        );
+        let props = PapProps {
+            ilvl: Some(0),
+            ilfo: Some(-1), // 0xFFFF: negated index 1
+            ..PapProps::default()
+        };
+        let mut els = Vec::new();
+        walk_paragraphs(&[para("Item", props)], false, &mut els, &list_formatting);
+        let Element::List(list) = &els[0] else {
+            panic!("expected a List element, got {els:#?}");
+        };
+        assert!(list.ordered);
+        assert_eq!(list.start_number, Some(3));
+        // 0xF801 is still "not in a list".
+        assert!(list_formatting.level_for(-2047, 0).is_none());
+    }
+
+    /// A list run's `ilfo` must resolve through `PlfLfo`'s
+    /// `lsid` to the matching `PlfLst` entry's `LVL`, surfacing a real
+    /// `start_number` and `ordered = true` instead of always `None`/bullet.
+    #[test]
+    fn test_list_start_number_and_ordered_resolve_from_list_formatting() {
+        let list_formatting = crate::doc::ListFormatting::from_parts(
+            vec![(
+                0x44F53D09, // lsid
+                vec![
+                    crate::doc::ListLevel {
+                        start_at: 5,
+                        nfc: 0x00,
+                    }, // level 0: numbered, starts at 5
+                    crate::doc::ListLevel {
+                        start_at: 1,
+                        nfc: 0xFF,
+                    }, // level 1: bullet
+                ],
+            )],
+            vec![0x44F53D09], // lfo_lsids[0] == lsid above, so ilfo=1 resolves to it
+        );
+        let props = PapProps {
+            ilvl: Some(0),
+            ilfo: Some(1),
+            ..PapProps::default()
+        };
+        let p = para("First", props);
+        let mut els = Vec::new();
+        walk_paragraphs(&[p], false, &mut els, &list_formatting);
+
+        let Element::List(list) = &els[0] else {
+            panic!("expected a List element, got {els:#?}");
+        };
+        assert!(list.ordered, "nfc != 0xFF must render as an ordered list");
+        assert_eq!(list.start_number, Some(5), "iStartAt = 5 must reach List::start_number");
+    }
+
+    /// A level whose `nfc == 0xFF` (a bullet level) must never report
+    /// `start_number`, even when its `iStartAt` happens to be non-1.
+    #[test]
+    fn test_bullet_level_never_gets_a_start_number() {
+        let list_formatting = crate::doc::ListFormatting::from_parts(
+            vec![(
+                1,
+                vec![crate::doc::ListLevel {
+                    start_at: 7,
+                    nfc: 0xFF,
+                }],
+            )],
+            vec![1],
+        );
+        let props = PapProps {
+            ilvl: Some(0),
+            ilfo: Some(1),
+            ..PapProps::default()
+        };
+        let p = para("Bulleted", props);
+        let mut els = Vec::new();
+        walk_paragraphs(&[p], false, &mut els, &list_formatting);
+
+        let Element::List(list) = &els[0] else {
+            panic!("expected a List element, got {els:#?}");
+        };
+        assert!(!list.ordered);
+        assert_eq!(list.start_number, None);
+    }
+
+    /// A declared `iStartAt == 1` (the default) must not set
+    /// `start_number` — only an explicit override is worth surfacing,
+    /// mirroring DOCX's identical contract.
+    #[test]
+    fn test_start_at_one_is_not_surfaced_as_an_override() {
+        let list_formatting = crate::doc::ListFormatting::from_parts(
+            vec![(
+                1,
+                vec![crate::doc::ListLevel {
+                    start_at: 1,
+                    nfc: 0x00,
+                }],
+            )],
+            vec![1],
+        );
+        let props = PapProps {
+            ilvl: Some(0),
+            ilfo: Some(1),
+            ..PapProps::default()
+        };
+        let p = para("Numbered from 1", props);
+        let mut els = Vec::new();
+        walk_paragraphs(&[p], false, &mut els, &list_formatting);
+
+        let Element::List(list) = &els[0] else {
+            panic!("expected a List element, got {els:#?}");
+        };
+        assert!(list.ordered);
+        assert_eq!(list.start_number, None, "start_at == 1 is the default, not an override");
+    }
+
+    /// An `ilfo` with no matching `PlfLfo`/`PlfLst` data (the common case
+    /// for most existing tests, and for a real file with no `PlfLst` at
+    /// all) must degrade to the pre-list-format contract — bullet, no
+    /// start_number — not panic or produce a wrong-but-confident answer.
+    #[test]
+    fn test_missing_list_formatting_degrades_to_the_old_contract() {
+        let props = PapProps {
+            ilvl: Some(0),
+            ilfo: Some(1),
+            ..PapProps::default()
+        };
+        let p = para("Item", props);
+        let mut els = Vec::new();
+        walk_paragraphs(&[p], false, &mut els, &ListFormatting::default());
+
+        let Element::List(list) = &els[0] else {
+            panic!("expected a List element, got {els:#?}");
+        };
+        assert!(!list.ordered);
+        assert_eq!(list.start_number, None);
+    }
+
+    /// `sprmPChgTabs` tab stops decoded onto `PapProps` must surface on the
+    /// produced paragraph's `tabs`.
+    #[test]
+    fn test_pchg_tabs_surfaced_on_paragraph() {
+        let props = PapProps {
+            tabs: vec![TabStop {
+                position_twips: 1440,
+                alignment: TabAlignment::Center,
+                leader: TabLeader::None,
+            }],
+            ..PapProps::default()
+        };
+        let p = para("Indented text carrying tab stops.", props);
+
+        let mut els = Vec::new();
+        walk_paragraphs(&[p], false, &mut els, &ListFormatting::default());
+        let Element::Paragraph(par) = &els[0] else {
+            panic!("expected a paragraph, got {:?}", els[0]);
+        };
+        assert_eq!(par.tabs.len(), 1, "decoded tab stops must reach the IR");
+        assert_eq!(par.tabs[0].position_twips, 1440);
+    }
+
+    /// A table cell's content is a paragraph flagged `f_in_table` (but not a row
+    /// terminator). `walk_paragraphs` must route it through
+    /// `table.add_cell_paragraph` (convert_doc.rs:362-363), the `f_in_table`
+    /// dispatch branch. A lone cell paragraph makes no row, so wrap it between
+    /// two row-terminators the way a real `.doc` lays out a one-cell table.
+    #[test]
+    fn test_in_table_paragraph_becomes_cell() {
+        let mark = |itap: u8| DocParagraph {
+            text: String::new(),
+            terminator: '\r',
+            props: PapProps {
+                is_table_trailing_mark: true,
+                itap,
+                ..PapProps::default()
+            },
+            hyperlinks: Vec::new(),
+            cp_end: 0,
+            chp_runs: Vec::new(),
+        };
+        let cell = DocParagraph {
+            text: "cell text".into(),
+            terminator: '\u{7}', // closes the cell
+            props: PapProps {
+                f_in_table: true,
+                ..PapProps::default()
+            },
+            hyperlinks: Vec::new(),
+            cp_end: 0,
+            chp_runs: Vec::new(),
+        };
+        let paragraphs = [mark(1), cell, mark(1)];
+        let mut els = Vec::new();
+        walk_paragraphs(&paragraphs, false, &mut els, &ListFormatting::default());
+        assert!(
+            els.iter().any(|e| matches!(e, Element::Table(_))),
+            "f_in_table cell paragraph must be emitted inside a table"
+        );
+    }
+
+    /// A document that ends inside a table cell — the last paragraph is
+    /// `fInTable` with a `\r` terminator and no cell or row mark follows
+    /// it. The open cell used to be dropped at the end-of-document flush.
+    #[test]
+    fn test_a_document_ending_inside_a_table_cell_keeps_that_cell() {
+        let in_table = |text: &str, terminator: char| DocParagraph {
+            text: text.into(),
+            terminator,
+            props: PapProps {
+                f_in_table: true,
+                itap: 1,
+                ..PapProps::default()
+            },
+            hyperlinks: Vec::new(),
+            cp_end: 0,
+            chp_runs: Vec::new(),
+        };
+        let paragraphs = [
+            in_table("first cell", '\u{7}'),
+            in_table("last paragraph", '\r'),
+        ];
+        let mut els = Vec::new();
+        walk_paragraphs(&paragraphs, false, &mut els, &ListFormatting::default());
+        let ir = DocumentIR {
+            sections: vec![Section {
+                elements: els,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let text = ir.plain_text();
+        assert!(text.contains("first cell"), "{text}");
+        assert!(text.contains("last paragraph"), "{text}");
+    }
+    /// A paragraph inside a table whose style resolves to a heading must stay a
+    /// table cell. `walk_paragraphs` routes table paragraphs before `emit_prose`,
+    /// so a styled heading can neither leak into the table structure nor escape
+    /// it as a top-level `Heading`.
+    ///
+    /// Note this guards the *routing* (pre-existing) as well as the styled
+    /// heading branch: without the final contrast below it would pass even with
+    /// the branch deleted, which is how it was first (wrongly) revert-checked.
+    #[test]
+    fn test_styled_heading_inside_table_stays_a_cell() {
+        let mark = DocParagraph {
+            text: String::new(),
+            terminator: '\r',
+            props: PapProps {
+                is_table_trailing_mark: true,
+                itap: 1,
+                outline_level: Some(OutlineLevel::Heading {
+                    level: 2,
+                    source: LevelSource::Style,
+                }),
+                ..PapProps::default()
+            },
+            hyperlinks: Vec::new(),
+            chp_runs: Vec::new(),
+            cp_end: 0,
+        };
+        let cell = DocParagraph {
+            text: "cell text".into(),
+            terminator: '\u{7}', // closes the cell
+            props: PapProps {
+                f_in_table: true,
+                outline_level: Some(OutlineLevel::Heading {
+                    level: 2,
+                    source: LevelSource::Style,
+                }),
+                ..PapProps::default()
+            },
+            hyperlinks: Vec::new(),
+            chp_runs: Vec::new(),
+            cp_end: 0,
+        };
+        let paragraphs = [mark.clone(), cell.clone(), mark];
+        let mut els = Vec::new();
+        walk_paragraphs(&paragraphs, true, &mut els, &ListFormatting::default());
+        assert!(
+            els.iter().any(|e| matches!(e, Element::Table(_))),
+            "the cell must still be emitted inside a table"
+        );
+        assert!(
+            !els.iter().any(|e| matches!(e, Element::Heading(_))),
+            "a styled heading inside a table must not become a Heading"
+        );
+
+        // Contrast, so the assertions above cannot pass merely because the
+        // level is ignored: the same paragraph outside a table must produce a
+        // Heading. It carries `outline_level`, so `emit_heading` handles it
+        // whatever the text looks like — what the contrast pins is the table
+        // routing above, not the line-shape guess.
+        let mut prose = cell;
+        prose.props.f_in_table = false;
+        prose.terminator = '\r';
+        prose.text = "cell text.".into();
+        let mut els = Vec::new();
+        walk_paragraphs(&[prose], true, &mut els, &ListFormatting::default());
+        assert!(
+            els.iter().any(|e| matches!(e, Element::Heading(_))),
+            "outside a table the same styled paragraph must emit a Heading"
+        );
+    }
+
+    /// A row-terminator paragraph that also carries a heading style must end the
+    /// row, not emit a `Heading` into the element stream.
+    #[test]
+    fn test_styled_heading_on_row_terminator_is_not_a_heading() {
+        let row = DocParagraph {
+            // A row terminator can carry the trailing cell's text; keeping it
+            // non-empty is what makes this test meaningful — an empty text
+            // would be dropped by `emit_prose` whether or not the routing is
+            // correct, so the test could not tell the two apart.
+            text: "row text.".into(),
+            terminator: '\r',
+            props: PapProps {
+                is_table_trailing_mark: true,
+                itap: 1,
+                outline_level: Some(OutlineLevel::Heading {
+                    level: 1,
+                    source: LevelSource::Style,
+                }),
+                ..PapProps::default()
+            },
+            hyperlinks: Vec::new(),
+            chp_runs: Vec::new(),
+            cp_end: 0,
+        };
+        let mut els = Vec::new();
+        walk_paragraphs(std::slice::from_ref(&row), true, &mut els, &ListFormatting::default());
+        assert!(
+            !els.iter().any(|e| matches!(e, Element::Heading(_))),
+            "a row-terminator paragraph must end a row, not emit a Heading"
+        );
+        // Contrast: the same paragraph as ordinary prose must emit a Heading.
+        // It carries `outline_level`, so this pins that being a row terminator
+        // — not the text shape — is what suppressed the heading above.
+        let mut prose = row;
+        prose.props.is_table_trailing_mark = false;
+        let mut els = Vec::new();
+        walk_paragraphs(&[prose], true, &mut els, &ListFormatting::default());
+        assert!(
+            els.iter().any(|e| matches!(e, Element::Heading(_))),
+            "as ordinary prose the same paragraph must emit a Heading"
+        );
+    }
+
+    /// Build a single-column `PendingRow` whose cell carries the given `rgf`
+    /// (the MS-DOC 2-bit `TCGRF` vertical-merge field) and renders "cell".
+    fn vmerge_row(rgf: u16) -> PendingRow {
+        let cell = TapCellInfo {
+            rgf,
+            ..Default::default()
+        };
+        PendingRow {
+            cells: vec![vec![Element::Paragraph(Paragraph {
+                content: vec![InlineContent::Text(TextSpan::plain("cell"))],
+                ..Default::default()
+            })]],
+            tap: Some(TapInfo {
+                itc_mac: 1,
+                centers: vec![0, 1000],
+                cells: vec![cell],
+            }),
+            header: false,
+        }
+    }
+
+    /// vertMerge 2-bit fix: two *independent* 2-row vertical merges encoded as
+    /// `[fvmRestart, fvmMerge, fvmRestart, fvmMerge]` (MS-DOC 2-bit field:
+    /// `fvmRestart = 0x0060`, `fvmMerge = 0x0020`) must not be folded into a
+    /// single `row_span = 4` cell. Each `fvmRestart` starts its own merge;
+    /// each merge is 2 rows; both restart cells must be rendered and rows 1&3
+    /// (the `fvmMerge` continuations) absorbed.
+    #[test]
+    fn test_two_independent_two_row_merges_do_not_fold() {
+        let rows = vec![
+            vmerge_row(0x0060), // merge A restart
+            vmerge_row(0x0020), // merge A continuation
+            vmerge_row(0x0060), // merge B restart
+            vmerge_row(0x0020), // merge B continuation
+        ];
+
+        let out = build_table_rows(&rows);
+        assert_eq!(out.len(), 4, "all four rows must be present");
+
+        // Merge A: restart cell rendered with span 2; continuation row absorbed.
+        assert_eq!(out[0].cells.len(), 1, "row 0 emits its restart cell");
+        assert_eq!(out[0].cells[0].row_span, 2, "merge A spans exactly 2 rows (not folded into B)");
+        assert!(out[1].cells.is_empty(), "row 1 fvmMerge continuation must be absorbed");
+
+        // Merge B: a *second* restart cell, also span 2 — must not be dropped.
+        assert_eq!(out[2].cells.len(), 1, "row 2 emits its restart cell");
+        assert_eq!(out[2].cells[0].row_span, 2, "merge B spans exactly 2 rows, independent of A");
+        assert!(out[3].cells.is_empty(), "row 3 fvmMerge continuation must be absorbed");
+    }
+
+    /// Removing the "whole-TAP-copy" quirk heuristic: a `fvmRestart` (`0x0060`)
+    /// always opens a brand-new merge, never a continuation. The run
+    /// `[fvmRestart, fvmRestart, fvmMerge]` must therefore render row 1 as its
+    /// own 2-row merge — the middle cell must not be silently absorbed into the
+    /// merge above it, which is exactly the wrong output the old heuristic
+    /// produced for two independent adjacent merges.
+    #[test]
+    fn test_restart_after_restart_is_distinct_merge() {
+        let rows = vec![vmerge_row(0x0060), vmerge_row(0x0060), vmerge_row(0x0020)];
+
+        let out = build_table_rows(&rows);
+        assert_eq!(out.len(), 3, "all three rows must be present");
+        // Row 0: a restart with no merge continuation below it → span 1.
+        assert_eq!(out[0].cells.len(), 1, "row 0 emits its restart cell");
+        assert_eq!(out[0].cells[0].row_span, 1, "row 0 merge has no continuation below");
+        // Middle cell MUST be emitted, not absorbed into row 0.
+        assert_eq!(out[1].cells.len(), 1, "row 1 MUST be emitted, not absorbed into row 0");
+        assert_eq!(out[1].cells[0].row_span, 2, "row 1 merge spans 2 rows (row 1 + row 2)");
+        // Row 2 is the continuation of row 1's merge.
+        assert!(out[2].cells.is_empty(), "row 2 fvmMerge continuation must be absorbed");
+    }
+
+    /// Plain single 3-row merge via `[fvmRestart, fvmMerge, fvmMerge]`.
+    #[test]
+    fn test_single_three_row_merge_spans_three() {
+        let rows = vec![vmerge_row(0x0060), vmerge_row(0x0020), vmerge_row(0x0020)];
+
+        let out = build_table_rows(&rows);
+        assert_eq!(out.len(), 3);
+        assert_eq!(out[0].cells[0].row_span, 3, "one continuous 3-row merge");
+        assert!(out[1].cells.is_empty());
+        assert!(out[2].cells.is_empty());
+    }
+
+    /// A `PendingRow` of `rgfs.len()` cells whose boundaries are `centers`; each
+    /// cell holds its own index and the row number as text.
+    fn merge_row(row: usize, centers: &[i16], rgfs: &[u16]) -> PendingRow {
+        PendingRow {
+            cells: (0..rgfs.len())
+                .map(|c| {
+                    vec![Element::Paragraph(Paragraph {
+                        content: vec![InlineContent::Text(TextSpan::plain(format!("r{row}c{c}")))],
+                        ..Default::default()
+                    })]
+                })
+                .collect(),
+            tap: Some(TapInfo {
+                itc_mac: rgfs.len() as u8,
+                centers: centers.to_vec(),
+                cells: rgfs
+                    .iter()
+                    .map(|&rgf| TapCellInfo {
+                        rgf,
+                        ..Default::default()
+                    })
+                    .collect(),
+            }),
+            header: false,
+        }
+    }
+
+    fn shape(row: &TableRow) -> Vec<(u32, u32)> {
+        row.cells.iter().map(|c| (c.col_span, c.row_span)).collect()
+    }
+
+    /// A vertical merge continues the cell above it in the same column, not the
+    /// cell with the same index: here the restart is cell 1 of a row whose first
+    /// cell spans two grid columns, and its continuation is cell 2 of a row that
+    /// has three cells.
+    #[test]
+    fn test_vertical_merge_continues_the_cell_above_by_column_position() {
+        let rows = vec![
+            merge_row(0, &[0, 2000, 3000], &[0, 0x0060]),
+            merge_row(1, &[0, 1000, 2000, 3000], &[0, 0, 0x0020]),
+        ];
+        let out = build_table_rows(&rows);
+        assert_eq!(shape(&out[0]), vec![(2, 1), (1, 2)], "the merged cell is two rows tall");
+        assert_eq!(shape(&out[1]), vec![(1, 1), (1, 1)], "its continuation is absorbed");
+    }
+
+    /// The other direction: the restart's index is larger than its continuation's.
+    #[test]
+    fn test_vertical_merge_continues_when_the_cell_below_has_a_smaller_index() {
+        let rows = vec![
+            merge_row(0, &[0, 1000, 2000, 3000], &[0, 0, 0x0060]),
+            merge_row(1, &[0, 2000, 3000], &[0, 0x0020]),
+        ];
+        let out = build_table_rows(&rows);
+        assert_eq!(shape(&out[0]), vec![(1, 1), (1, 1), (1, 2)]);
+        assert_eq!(shape(&out[1]), vec![(2, 1)]);
+    }
+
+    /// A continuation with nothing above it in its column is not dropped: it
+    /// stays an ordinary cell, with its content.
+    #[test]
+    fn test_vertical_merge_continuation_without_a_cell_above_is_kept() {
+        let rows = vec![
+            merge_row(0, &[0, 1000, 2000], &[0x0020, 0]),
+            // The restart is in the first column; this continuation is in the second.
+            merge_row(1, &[0, 1000, 2000], &[0x0060, 0x0020]),
+        ];
+        let out = build_table_rows(&rows);
+        assert_eq!(out[0].cells.len(), 2, "a first-row continuation has nothing to continue");
+        assert_eq!(out[1].cells.len(), 2, "so does one under a different column");
+        assert!(out.iter().flat_map(|r| &r.cells).all(|c| c.row_span == 1));
+    }
+
+    /// Boundaries are compared with the column grid's 4-twip tolerance.
+    #[test]
+    fn test_vertical_merge_matches_boundaries_within_the_grid_tolerance() {
+        let close = vec![
+            merge_row(0, &[0, 1000, 2000], &[0, 0x0060]),
+            merge_row(1, &[0, 1003, 2000], &[0, 0x0020]),
+        ];
+        assert_eq!(shape(&build_table_rows(&close)[0]), vec![(1, 1), (1, 2)]);
+        let far = vec![
+            merge_row(0, &[0, 1000, 2000], &[0, 0x0060]),
+            merge_row(1, &[0, 1100, 2000], &[0, 0x0020]),
+        ];
+        let out = build_table_rows(&far);
+        // The extra grid edge at 1100 makes the cell two grid columns wide; what
+        // matters is that it is not extended downwards.
+        assert_eq!(
+            shape(&out[0]),
+            vec![(1, 1), (2, 1)],
+            "a column 100 twips away is another column"
+        );
+        assert_eq!(out[1].cells.len(), 2, "so the cell is kept");
+    }
+
+    /// A long merge in a column that is not the first stays one cell, and the
+    /// rows' other cells keep their place.
+    #[test]
+    fn test_vertical_merge_down_a_long_column_is_one_cell() {
+        let mut rows = vec![merge_row(0, &[0, 1000, 2000], &[0, 0x0060])];
+        for r in 1..3_000 {
+            // Alternate the cell count above the merged column.
+            let (centers, rgfs): (&[i16], &[u16]) = if r % 2 == 0 {
+                (&[0, 500, 1000, 2000], &[0, 0, 0x0020])
+            } else {
+                (&[0, 1000, 2000], &[0, 0x0020])
+            };
+            rows.push(merge_row(r, centers, rgfs));
+        }
+        let out = build_table_rows(&rows);
+        assert_eq!(out[0].cells[1].row_span, 3_000);
+        assert!(
+            out.iter()
+                .skip(1)
+                .all(|r| r.cells.iter().all(|c| c.row_span == 1))
+        );
+        assert_eq!(out[2].cells.len(), 2, "the extra cell of an even row is kept");
+        assert_eq!(out[1].cells.len(), 1);
+    }
+
+    /// Many merges can share one column (a row of zero-width cells): each
+    /// continuation joins a merge of its own, and none is lost or doubled.
+    #[test]
+    fn test_vertical_merges_sharing_a_column_each_keep_their_own_continuations() {
+        let centers = vec![0i16; 256];
+        let restarts = vec![0x0060u16; 255];
+        let continuations = vec![0x0020u16; 255];
+        let mut rows = vec![merge_row(0, &centers, &restarts)];
+        for r in 1..200 {
+            rows.push(merge_row(r, &centers, &continuations));
+        }
+        let out = build_table_rows(&rows);
+        assert_eq!(out[0].cells.len(), 255);
+        assert!(out[0].cells.iter().all(|c| c.row_span == 200));
+        assert!(out[1..].iter().all(|r| r.cells.is_empty()));
+    }
+
+    /// The tolerance is 4 twips, inclusive.
+    #[test]
+    fn test_vertical_merge_tolerance_is_four_twips_inclusive() {
+        let at = |dx: i16| {
+            let rows = vec![
+                merge_row(0, &[0, 1000, 2000], &[0, 0x0060]),
+                merge_row(1, &[0, 1000 + dx, 2000], &[0, 0x0020]),
+            ];
+            shape(&build_table_rows(&rows)[0])
+        };
+        assert_eq!(at(4), vec![(1, 1), (1, 2)], "4 twips away still continues");
+        // The extra grid edge makes the cell two columns wide; it is not extended down.
+        assert_eq!(at(5), vec![(1, 1), (2, 1)], "5 twips away is another column");
+    }
+
+    /// The tolerance is inclusive on both boundaries even when the two sit in
+    /// different buckets, where the exact comparison decides: 1003 and 1007 are
+    /// 4 apart across a bucket line, 1003 and 1008 are 5.
+    #[test]
+    fn test_vertical_merge_tolerance_is_inclusive_across_bucket_lines() {
+        let left = |restart: i16, cont: i16| {
+            let rows = vec![
+                tap_row(&[0, restart, 2000], &[0, 0x0060], &["a", "m"]),
+                tap_row(&[0, cont, 2000], &[0, 0x0020], &["b", ""]),
+            ];
+            build_table_rows(&rows)[0].cells[1].row_span
+        };
+        assert_eq!(left(1003, 1007), 2, "4 twips apart joins");
+        assert_eq!(left(1003, 1008), 1, "5 twips apart does not");
+        let right = |restart: i16, cont: i16| {
+            let rows = vec![
+                tap_row(&[0, 1000, restart], &[0, 0x0060], &["a", "m"]),
+                tap_row(&[0, 1000, cont], &[0, 0x0020], &["b", ""]),
+            ];
+            build_table_rows(&rows)[0].cells[1].row_span
+        };
+        assert_eq!(right(1998, 2002), 2, "4 twips apart joins");
+        assert_eq!(right(1998, 2003), 1, "5 twips apart does not");
+    }
+
+    /// A merge keeps the boundary it started at: continuations that each drift
+    /// a few twips from the one above do not chain across the whole table.
+    #[test]
+    fn test_vertical_merge_does_not_drift_with_its_continuations() {
+        let rows = vec![
+            merge_row(0, &[0, 1000, 2000], &[0, 0x0060]),
+            merge_row(1, &[0, 1004, 2000], &[0, 0x0020]),
+            merge_row(2, &[0, 1008, 2000], &[0, 0x0020]),
+        ];
+        let out = build_table_rows(&rows);
+        assert_eq!(out[0].cells[1].row_span, 2, "the 4-twip continuation joins");
+        assert_eq!(out[1].cells.len(), 1, "and is absorbed");
+        assert_eq!(out[2].cells.len(), 2, "the one 8 twips from the start is kept");
+    }
+
+    /// The text of each paragraph of a cell.
+    fn paragraph_texts(cell: &TableCell) -> Vec<String> {
+        cell.content
+            .iter()
+            .filter_map(|e| match e {
+                Element::Paragraph(p) => Some(
+                    p.content
+                        .iter()
+                        .filter_map(|c| match c {
+                            InlineContent::Text(t) => Some(t.text.clone()),
+                            _ => None,
+                        })
+                        .collect::<String>(),
+                ),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn text_cell(text: &str) -> Vec<Element> {
+        vec![Element::Paragraph(Paragraph {
+            content: if text.is_empty() {
+                Vec::new()
+            } else {
+                vec![InlineContent::Text(TextSpan::plain(text))]
+            },
+            ..Default::default()
+        })]
+    }
+
+    fn tap_row(centers: &[i16], rgfs: &[u16], texts: &[&str]) -> PendingRow {
+        PendingRow {
+            cells: texts.iter().map(|t| text_cell(t)).collect(),
+            tap: Some(TapInfo {
+                itc_mac: rgfs.len() as u8,
+                centers: centers.to_vec(),
+                cells: rgfs
+                    .iter()
+                    .map(|&rgf| TapCellInfo {
+                        rgf,
+                        ..Default::default()
+                    })
+                    .collect(),
+            }),
+            header: false,
+        }
+    }
+
+    /// A continuation continues a merge only if it covers the same columns: its
+    /// right boundary must match the merged cell's too. One that is narrower
+    /// stays an ordinary cell, rather than being absorbed into a merge it does
+    /// not cover.
+    #[test]
+    fn test_vertical_merge_continuation_must_cover_the_same_columns() {
+        let rows = vec![
+            tap_row(&[0, 1000, 3000], &[0, 0x0060], &["a", "merged"]),
+            // The second cell, [1000, 2000], is narrower than [1000, 3000].
+            tap_row(&[0, 1000, 2000, 3000], &[0, 0x0020, 0], &["b", "c", "d"]),
+        ];
+        let out = build_table_rows(&rows);
+        assert_eq!(shape(&out[0]), vec![(1, 1), (2, 1)], "the merge has no continuation");
+        assert_eq!(out[1].cells.len(), 3, "the narrower cell is kept, with its neighbours");
+        assert_eq!(paragraph_texts(&out[1].cells[1]), vec!["c"]);
+    }
+
+    /// Text in a continuation is kept: it is added to the merged cell, after the
+    /// text already there and in row order. An empty continuation (what Word
+    /// writes) adds nothing.
+    #[test]
+    fn test_vertical_merge_continuation_text_is_kept_in_the_merged_cell() {
+        let rows = vec![
+            tap_row(&[0, 1000], &[0x0060], &["top"]),
+            tap_row(&[0, 1000], &[0x0020], &["second"]),
+            tap_row(&[0, 1000], &[0x0020], &[""]),
+            tap_row(&[0, 1000], &[0x0020], &["fourth"]),
+        ];
+        let out = build_table_rows(&rows);
+        assert_eq!(out[0].cells[0].row_span, 4);
+        assert_eq!(paragraph_texts(&out[0].cells[0]), vec!["top", "second", "fourth"]);
+        assert!(out[1..].iter().all(|r| r.cells.is_empty()));
+    }
+
+    /// Only an empty continuation leaves the merged cell as it was.
+    #[test]
+    fn test_vertical_merge_empty_continuation_adds_nothing() {
+        let rows = vec![
+            tap_row(&[0, 1000], &[0x0060], &["top"]),
+            tap_row(&[0, 1000], &[0x0020], &[""]),
+        ];
+        let out = build_table_rows(&rows);
+        assert_eq!(paragraph_texts(&out[0].cells[0]), vec!["top"]);
+    }
+
+    /// Boundaries a few twips apart continue one another whatever else is on the
+    /// column grid: here a third row puts an edge between 1003 and 1005, which
+    /// are two separate grid edges but 2 twips apart.
+    #[test]
+    fn test_vertical_merge_tolerance_does_not_depend_on_other_rows_edges() {
+        let rows = vec![
+            tap_row(&[0, 1005, 2000], &[0, 0x0060], &["a", "merged"]),
+            tap_row(&[0, 1003, 2000], &[0, 0x0020], &["b", ""]),
+            tap_row(&[0, 1000, 2000], &[0, 0], &["c", "d"]),
+        ];
+        let out = build_table_rows(&rows);
+        assert_eq!(out[0].cells[1].row_span, 2, "the continuation 2 twips away joins");
+        assert_eq!(out[1].cells.len(), 1);
+    }
+
+    /// The same for the right boundary.
+    #[test]
+    fn test_vertical_merge_right_boundary_tolerance_does_not_depend_on_other_rows_edges() {
+        let rows = vec![
+            tap_row(&[0, 1000, 2000], &[0, 0x0060], &["a", "merged"]),
+            tap_row(&[0, 1000, 1997], &[0, 0x0020], &["b", ""]),
+            tap_row(&[0, 1000, 1995], &[0, 0], &["c", "d"]),
+        ];
+        let out = build_table_rows(&rows);
+        assert_eq!(out[0].cells[1].row_span, 2);
+        assert_eq!(out[1].cells.len(), 1);
+    }
+
+    /// Merges that cover the same columns are continued in the order they were
+    /// opened: the first continuation belongs to the first merge.
+    #[test]
+    fn test_vertical_merges_over_the_same_columns_pair_up_in_order() {
+        let rows = vec![
+            tap_row(&[0, 0, 0], &[0x0060, 0x0060], &["A", "B"]),
+            tap_row(&[0, 0, 0], &[0x0020, 0x0020], &["a1", "b1"]),
+        ];
+        let out = build_table_rows(&rows);
+        assert_eq!(paragraph_texts(&out[0].cells[0]), vec!["A", "a1"]);
+        assert_eq!(paragraph_texts(&out[0].cells[1]), vec!["B", "b1"]);
+    }
+
+    // ── Line-shape heading guess tightening ────────────────────
+
+    fn is_heading_guess(text: &str) -> bool {
+        let mut els = Vec::new();
+        emit_prose(text, &PapProps::default(), &mut els, &[], &[]);
+        matches!(els.as_slice(), [Element::Heading(_)])
+    }
+
+    /// A pure separator/underscore line must never become a heading —
+    /// found ×4 in a real corpus file (`ob_is.doc`) during the heading-guess sweep.
+    #[test]
+    fn test_underscore_separator_line_is_not_a_heading() {
+        assert!(!is_heading_guess("______________________________________________"));
+    }
+
+    /// A bare `MM/DD/YYYY` date, found as a false-positive heading in a
+    /// real corpus file during the heading-guess sweep, must not be promoted.
+    #[test]
+    fn test_bare_date_is_not_a_heading() {
+        assert!(!is_heading_guess("11/16/2016"));
+    }
+
+    /// A UK postcode shape (`SW8 5NQ`), found as a false-positive heading
+    /// in a real corpus file during the heading-guess sweep, must not be promoted.
+    #[test]
+    fn test_uk_postcode_is_not_a_heading() {
+        assert!(!is_heading_guess("SW8 5NQ"));
+    }
+
+    /// `"CCY - symbol"` currency labels (`GBP - £`, `EUR - €`), found as
+    /// false-positive headings during the heading-guess sweep, must not be promoted.
+    #[test]
+    fn test_currency_label_is_not_a_heading() {
+        assert!(!is_heading_guess("GBP - £"));
+        assert!(!is_heading_guess("EUR - €"));
+    }
+
+    /// The tightening must not touch real ALL-CAPS section headers the
+    /// guess correctly caught before the tightening (e.g. `parentinvguid.doc`'s
+    /// un-styled section headings).
+    #[test]
+    fn test_genuine_all_caps_headings_still_promoted() {
+        for heading in [
+            "INTRODUCTION",
+            "TABLE OF CONTENTS",
+            "A. GENERAL INFORMATION",
+        ] {
+            assert!(is_heading_guess(heading), "{heading:?} must still be promoted");
+        }
+    }
+
+    /// The bare-date rule only rejects a line that is *entirely* a date —
+    /// a date-shaped substring inside otherwise heading-shaped text must
+    /// still be promoted.
+    #[test]
+    fn test_date_substring_inside_otherwise_heading_shaped_text_is_unaffected() {
+        assert!(is_heading_guess("Report 11/16/2016 Summary"));
+    }
+
+    fn row_of_cells(centers: Vec<i16>) -> PendingRow {
+        let n = centers.len() - 1;
+        PendingRow {
+            cells: vec![Vec::new(); n],
+            tap: Some(TapInfo {
+                itc_mac: n as u8,
+                centers,
+                cells: vec![TapCellInfo::default(); n],
+            }),
+            header: false,
+        }
+    }
+
+    #[test]
+    fn test_grid_edges_are_counted_by_search_not_by_scanning_the_whole_grid() {
+        // Rows whose boundaries all differ fill the column grid (the i16 twip
+        // range, deduplicated to 4 twips, is ~16k edges). Every cell used to be
+        // checked against every edge: cells x edges, about 640 million
+        // comparisons here. A search compares about 15 edges per bound.
+        let rows: Vec<PendingRow> = (0..400i32)
+            .map(|r| {
+                let centers: Vec<i16> = (0..=100i32)
+                    .map(|k| (-32768 + (k * 640 + r * 5) % 65000) as i16)
+                    .collect::<std::collections::BTreeSet<_>>()
+                    .into_iter()
+                    .collect();
+                row_of_cells(centers)
+            })
+            .collect();
+        GRID_PROBES.with(|p| p.set(0));
+        let table = build_table_rows(&rows);
+        let probes = GRID_PROBES.with(std::cell::Cell::get);
+        let cells: usize = table.iter().map(|r| r.cells.len()).sum();
+        assert!(cells > 30_000, "{cells} cells");
+        // Two searches per cell, each at most log2(grid) + 1 = 15 probes.
+        assert!(probes > 0 && probes <= cells * 2 * 15, "{probes} probes for {cells} cells");
+        assert_eq!(table.len(), 400);
+    }
+
+    #[test]
+    fn test_grid_edge_count_matches_a_scan_of_the_grid() {
+        let grid = [0, 10, 20, 20, 30, 1000];
+        for (lo, hi) in [
+            (0i16, 10i16),
+            (0, 31),
+            (5, 6),
+            (10, 10),
+            (20, 1000),
+            (-5, 2000),
+            (31, 999),
+        ] {
+            let want = grid
+                .iter()
+                .filter(|&&e| e >= lo as i32 && e < hi as i32)
+                .count()
+                .max(1) as u32;
+            assert_eq!(count_grid_edges(&[lo, hi], 0, &grid), want, "{lo}..{hi}");
+        }
+    }
+}

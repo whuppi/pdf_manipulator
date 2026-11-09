@@ -1,0 +1,965 @@
+use std::collections::HashMap;
+
+use quick_xml::events::Event;
+
+use crate::core::xml;
+
+use super::formatting::TableBorders;
+use super::formatting::{
+    ParagraphProperties, RunProperties, parse_paragraph_properties_fast, parse_run_properties_fast,
+};
+use super::table::{TableCellProperties, TableProperties};
+
+/// Parsed stylesheet from `word/styles.xml`.
+#[derive(Debug, Clone, Default)]
+pub struct StyleSheet {
+    /// Document-wide default formatting.
+    pub doc_defaults: Option<DocDefaults>,
+    /// Map from style ID to style definition.
+    pub styles: HashMap<String, Style>,
+    /// Paragraph styles whose name cannot be exposed (over-long, or holding a
+    /// control character); reported once in `Metadata::warnings`.
+    pub(crate) unusable_style_names: usize,
+    /// Styles past [`MAX_STYLES`], left out of the sheet; reported once in
+    /// `Metadata::warnings`.
+    pub(crate) styles_left_out: usize,
+}
+
+/// The most styles one style sheet keeps: 20,000, about five times the number
+/// Word itself allows (a little over 4,000).
+///
+/// A style is about a kilobyte in memory for a hundred bytes of XML, so a sheet
+/// of millions of them is a memory multiplier on its own; and a `w:basedOn`
+/// chain is only ever followed 20 links deep, so styles past the cap that
+/// extend a long chain add nothing a reader could resolve. Styles beyond the
+/// cap are left out and counted.
+pub(crate) const MAX_STYLES: usize = 20_000;
+
+/// Document-wide default properties.
+#[derive(Debug, Clone, Default)]
+pub struct DocDefaults {
+    /// Default run properties applied to all text.
+    pub run_properties: Option<RunProperties>,
+    /// Default paragraph properties.
+    pub paragraph_properties: Option<ParagraphProperties>,
+}
+
+/// A single style definition.
+#[derive(Debug, Clone)]
+pub struct Style {
+    /// Unique style identifier (e.g., `"Heading1"`).
+    pub style_id: String,
+    /// Kind of style (paragraph, character, table, or numbering).
+    pub style_type: StyleType,
+    /// Human-readable style name.
+    pub name: Option<String>,
+    /// `w:default="1"`: the style applied to content of this kind that names
+    /// none (for paragraphs, what Word calls `Normal`).
+    pub(crate) is_default: bool,
+    /// The name exposed on `Paragraph::style`, worked out once when the sheet
+    /// is parsed (see `StyleSheet::resolve_display_names`): `None` for the
+    /// default paragraph style, a style that is not a paragraph style, or a
+    /// name that is blank or unusable. It is not kept in step with edits made
+    /// to the public `name` afterwards.
+    pub(crate) display_name: Option<String>,
+    /// ID of the parent style this style inherits from.
+    pub based_on: Option<String>,
+    /// Run-level overrides for this style.
+    pub run_properties: Option<RunProperties>,
+    /// Paragraph-level overrides for this style.
+    pub paragraph_properties: Option<ParagraphProperties>,
+    /// Table-level overrides for this style (`w:tblPr`).
+    pub table_properties: Option<TableProperties>,
+    /// Conditional formats of a table style (`w:tblStylePr`), applied to
+    /// the parts of a table its `w:tblLook` switches on.
+    pub table_conditionals: Vec<TableStyleConditional>,
+}
+
+/// One `w:tblStylePr` (ECMA-376 §17.7.6): formatting a table style applies
+/// to one region of the table.
+#[derive(Debug, Clone)]
+pub struct TableStyleConditional {
+    /// The region (`w:type`): `wholeTable`, `firstRow`, `lastRow`,
+    /// `firstCol`, `lastCol`, `band1Horz`, `band2Horz`, `band1Vert`,
+    /// `band2Vert`, `nwCell`, `neCell`, `swCell` or `seCell`.
+    pub kind: String,
+    /// Cell formatting for the region (`w:tcPr`).
+    pub cell_properties: Option<TableCellProperties>,
+    /// Run formatting for the region's text (`w:rPr`), e.g. a bold header
+    /// row.
+    pub run_properties: Option<RunProperties>,
+    /// Paragraph formatting for the region's paragraphs (`w:pPr`).
+    pub paragraph_properties: Option<ParagraphProperties>,
+}
+
+/// The kind of style.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StyleType {
+    /// Paragraph style.
+    Paragraph,
+    /// Character (inline) style.
+    Character,
+    /// Table style.
+    Table,
+    /// Numbering style.
+    Numbering,
+}
+
+impl StyleSheet {
+    /// Parse `word/styles.xml` content.
+    pub fn parse(xml_data: &[u8]) -> crate::core::Result<Self> {
+        let mut reader = xml::make_fast_reader(xml_data);
+        let mut sheet = StyleSheet::default();
+
+        loop {
+            match reader.read_event()? {
+                Event::Start(ref e) => match e.local_name().as_ref() {
+                    "docDefaults" => {
+                        sheet.doc_defaults = Some(parse_doc_defaults(&mut reader)?);
+                    },
+                    "style" => {
+                        if let Some(style) = parse_style(&mut reader, e)? {
+                            if sheet.styles.len() < MAX_STYLES
+                                || sheet.styles.contains_key(&style.style_id)
+                            {
+                                sheet.styles.insert(style.style_id.clone(), style);
+                            } else {
+                                sheet.styles_left_out += 1;
+                            }
+                        }
+                    },
+                    _ => {},
+                },
+                Event::Eof => break,
+                _ => {},
+            }
+        }
+        sheet.resolve_display_names();
+        Ok(sheet)
+    }
+
+    /// Work out each paragraph style's exposed name, once, and count the names
+    /// that cannot be exposed.
+    ///
+    /// The default is the style flagged `w:default` (recognised by the flag,
+    /// not the name, which Word localizes); when no paragraph style is flagged
+    /// it is the one named `Normal`.
+    fn resolve_display_names(&mut self) {
+        use crate::limits::{StyleName, classify_style_name};
+        let flagged = self
+            .styles
+            .values()
+            .any(|s| s.style_type == StyleType::Paragraph && s.is_default);
+        let mut unusable = 0;
+        for style in self
+            .styles
+            .values_mut()
+            .filter(|s| s.style_type == StyleType::Paragraph)
+        {
+            let raw = style.name.as_deref().unwrap_or("");
+            let is_default =
+                style.is_default || (!flagged && raw.trim().eq_ignore_ascii_case("Normal"));
+            if is_default {
+                continue;
+            }
+            match classify_style_name(raw) {
+                StyleName::Usable(name) => style.display_name = Some(display_style_name(name)),
+                StyleName::Unusable => unusable += 1,
+                StyleName::Absent => {},
+            }
+        }
+        self.unusable_style_names = unusable;
+    }
+
+    /// Return the inheritance chain for `style_id`, **root ancestor first**,
+    /// so callers can overlay each style in turn and have the most specific
+    /// one win. Cycles and pathological `w:basedOn` chains are cut off at 20
+    /// links.
+    ///
+    /// Collected on the stack: this runs for every run and paragraph of a
+    /// document, and a `Vec` per call was a heap allocation each time.
+    fn chain(&self, style_id: &str) -> impl DoubleEndedIterator<Item = &Style> {
+        const MAX_CHAIN: usize = 20;
+        let mut buf: [Option<&Style>; MAX_CHAIN] = [None; MAX_CHAIN];
+        let mut len = 0;
+        let mut current = self.styles.get(style_id);
+        while let Some(style) = current {
+            if len >= MAX_CHAIN {
+                break;
+            }
+            buf[len] = Some(style);
+            len += 1;
+            current = style.based_on.as_deref().and_then(|id| self.styles.get(id));
+        }
+        buf.into_iter().take(len).rev().flatten()
+    }
+
+    /// Fold the effective run formatting for a run: document defaults, then
+    /// the paragraph style chain's run properties, then the character style
+    /// chain, then the run's own `w:rPr`. Later stages win field by field.
+    ///
+    /// Without this, only direct `w:rPr` reached the IR — so a document that
+    /// puts all of its formatting in styles (which is what Word's built-in
+    /// styles and every template do) read back as unformatted text.
+    pub fn effective_run_properties(
+        &self,
+        paragraph_style_id: Option<&str>,
+        direct: Option<&RunProperties>,
+    ) -> RunProperties {
+        self.effective_run_properties_in(None, paragraph_style_id, direct)
+    }
+
+    /// [`Self::effective_run_properties`] for a run inside a table cell:
+    /// the table style's layer for the cell (`table`) sits between the
+    /// document defaults and the paragraph style.
+    pub(crate) fn effective_run_properties_in(
+        &self,
+        table: Option<&RunProperties>,
+        paragraph_style_id: Option<&str>,
+        direct: Option<&RunProperties>,
+    ) -> RunProperties {
+        let mut out = self.run_style_base(
+            table,
+            paragraph_style_id,
+            direct.and_then(|d| d.style_id.as_deref()),
+        );
+        if let Some(d) = direct {
+            out.overlay(d);
+        }
+        out
+    }
+
+    /// [`Self::effective_run_properties_in`] without the face names, colour
+    /// names and style id: the flags, sizes and spacing only, for a consumer
+    /// that folds the chain for every run and reads nothing else. A style
+    /// stores a face name once and the full fold copies it for every level
+    /// of the chain and every run; this one never does.
+    pub(crate) fn effective_run_flags_in(
+        &self,
+        table: Option<&RunProperties>,
+        paragraph_style_id: Option<&str>,
+        direct: Option<&RunProperties>,
+    ) -> RunProperties {
+        let mut out = self.run_style_base_with(
+            true,
+            table,
+            paragraph_style_id,
+            direct.and_then(|d| d.style_id.as_deref()),
+        );
+        if let Some(d) = direct {
+            out.overlay(&d.clone_light());
+        }
+        out
+    }
+
+    /// Everything a run inherits before its own `w:rPr`: document
+    /// defaults, the table layer, the paragraph style chain, then the
+    /// character style chain. Depends only on its three inputs, so a
+    /// converter can fold it once per distinct combination.
+    pub(crate) fn run_style_base(
+        &self,
+        table: Option<&RunProperties>,
+        paragraph_style_id: Option<&str>,
+        character_style_id: Option<&str>,
+    ) -> RunProperties {
+        self.run_style_base_with(false, table, paragraph_style_id, character_style_id)
+    }
+
+    /// [`Self::run_style_base`], with `light` leaving out the text of every
+    /// layer (see [`RunProperties::clone_light`]).
+    fn run_style_base_with(
+        &self,
+        light: bool,
+        table: Option<&RunProperties>,
+        paragraph_style_id: Option<&str>,
+        character_style_id: Option<&str>,
+    ) -> RunProperties {
+        let layer = |out: &mut RunProperties, rp: &RunProperties| {
+            if light {
+                out.overlay(&rp.clone_light());
+            } else {
+                out.overlay(rp);
+            }
+        };
+        let mut out = self
+            .doc_defaults
+            .as_ref()
+            .and_then(|d| d.run_properties.as_ref())
+            .map(|rp| if light { rp.clone_light() } else { rp.clone() })
+            .unwrap_or_default();
+        if let Some(t) = table {
+            layer(&mut out, t);
+        }
+        if let Some(pid) = paragraph_style_id {
+            for style in self.chain(pid) {
+                if let Some(rp) = style.run_properties.as_ref() {
+                    layer(&mut out, rp);
+                }
+            }
+        }
+        // `w:rStyle` on the run names a character style, which sits above
+        // the paragraph style but below the run's own direct formatting.
+        if let Some(cid) = character_style_id {
+            for style in self.chain(cid) {
+                if let Some(rp) = style.run_properties.as_ref() {
+                    layer(&mut out, rp);
+                }
+            }
+        }
+        out
+    }
+
+    /// Whether a run is hidden (`<w:vanish/>`) once document defaults, the
+    /// paragraph style chain, the run's character style and its own
+    /// `w:rPr` are folded together — the same precedence as
+    /// [`Self::effective_run_properties`], without materialising the whole
+    /// property set for renderers that only need this one bit.
+    pub fn effective_hidden(
+        &self,
+        paragraph_style_id: Option<&str>,
+        direct: Option<&RunProperties>,
+    ) -> bool {
+        self.effective_hidden_in(None, paragraph_style_id, direct)
+    }
+
+    /// [`Self::effective_hidden`] inside a table cell whose table style
+    /// layer is `table`.
+    pub(crate) fn effective_hidden_in(
+        &self,
+        table: Option<&RunProperties>,
+        paragraph_style_id: Option<&str>,
+        direct: Option<&RunProperties>,
+    ) -> bool {
+        let mut hidden = self
+            .doc_defaults
+            .as_ref()
+            .and_then(|d| d.run_properties.as_ref())
+            .and_then(|rp| rp.hidden);
+        if let Some(h) = table.and_then(|t| t.hidden) {
+            hidden = Some(h);
+        }
+        let chain_hidden = |sid: &str| {
+            self.chain(sid)
+                .rev()
+                .find_map(|style| style.run_properties.as_ref().and_then(|rp| rp.hidden))
+        };
+        if let Some(h) = paragraph_style_id.and_then(chain_hidden) {
+            hidden = Some(h);
+        }
+        if let Some(h) = direct
+            .and_then(|d| d.style_id.as_deref())
+            .and_then(chain_hidden)
+        {
+            hidden = Some(h);
+        }
+        if let Some(h) = direct.and_then(|d| d.hidden) {
+            hidden = Some(h);
+        }
+        hidden.unwrap_or(false)
+    }
+
+    /// The font a run uses for characters outside ASCII (`w:hAnsi`, else
+    /// `w:ascii`), from the document defaults, the paragraph style chain, the
+    /// character style chain and the run's own properties, the later
+    /// overriding the earlier. It borrows: nothing is copied for a run.
+    pub(crate) fn effective_font_name<'a>(
+        &'a self,
+        paragraph_style_id: Option<&str>,
+        direct: Option<&'a RunProperties>,
+    ) -> Option<&'a str> {
+        fn layer(rp: &RunProperties) -> Option<&str> {
+            rp.script
+                .as_ref()
+                .and_then(|s| s.font_h_ansi.as_deref())
+                .or(rp.font_name.as_deref())
+        }
+        let mut font = self
+            .doc_defaults
+            .as_ref()
+            .and_then(|d| d.run_properties.as_ref())
+            .and_then(layer);
+        let chain_font = |sid: &str| {
+            self.chain(sid)
+                .rev()
+                .find_map(|style| style.run_properties.as_ref().and_then(layer))
+        };
+        if let Some(f) = paragraph_style_id.and_then(chain_font) {
+            font = Some(f);
+        }
+        if let Some(f) = direct
+            .and_then(|d| d.style_id.as_deref())
+            .and_then(chain_font)
+        {
+            font = Some(f);
+        }
+        if let Some(f) = direct.and_then(layer) {
+            font = Some(f);
+        }
+        font
+    }
+
+    /// Fold the effective paragraph formatting: document defaults, then the
+    /// style chain, then the paragraph's own `w:pPr`.
+    pub fn effective_paragraph_properties(
+        &self,
+        direct: Option<&ParagraphProperties>,
+    ) -> ParagraphProperties {
+        self.effective_paragraph_properties_in(None, direct)
+    }
+
+    /// [`Self::effective_paragraph_properties`] inside a table cell: the
+    /// table style's layer sits between the document defaults and the
+    /// paragraph style.
+    pub(crate) fn effective_paragraph_properties_in(
+        &self,
+        table: Option<&ParagraphProperties>,
+        direct: Option<&ParagraphProperties>,
+    ) -> ParagraphProperties {
+        let mut out = self.paragraph_style_base(table, direct.and_then(|d| d.style_id.as_deref()));
+        if let Some(d) = direct {
+            out.overlay(d);
+        }
+        out
+    }
+
+    /// [`Self::effective_paragraph_properties_in`] without the tab stops and
+    /// text: the flags, indents, spacing and numbering only, for a consumer
+    /// that folds the chain for every paragraph and reads nothing else. A
+    /// style stores its tab stops once and the full fold copies them for
+    /// every level of the chain and every paragraph; this one never does.
+    pub(crate) fn effective_paragraph_flags_in(
+        &self,
+        table: Option<&ParagraphProperties>,
+        direct: Option<&ParagraphProperties>,
+    ) -> ParagraphProperties {
+        let mut out =
+            self.paragraph_style_base_with(true, table, direct.and_then(|d| d.style_id.as_deref()));
+        if let Some(d) = direct {
+            out.overlay(&d.clone_light());
+        }
+        out
+    }
+
+    /// Everything a paragraph inherits before its own `w:pPr`: document
+    /// defaults, the table layer, then the paragraph style chain.
+    pub(crate) fn paragraph_style_base(
+        &self,
+        table: Option<&ParagraphProperties>,
+        paragraph_style_id: Option<&str>,
+    ) -> ParagraphProperties {
+        self.paragraph_style_base_with(false, table, paragraph_style_id)
+    }
+
+    /// [`Self::paragraph_style_base`], with `light` leaving out the tab stops
+    /// and text of every layer (see [`ParagraphProperties::clone_light`]).
+    fn paragraph_style_base_with(
+        &self,
+        light: bool,
+        table: Option<&ParagraphProperties>,
+        paragraph_style_id: Option<&str>,
+    ) -> ParagraphProperties {
+        let layer = |out: &mut ParagraphProperties, pp: &ParagraphProperties| {
+            if light {
+                out.overlay(&pp.clone_light());
+            } else {
+                out.overlay(pp);
+            }
+        };
+        let mut out = self
+            .doc_defaults
+            .as_ref()
+            .and_then(|d| d.paragraph_properties.as_ref())
+            .map(|pp| if light { pp.clone_light() } else { pp.clone() })
+            .unwrap_or_default();
+        if let Some(t) = table {
+            layer(&mut out, t);
+        }
+        if let Some(pid) = paragraph_style_id {
+            for style in self.chain(pid) {
+                if let Some(pp) = style.paragraph_properties.as_ref() {
+                    layer(&mut out, pp);
+                }
+            }
+        }
+        out
+    }
+
+    /// Resolve the effective outline level for a given style ID, walking the inheritance chain.
+    pub fn resolve_outline_level(&self, style_id: &str) -> Option<u8> {
+        let mut current = self.styles.get(style_id);
+        let mut depth = 0;
+        while let Some(style) = current {
+            if depth > 20 {
+                break; // prevent infinite loops
+            }
+            if let Some(ref pp) = style.paragraph_properties {
+                if let Some(lvl) = pp.outline_level {
+                    return Some(lvl);
+                }
+            }
+            current = style.based_on.as_ref().and_then(|id| self.styles.get(id));
+            depth += 1;
+        }
+        None
+    }
+}
+
+fn parse_doc_defaults(reader: &mut quick_xml::Reader<&[u8]>) -> crate::core::Result<DocDefaults> {
+    let mut defaults = DocDefaults::default();
+
+    loop {
+        match reader.read_event()? {
+            Event::Start(ref e) => {
+                match e.local_name().as_ref() {
+                    "rPrDefault" => {
+                        // contains w:rPr
+                        defaults.run_properties = parse_nested_rpr(reader)?;
+                    },
+                    "pPrDefault" => {
+                        defaults.paragraph_properties = parse_nested_ppr(reader)?;
+                    },
+                    _ => {
+                        xml::skip_element_fast(reader)?;
+                    },
+                }
+            },
+            Event::End(ref e) if e.local_name().as_ref() == "docDefaults" => {
+                break;
+            },
+            Event::Eof => break,
+            _ => {},
+        }
+    }
+    Ok(defaults)
+}
+
+/// Parse the `w:rPr` nested inside `w:rPrDefault` (or similar wrapper).
+fn parse_nested_rpr(
+    reader: &mut quick_xml::Reader<&[u8]>,
+) -> crate::core::Result<Option<RunProperties>> {
+    let mut result = None;
+
+    loop {
+        match reader.read_event()? {
+            Event::Start(ref e) => {
+                if e.local_name().as_ref() == "rPr" {
+                    result = Some(parse_run_properties_fast(reader)?);
+                } else {
+                    xml::skip_element_fast(reader)?;
+                }
+            },
+            Event::End(ref e) if e.local_name().as_ref() == "rPrDefault" => {
+                break;
+            },
+            Event::Eof => break,
+            _ => {},
+        }
+    }
+    Ok(result)
+}
+
+/// Parse the `w:pPr` nested inside `w:pPrDefault`.
+fn parse_nested_ppr(
+    reader: &mut quick_xml::Reader<&[u8]>,
+) -> crate::core::Result<Option<ParagraphProperties>> {
+    let mut result = None;
+
+    loop {
+        match reader.read_event()? {
+            Event::Start(ref e) => {
+                if e.local_name().as_ref() == "pPr" {
+                    result = Some(parse_paragraph_properties_fast(reader)?);
+                } else {
+                    xml::skip_element_fast(reader)?;
+                }
+            },
+            Event::End(ref e) if e.local_name().as_ref() == "pPrDefault" => {
+                break;
+            },
+            Event::Eof => break,
+            _ => {},
+        }
+    }
+    Ok(result)
+}
+
+fn parse_style(
+    reader: &mut quick_xml::Reader<&[u8]>,
+    start: &quick_xml::events::BytesStart,
+) -> crate::core::Result<Option<Style>> {
+    let style_id = match xml::optional_attr_str(start, "w:styleId")? {
+        Some(id) => id.into_owned(),
+        None => return Ok(None),
+    };
+    let style_type = match xml::optional_attr_str(start, "w:type")? {
+        Some(ref t) => match t.as_ref() {
+            "paragraph" => StyleType::Paragraph,
+            "character" => StyleType::Character,
+            "table" => StyleType::Table,
+            "numbering" => StyleType::Numbering,
+            _ => StyleType::Paragraph,
+        },
+        None => StyleType::Paragraph,
+    };
+
+    // Lenient: a malformed attribute here must not stop the document opening.
+    let is_default = matches!(
+        xml::optional_attr_str(start, "w:default")
+            .ok()
+            .flatten()
+            .as_deref(),
+        Some("1" | "true" | "on")
+    );
+    let mut name = None;
+    let mut based_on = None;
+    let mut run_properties = None;
+    let mut paragraph_properties = None;
+    let mut table_properties = None;
+    let mut table_conditionals = Vec::new();
+
+    loop {
+        match reader.read_event()? {
+            Event::Start(ref e) => match e.local_name().as_ref() {
+                "name" => {
+                    if let Ok(Some(val)) = xml::optional_attr_str(e, "w:val") {
+                        name = Some(val.into_owned());
+                    }
+                    xml::skip_element_fast(reader)?;
+                },
+                "basedOn" => {
+                    if let Ok(Some(val)) = xml::optional_attr_str(e, "w:val") {
+                        based_on = Some(val.into_owned());
+                    }
+                    xml::skip_element_fast(reader)?;
+                },
+                "rPr" => {
+                    run_properties = Some(parse_run_properties_fast(reader)?);
+                },
+                "pPr" => {
+                    paragraph_properties = Some(parse_paragraph_properties_fast(reader)?);
+                },
+                "tblPr" => {
+                    table_properties = Some(super::parse_table_properties(reader)?);
+                },
+                "tblStylePr" => {
+                    let kind = xml::optional_attr_str(e, "w:type")?
+                        .map(|v| v.into_owned())
+                        .unwrap_or_default();
+                    table_conditionals.push(parse_table_style_conditional(reader, kind)?);
+                },
+                _ => {
+                    xml::skip_element_fast(reader)?;
+                },
+            },
+            Event::Empty(ref e) => match e.local_name().as_ref() {
+                "name" => {
+                    if let Ok(Some(val)) = xml::optional_attr_str(e, "w:val") {
+                        name = Some(val.into_owned());
+                    }
+                },
+                "basedOn" => {
+                    if let Ok(Some(val)) = xml::optional_attr_str(e, "w:val") {
+                        based_on = Some(val.into_owned());
+                    }
+                },
+                _ => {},
+            },
+            Event::End(ref e) if e.local_name().as_ref() == "style" => {
+                break;
+            },
+            Event::Eof => break,
+            _ => {},
+        }
+    }
+
+    Ok(Some(Style {
+        style_id,
+        style_type,
+        name,
+        is_default,
+        display_name: None,
+        based_on,
+        run_properties,
+        paragraph_properties,
+        table_properties,
+        table_conditionals,
+    }))
+}
+
+/// The body of one `w:tblStylePr` (its start already consumed).
+fn parse_table_style_conditional(
+    reader: &mut quick_xml::Reader<&[u8]>,
+    kind: String,
+) -> crate::core::Result<TableStyleConditional> {
+    let mut cond = TableStyleConditional {
+        kind,
+        cell_properties: None,
+        run_properties: None,
+        paragraph_properties: None,
+    };
+    loop {
+        match reader.read_event()? {
+            Event::Start(ref e) => match e.local_name().as_ref() {
+                "tcPr" => cond.cell_properties = Some(super::parse_table_cell_properties(reader)?),
+                "rPr" => cond.run_properties = Some(parse_run_properties_fast(reader)?),
+                "pPr" => cond.paragraph_properties = Some(parse_paragraph_properties_fast(reader)?),
+                _ => xml::skip_element_fast(reader)?,
+            },
+            Event::End(ref e) if e.local_name().as_ref() == "tblStylePr" => break,
+            Event::Eof => break,
+            _ => {},
+        }
+    }
+    Ok(cond)
+}
+
+/// A table style resolved through its `w:basedOn` chain.
+#[derive(Debug, Default)]
+pub(crate) struct ResolvedTableStyle<'a> {
+    /// Borders from the nearest style in the chain that sets them.
+    pub borders: Option<&'a TableBorders>,
+    /// Rows / columns per band.
+    pub row_band_size: Option<u32>,
+    pub col_band_size: Option<u32>,
+    /// Conditional formats by region; a derived style's entry replaces
+    /// its base style's for the same region.
+    pub conditionals: Vec<&'a TableStyleConditional>,
+    /// The chain's own `w:rPr` / `w:pPr` (formatting for the whole table),
+    /// root ancestor first.
+    pub run_properties: Vec<&'a RunProperties>,
+    pub paragraph_properties: Vec<&'a ParagraphProperties>,
+}
+
+/// The run and paragraph formatting a table style gives the content of one
+/// cell: its own `w:rPr`/`w:pPr`, then each region's `w:tblStylePr` that
+/// covers the cell, in increasing precedence. It sits between the document
+/// defaults and the paragraph style (ECMA-376 Part 1 §17.7.2: defaults,
+/// table style, numbering, paragraph style, run style, direct formatting).
+#[derive(Debug, Clone, Default)]
+pub(crate) struct CellStyleLayer {
+    pub run: RunProperties,
+    pub paragraph: ParagraphProperties,
+}
+
+impl ResolvedTableStyle<'_> {
+    /// The layer for a cell covered by `regions` (from
+    /// `TableStyleLayout::regions`, lowest precedence first), or `None`
+    /// when the style formats no text at all there.
+    pub(crate) fn cell_layer(&self, regions: &[&str]) -> Option<CellStyleLayer> {
+        let conds = regions
+            .iter()
+            .filter_map(|kind| self.conditionals.iter().find(|c| c.kind == *kind));
+        let any = !self.run_properties.is_empty()
+            || !self.paragraph_properties.is_empty()
+            || conds
+                .clone()
+                .any(|c| c.run_properties.is_some() || c.paragraph_properties.is_some());
+        if !any {
+            return None;
+        }
+        let mut layer = CellStyleLayer::default();
+        for rp in &self.run_properties {
+            layer.run.overlay(rp);
+        }
+        for pp in &self.paragraph_properties {
+            layer.paragraph.overlay(pp);
+        }
+        for c in conds {
+            if let Some(rp) = c.run_properties.as_ref() {
+                layer.run.overlay(rp);
+            }
+            if let Some(pp) = c.paragraph_properties.as_ref() {
+                layer.paragraph.overlay(pp);
+            }
+        }
+        Some(layer)
+    }
+}
+
+impl StyleSheet {
+    /// The display name of paragraph style `style_id`, or `None` when it is
+    /// the default paragraph style, is not a paragraph style the sheet
+    /// defines, or has no usable name.
+    ///
+    /// An id the sheet does not define, or that names a character or table
+    /// style, applies the default, as python-docx's `get_by_id` does, so it is
+    /// `None`. The name is resolved once when the sheet is parsed, so a lookup
+    /// per paragraph costs a clone of at most 255 characters.
+    pub(crate) fn paragraph_style_name(&self, style_id: &str) -> Option<String> {
+        self.styles.get(style_id)?.display_name.clone()
+    }
+
+    /// Resolve table style `style_id` through its inheritance chain.
+    pub(crate) fn resolve_table_style(&self, style_id: &str) -> ResolvedTableStyle<'_> {
+        let mut out = ResolvedTableStyle::default();
+        for style in self.chain(style_id) {
+            if let Some(tp) = style.table_properties.as_ref() {
+                if tp.borders.is_some() {
+                    out.borders = tp.borders.as_ref();
+                }
+                out.row_band_size = tp.row_band_size.or(out.row_band_size);
+                out.col_band_size = tp.col_band_size.or(out.col_band_size);
+            }
+            for c in &style.table_conditionals {
+                out.conditionals.retain(|prev| prev.kind != c.kind);
+                out.conditionals.push(c);
+            }
+            out.run_properties.extend(style.run_properties.as_ref());
+            out.paragraph_properties
+                .extend(style.paragraph_properties.as_ref());
+        }
+        out
+    }
+}
+
+/// Word stores the names of a few built-in styles in lower case (`caption`,
+/// `heading 1`) while displaying them capitalized; consumers expect the
+/// displayed form (this is the set python-docx maps).
+fn display_style_name(name: String) -> String {
+    let shown = match name.as_str() {
+        "caption" => "Caption",
+        "header" => "Header",
+        "footer" => "Footer",
+        "heading 1" => "Heading 1",
+        "heading 2" => "Heading 2",
+        "heading 3" => "Heading 3",
+        "heading 4" => "Heading 4",
+        "heading 5" => "Heading 5",
+        "heading 6" => "Heading 6",
+        "heading 7" => "Heading 7",
+        "heading 8" => "Heading 8",
+        "heading 9" => "Heading 9",
+        _ => return name,
+    };
+    shown.to_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SAMPLE_STYLES: &[u8] = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:docDefaults>
+    <w:rPrDefault>
+      <w:rPr>
+        <w:sz w:val="22"/>
+      </w:rPr>
+    </w:rPrDefault>
+  </w:docDefaults>
+  <w:style w:type="paragraph" w:styleId="Normal">
+    <w:name w:val="Normal"/>
+  </w:style>
+  <w:style w:type="paragraph" w:styleId="Heading1">
+    <w:name w:val="heading 1"/>
+    <w:basedOn w:val="Normal"/>
+    <w:pPr>
+      <w:outlineLvl w:val="0"/>
+    </w:pPr>
+    <w:rPr>
+      <w:b/>
+      <w:sz w:val="32"/>
+    </w:rPr>
+  </w:style>
+  <w:style w:type="character" w:styleId="Strong">
+    <w:name w:val="Strong"/>
+    <w:rPr>
+      <w:b/>
+    </w:rPr>
+  </w:style>
+</w:styles>"#;
+
+    #[test]
+    fn test_parse_stylesheet() {
+        let sheet = StyleSheet::parse(SAMPLE_STYLES).unwrap();
+        assert_eq!(sheet.styles.len(), 3);
+        assert!(sheet.doc_defaults.is_some());
+    }
+
+    #[test]
+    fn test_parse_doc_defaults_font_size() {
+        let sheet = StyleSheet::parse(SAMPLE_STYLES).unwrap();
+        let defaults = sheet.doc_defaults.as_ref().unwrap();
+        let rp = defaults.run_properties.as_ref().unwrap();
+        assert_eq!(rp.font_size, Some(crate::core::units::HalfPoint(22)));
+    }
+
+    #[test]
+    fn test_parse_heading1_style() {
+        let sheet = StyleSheet::parse(SAMPLE_STYLES).unwrap();
+        let h1 = sheet.styles.get("Heading1").unwrap();
+        assert_eq!(h1.name.as_deref(), Some("heading 1"));
+        assert_eq!(h1.based_on.as_deref(), Some("Normal"));
+        assert_eq!(h1.style_type, StyleType::Paragraph);
+
+        let pp = h1.paragraph_properties.as_ref().unwrap();
+        assert_eq!(pp.outline_level, Some(0));
+
+        let rp = h1.run_properties.as_ref().unwrap();
+        assert_eq!(rp.bold, Some(true));
+        assert_eq!(rp.font_size, Some(crate::core::units::HalfPoint(32)));
+    }
+
+    #[test]
+    fn test_resolve_outline_level() {
+        let sheet = StyleSheet::parse(SAMPLE_STYLES).unwrap();
+        assert_eq!(sheet.resolve_outline_level("Heading1"), Some(0));
+        assert_eq!(sheet.resolve_outline_level("Normal"), None);
+    }
+
+    #[test]
+    fn test_paragraph_style_name_default_unknown_and_wrong_type_are_none() {
+        let sheet = StyleSheet::parse(
+            br#"<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+              <w:style w:type="paragraph" w:default="1" w:styleId="n"><w:name w:val="Standard"/></w:style>
+              <w:style w:type="character" w:default="1" w:styleId="DefaultParagraphFont"><w:name w:val="Default Paragraph Font"/></w:style>
+              <w:style w:type="paragraph" w:styleId="c"><w:name w:val="caption"/></w:style>
+              <w:style w:type="paragraph" w:styleId="x"></w:style>
+              <w:style w:type="paragraph" w:default="0" w:styleId="o"><w:name w:val="Other"/></w:style>
+              <w:style w:type="paragraph" w:default="true" w:styleId="t"><w:name w:val="T"/></w:style>
+              <w:style w:type="paragraph" w:styleId="Normal"><w:name w:val="Normal"/></w:style>
+            </w:styles>"#,
+        )
+        .unwrap();
+        assert_eq!(sheet.paragraph_style_name("n"), None, "w:default=1, whatever the name");
+        assert_eq!(sheet.paragraph_style_name("t"), None, "w:default=true is also on");
+        assert_eq!(sheet.paragraph_style_name("o").as_deref(), Some("Other"), "w:default=0 is off");
+        assert_eq!(sheet.paragraph_style_name("c").as_deref(), Some("Caption"));
+        assert_eq!(sheet.paragraph_style_name("x"), None, "a style with no name");
+        assert_eq!(sheet.paragraph_style_name("nope"), None, "undefined id");
+        assert_eq!(
+            sheet.paragraph_style_name("DefaultParagraphFont"),
+            None,
+            "a character style is not a paragraph style"
+        );
+        // A paragraph style is flagged, so a style merely *named* Normal is not
+        // the default.
+        assert_eq!(sheet.paragraph_style_name("Normal").as_deref(), Some("Normal"));
+    }
+
+    #[test]
+    fn test_paragraph_style_name_is_examined_once_per_style_not_once_per_lookup() {
+        use crate::limits::STYLE_NAME_BYTES_SCANNED as SCANNED;
+        let long = "N".repeat(1 << 20);
+        let xml = format!(
+            r#"<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+              <w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style>
+              <w:style w:type="paragraph" w:styleId="Long"><w:name w:val="{long}"/></w:style>
+              <w:style w:type="paragraph" w:styleId="Short"><w:name w:val="caption"/></w:style>
+            </w:styles>"#
+        );
+        let sheet = StyleSheet::parse(xml.as_bytes()).unwrap();
+        let after_parse = SCANNED.with(std::cell::Cell::get);
+        for _ in 0..2_000 {
+            assert_eq!(sheet.paragraph_style_name("Long"), None, "over 255 characters");
+            assert_eq!(sheet.paragraph_style_name("Short").as_deref(), Some("Caption"));
+            assert_eq!(sheet.paragraph_style_name("Normal"), None);
+        }
+        assert_eq!(
+            SCANNED.with(std::cell::Cell::get),
+            after_parse,
+            "looking a style name up must not re-examine the stored name"
+        );
+        assert_eq!(sheet.unusable_style_names, 1, "the unusable name is counted once");
+    }
+}
