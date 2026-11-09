@@ -1,0 +1,124 @@
+# Sizes — the engine size gate. Each part of `tool/shake_audit.sh` runs on its
+# own macOS arm64 runner, the platform the README quotes: the keep guarantee
+# (core-only drops what it promises and stays under its ceiling), the
+# `build: size` builds, the wasm builds and each capability's build. A last
+# job merges their records and reads each README size number in its own
+# place. Runs on a PR that can move a size or a quoted number, weekly, and on
+# demand. A red run means a number in the README is stale or a heavy module
+# came back into core: fix the README from the `shake-sizes` artifact, or the
+# leak; raising the ceiling is a decision, not a fix.
+name: Sizes
+
+on:
+  pull_request:
+    branches: [dev]
+    paths:
+      - 'vendor/**'
+      - 'build.json'
+      - 'README.md'
+      - 'tool/versions.env'
+      - 'tool/compile.dart'
+      - 'tool/measure_wasm.dart'
+      - 'tool/shake_audit.sh'
+      - 'tool/verify_readme_sizes.dart'
+      - 'lib/src/hook/**'
+      - '.github/workflows/sizes.yml'
+  schedule:
+    - cron: '0 12 * * 1'
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: sizes-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  measure:
+    name: "Measure: ${{ matrix.part }}"
+    runs-on: macos-15
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        part: [guarantee, size-full, size-core, wasm, cap-render, cap-signatures, cap-pdfa, cap-extract, cap-office]
+    permissions:
+      contents: read   # checkout + build, read-only
+      packages: write  # oci-cache: the Flutter SDK lives on ghcr.io (read on PRs, write from dev)
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { submodules: recursive, persist-credentials: false }
+      - uses: ./.github/actions/make-target
+        with:
+          make-target: sizes-part-${{ matrix.part }}
+          # Every part builds the host engine with its own features; they
+          # share the dependencies, so one archive, written by one part.
+          rust-cache-key: sizes
+          rust-cache-save: ${{ github.event_name == 'schedule' && matrix.part == 'guarantee' }}
+          wasm-cache: ${{ matrix.part == 'wasm' }}
+          wasm-build: ${{ matrix.part == 'wasm' }}
+          cache-backend: ghcr
+          cache-save: ${{ github.event_name == 'schedule' && matrix.part == 'wasm' }}
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sizes-${{ matrix.part }}
+          path: tool/.shake_sizes.json
+          include-hidden-files: true
+          if-no-files-found: error
+      # The README's web numbers are read from the default and Asyncify
+      # modules themselves.
+      - if: matrix.part == 'wasm'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: web-assets
+          path: |
+            web_assets/pdf_oxide_manifest.json
+            web_assets/pdf_oxide_bg.*.wasm
+            web_assets/pdf_oxide_asyncify_bg.*.wasm
+          if-no-files-found: error
+
+  verify:
+    name: Engine sizes
+    needs: measure
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read   # checkout, read-only
+      packages: write  # oci-cache: the Flutter SDK lives on ghcr.io (read on PRs, write from dev)
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: sizes-*
+          path: ${{ runner.temp }}/sizes
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: web-assets
+          path: web_assets
+      - name: Merge the measurements
+        shell: bash
+        env:
+          PARTS: ${{ runner.temp }}/sizes
+        run: |
+          python3 - "$PARTS" tool/.shake_sizes.json <<'PY'
+          import json, pathlib, sys
+          merged = {}
+          for part in sorted(pathlib.Path(sys.argv[1]).glob("sizes-*/.shake_sizes.json")):
+              merged.update(json.loads(part.read_text()))
+          pathlib.Path(sys.argv[2]).write_text(json.dumps(merged, indent=1))
+          print(json.dumps(merged, indent=1))
+          PY
+      - uses: ./.github/actions/make-target
+        with:
+          make-target: sizes-verify
+          rust: 'false'
+          cache-backend: ghcr
+          cache-save: 'false'
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: shake-sizes
+          path: tool/.shake_sizes.json
+          include-hidden-files: true
+          if-no-files-found: ignore
