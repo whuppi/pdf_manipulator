@@ -1,0 +1,60 @@
+# Sizes — the engine size gate: `make sizes-gate` builds every engine the
+# README quotes on the README's platform (macOS arm64), proves the core-only
+# build drops what it promises and stays under its ceiling, and reads each
+# README size number in its own place. Runs on a PR that can move a size or
+# a quoted number, weekly, and on demand. A red run means a number in the
+# README is stale or a heavy module came back into core: fix the README from
+# the run's output, or the leak; raising the ceiling is a decision, not a fix.
+name: Sizes
+
+on:
+  pull_request:
+    branches: [dev]
+    paths:
+      - 'vendor/**'
+      - 'build.json'
+      - 'README.md'
+      - 'tool/versions.env'
+      - 'tool/compile.dart'
+      - 'tool/shake_audit.sh'
+      - 'tool/verify_readme_sizes.dart'
+      - 'lib/src/hook/**'
+  schedule:
+    - cron: '0 12 * * 1'
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: sizes-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  sizes:
+    name: Engine sizes
+    runs-on: macos-15
+    timeout-minutes: 240
+    permissions:
+      contents: read   # checkout + build, read-only
+      packages: write  # oci-cache: the Flutter SDK lives on ghcr.io (read on PRs, write from dev)
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { submodules: recursive, persist-credentials: false }
+      - uses: ./.github/actions/make-target
+        with:
+          make-target: sizes-gate
+          # The audit builds its own feature sets of the host engine, so it
+          # shares no archive with the package tests.
+          rust-cache-key: sizes
+          rust-cache-save: ${{ github.event_name == 'schedule' }}
+          wasm-cache: true
+          wasm-build: true
+          cache-backend: ghcr
+          cache-save: ${{ github.event_name == 'schedule' }}
+      - name: Upload the measured sizes
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: shake-sizes
+          path: tool/.shake_sizes.json
+          if-no-files-found: ignore

@@ -470,18 +470,24 @@ git add web_assets/
 ## S5b — Measure sizes
 
 `make shake-audit` is the single builder/measurer for every size claim;
-`make verify-readme-sizes` (chained onto it, also standalone) asserts the
-README's numbers against the record in `tool/.shake_sizes.json`.
+`make verify-readme-sizes` (chained onto it, also standalone) reads each
+README number in its own place (its table cell, its capability row, its
+sentence) against the record in `tool/.shake_sizes.json` and the wasm in
+`web_assets/`. It measures on the Rust in `tool/versions.env`.
 
 ```sh
 make shake-audit                        # native full + core, symbols, probes
 SHAKE_AUDIT_WASM=1 make shake-audit     # + core-only wasm raw/gzipped
 SHAKE_AUDIT_CAPS=1 make shake-audit     # + per-capability costs (5 builds)
 make verify-readme-sizes                # README numbers vs the record
+make sizes-gate                         # all of the above, strict: no number unmeasured
 ```
 
-Run the flagged modes after an engine bump and before a release; the
-README's size table and capability costs come from them. Sizes are quoted
+The Sizes workflow runs `make sizes-gate` on macOS arm64, the platform the
+README quotes, on every PR that touches the engine, the hook, the build
+config or the README, weekly, and on demand. When it is red, take the
+measured numbers from its `shake-sizes` artifact into the README. The
+README's size table and capability costs come from these modes. Sizes are quoted
 in decimal MB (1 MB = 1,000,000 bytes).
 
 **Measurement method — trust only the linker map.** For per-module byte

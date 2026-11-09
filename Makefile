@@ -1,7 +1,7 @@
 .PHONY: ci-setup check analyze check-keep-sets check-bindings analyze-floor platforms lint-shell format fixtures test-guards bench bench-gate \
        build build-native build-wasm build-wasm-asyncify \
        compile-macos compile-ios compile-android compile-linux compile-windows compile-wasm compile-natives \
-       test test-pkg-native test-unit test-rust test-rust-run test-memory test-fuel prune-target shake-audit verify-readme-sizes verify-tarball \
+       test test-pkg-native test-unit test-rust test-rust-run test-memory test-fuel prune-target shake-audit verify-readme-sizes sizes-gate verify-tarball \
        test-ops test-ops-native test-ops-web test-ops-opfs test-ops-jspi test-ops-atomics test-ops-asyncify \
        test-example test-example-matrix test-example-macos test-example-trimmed test-example-linux test-example-windows \
        test-example-android test-example-ios test-example-device \
@@ -421,6 +421,14 @@ shake-audit:
 # shake-audit record + the wasm artifact). Run after shake-audit.
 verify-readme-sizes:
 	@$(DART) run tool/verify_readme_sizes.dart
+
+# The size gate CI's Sizes workflow runs: every engine the README quotes,
+# built and measured on the README's platform (macOS arm64), the core
+# ceiling and the symbol checks included, then each README number read in
+# its own place, with no number left unmeasured.
+sizes-gate: $(WASM_OUT) $(ASYNCIFY_OUT)
+	SHAKE_AUDIT_WASM=1 SHAKE_AUDIT_CAPS=1 DART="$(DART)" bash tool/shake_audit.sh
+	@$(DART) run tool/verify_readme_sizes.dart --strict
 
 # The pub archive must carry everything a consumer source build needs —
 # pub's filtering honors vendored .gitignore files even for tracked paths.
