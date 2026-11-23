@@ -8,9 +8,9 @@ environment:
 dependencies:
   pdf_manipulator:
     path: ../..
-  pdf_document: 15.0.0
+  pdf_document: 16.1.0
   crypto: ^3.0.6
-  image: ^4.0.0
+  image: ^4.13.1
   toml: ^0.18.0
 
 dev_dependencies:
