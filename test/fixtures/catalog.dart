@@ -19,6 +19,8 @@ import 'package:image/image.dart' as img;
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 
+import 'latin_subset_font.dart';
+
 /// One generated fixture: identity, rationale, declared truths, builder.
 class FixtureSpec {
   /// Creates a spec. [name] is snake_case; the generator derives the
@@ -493,6 +495,49 @@ final List<FixtureSpec> catalog = [
     build: (photoPng) async {
       final doc = pw.Document(title: 'Unicode');
       doc.addPage(_textPage('Café Münchhausen, naïve façade © reserved.'));
+      return _saveDoc(doc);
+    },
+  ),
+  FixtureSpec(
+    name: 'type0_heading',
+    why:
+        'A heading and a body line in an embedded TrueType face, which '
+        'dart-pdf writes as a Type0/Identity-H font whose /W widths sit '
+        'in an indirect array, each word in its own text object. A '
+        'reader that drops an indirect /W element measures every glyph '
+        'at 1000 units, the words overlap, and no space survives '
+        'between them.',
+    truths: {
+      'pages': 1,
+      'heading': 'Příliš žluťoučký kůň úpěl ďábelské ódy.',
+      'body': 'This is the body text, set at the normal size.',
+    },
+    build: (photoPng) async {
+      final font = pw.Font.ttf(latinSubsetFont.buffer.asByteData());
+      final doc = pw.Document(title: 'Type0 Heading');
+      doc.addPage(
+        pw.Page(
+          pageFormat: PdfPageFormat.a4,
+          build: (ctx) => pw.Column(
+            crossAxisAlignment: pw.CrossAxisAlignment.start,
+            children: [
+              pw.Text(
+                'Příliš žluťoučký kůň úpěl ďábelské ódy.',
+                style: pw.TextStyle(font: font, fontSize: 24),
+              ),
+              pw.SizedBox(height: 12),
+              pw.Text(
+                'This is the body text, set at the normal size.',
+                style: pw.TextStyle(font: font, fontSize: 11),
+              ),
+              pw.Text(
+                'A second body line keeps the base size at the body size.',
+                style: pw.TextStyle(font: font, fontSize: 11),
+              ),
+            ],
+          ),
+        ),
+      );
       return _saveDoc(doc);
     },
   ),

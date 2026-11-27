@@ -361,6 +361,33 @@ void registerDocTests(Pdf Function() createPdf) {
       await doc.dispose();
     }, timeout: t(1));
 
+    // Words placed one text object each, in a Type0 font whose /W sits in
+    // an indirect array: the space between them exists only as a gap.
+    for (final format in PdfExtractionFormat.values) {
+      test('a Type0 heading keeps its word spaces (${format.name})', () async {
+        final doc = await createPdf().open(PdfInput(src(fType0Heading)));
+        final text = await extractTextToString(
+          doc,
+          pages: const PdfPages.all(),
+          format: format,
+        );
+        expect(text, contains(fType0HeadingTruth.heading));
+        expect(text, contains(fType0HeadingTruth.body));
+        await doc.dispose();
+      }, timeout: t(1));
+    }
+
+    test('a Type0 heading is a markdown heading', () async {
+      final doc = await createPdf().open(PdfInput(src(fType0Heading)));
+      final md = await extractTextToString(
+        doc,
+        pages: const PdfPages.all(),
+        format: PdfExtractionFormat.markdown,
+      );
+      expect(md, contains('# ${fType0HeadingTruth.heading}'));
+      await doc.dispose();
+    }, timeout: t(1));
+
     test('extract HTML format returns content', () async {
       final bytes = fFormFields;
       final doc = await createPdf().open(PdfInput(src(bytes)));
