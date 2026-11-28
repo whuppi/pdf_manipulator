@@ -315,16 +315,51 @@ jobs:
     needs: [inputs, test]
     runs-on: ${{ needs.inputs.outputs.runner }}
     timeout-minutes: 5
-    permissions: {}
+    permissions:
+      actions: read        # the runs of this workflow on the PR's head commit
+      pull-requests: read  # the PR's changed files
     steps:
       - name: Evaluate
         shell: bash
         env:
           TEST_RESULT: ${{ needs.test.result }}
+          EVENT: ${{ github.event_name }}
+          PR: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
         run: |
-          RESULT="$TEST_RESULT"
-          if [[ "$RESULT" != "success" && "$RESULT" != "skipped" ]]; then
-            echo "FAILED: test returned '$RESULT'"
+          if [[ "$TEST_RESULT" != "success" && "$TEST_RESULT" != "skipped" ]]; then
+            echo "FAILED: test returned '$TEST_RESULT'"
             exit 1
           fi
-          echo "All jobs passed"
+          if [[ "$TEST_RESULT" == "success" || "$EVENT" != "pull_request" ]]; then
+            echo "All jobs passed"
+            exit 0
+          fi
+          # The matrix was skipped: a push drops the ready-to-test label, and
+          # any other label runs this workflow too. A skip passes only when
+          # the PR changes nothing the matrix tests (docs, the unshipped
+          # bench), or when a run on this same commit already passed it.
+          tested=$(gh api --paginate "repos/$REPO/pulls/$PR/files" --jq '.[].filename' \
+            | grep -vE '\.md$|^docs/|^tool/bench/' || true)
+          if [ -z "$tested" ]; then
+            echo "Matrix skipped: the PR changes only docs or the bench"
+            exit 0
+          fi
+          workflow=$(gh api "repos/$REPO/actions/runs/$RUN_ID" --jq .workflow_id)
+          for run in $(gh api "repos/$REPO/actions/workflows/$workflow/runs?head_sha=$HEAD_SHA&status=success" \
+            --jq '.workflow_runs[].id'); do
+            [ "$run" = "$RUN_ID" ] && continue
+            ran=$(gh api "repos/$REPO/actions/runs/$run/jobs?per_page=100" \
+              --jq '[.jobs[] | select(.name != "Resolve inputs" and .name != "Full Test Gate" and .conclusion == "success")] | length')
+            if [ "$ran" -gt 0 ]; then
+              echo "Matrix skipped here; run $run passed it on $HEAD_SHA"
+              exit 0
+            fi
+          done
+          echo "FAILED: the matrix never ran on $HEAD_SHA, and the PR changes:"
+          printf '%s\n' "$tested" | head -20 | sed 's/^/  /'
+          echo "Add the ready-to-test label to run it."
+          exit 1
