@@ -173,10 +173,10 @@ packages:
     dependency: "direct main"
     description:
       name: image
-      sha256: "89ed75b2f8231fe676808c5564f9590d728024ded7ac782a7ed8474f1c95b72a"
+      sha256: bc13f61f0f5cb77936e78ae5dae3800f442718dac5d2bc4654f03c239230ed0c
       url: "https://pub.dev"
     source: hosted
-    version: "4.12.0"
+    version: "4.13.1"
   io:
     dependency: transitive
     description:
@@ -253,18 +253,18 @@ packages:
     dependency: transitive
     description:
       name: pdf_cos
-      sha256: "0af2ff38e1d22f20fd6b8430f9077c1d94d702105f0c1979d3ff5e3506612ce8"
+      sha256: "56a56ebdb912312d183ffb1c9b34e905d42b1b57fa5be28511f4bd6a65b8f828"
       url: "https://pub.dev"
     source: hosted
-    version: "15.0.0"
+    version: "16.1.0"
   pdf_document:
     dependency: "direct main"
     description:
       name: pdf_document
-      sha256: "2c54177994eaacecf430b87afc9c12b03bfdc94cc07ea6eaa192eec20dd784c1"
+      sha256: "3d96647b91a686d22102cbe2edf51b6c2bf38f3ab354c4b2d9eb821bea8697a9"
       url: "https://pub.dev"
     source: hosted
-    version: "15.0.0"
+    version: "16.1.0"
   pdf_manipulator:
     dependency: "direct main"
     description:
