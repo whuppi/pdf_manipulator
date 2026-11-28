@@ -270,7 +270,7 @@ runs:
     # by the capability's teardown-watchdog wrapper. The shared android-emulator
     # reconciles the machine report at its default path (test-results/
     # int-android.json), which is where the android make target writes.
-    - uses: whuppi/ci/actions/capabilities/android-emulator@v2.7.17
+    - uses: whuppi/ci/actions/capabilities/android-emulator@b7bc3f6ad4f6338edbb4b08e0ee9bff7ec918016
       if: inputs.emulator == 'true'
       with:
         script: /tmp/make-run.sh "${{ inputs.make-target }}"
