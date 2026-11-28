@@ -35,6 +35,7 @@ const _generatedDir = 'test/fixtures/generated';
 final _inputs = [
   'tool/generate_fixtures.dart',
   'test/fixtures/catalog.dart',
+  'test/fixtures/latin_subset_font.dart',
   'pubspec.lock',
 ];
 
